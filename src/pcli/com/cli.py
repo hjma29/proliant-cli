@@ -8,20 +8,29 @@ Usage::
     pcli com login                         Okta Verify push login (prompts for email)
     pcli com login --email you@hpe.com     Pre-fill email, skip prompt
     pcli com login --password              Username + password login (external/gmail accounts)
-    pcli com login --api-client                          Login with HPE GreenLake API client credentials
+    pcli com login --api-client            Login with HPE GreenLake API client credentials
     pcli com login --api-client --client-id ID --client-secret SECRET  Non-interactive
 
     pcli com logout                        Remove cached credentials and token
 
     pcli com get devices                   All devices in workspace
-    pcli com get devices --type COMPUTE
-    pcli com get devices --fields name,serial,service,ilo-name,part
+    pcli com get devices --type COMPUTE    Filter by type (COMPUTE, NETWORK, STORAGE)
+    pcli com get devices --fields name,serial,service
+    pcli com get devices --fields name,serial,added,added-by
+    pcli com get devices --fields name,ilo-name,serial,location
+    pcli com get devices --sort added      Sort by date added
+    pcli com get devices --sort added-by   Sort by who added the device
+    pcli com get devices --fields name,serial,added,added-by --sort added
     pcli com get devices --raw             Raw JSON
 
     pcli com get workspaces                All workspaces (active one marked with *)
     pcli com get workspaces --raw          Raw JSON
 
     pcli com use workspace <name-or-id>    Switch active workspace
+
+Available --fields for 'get devices':
+    name, ilo-name, type, model, serial, part, service, sub-key, location,
+    added, updated, added-by
 
 Note: Run 'pcli com login' before any get/use command (like kubectl/gcloud/aws/az).
 """
@@ -536,7 +545,24 @@ def _build_parser() -> argparse.ArgumentParser:
     get_sub.required = True
 
     # pcli com get devices
-    dev_p = get_sub.add_parser("devices", help="List all devices in workspace")
+    dev_p = get_sub.add_parser(
+        "devices",
+        help="List all devices in workspace",
+        description=(
+            "List all devices registered in the GreenLake workspace.\n\n"
+            "Examples:\n"
+            "  pcli com get devices\n"
+            "  pcli com get devices --type COMPUTE\n"
+            "  pcli com get devices --fields name,serial,service\n"
+            "  pcli com get devices --fields name,serial,added,added-by\n"
+            "  pcli com get devices --fields name,ilo-name,serial,location\n"
+            "  pcli com get devices --sort added\n"
+            "  pcli com get devices --sort added-by\n"
+            "  pcli com get devices --fields name,serial,added,added-by --sort added\n"
+            "  pcli com get devices --fields name,type,model,serial,part,service,sub-key,location,added,updated,added-by\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     dev_p.add_argument("--type", metavar="TYPE",
                        choices=["COMPUTE", "NETWORK", "STORAGE"],
                        help="Filter by device type")
@@ -544,14 +570,14 @@ def _build_parser() -> argparse.ArgumentParser:
     dev_p.add_argument(
         "--fields", metavar="FIELDS",
         help=(
-            f"Comma-separated columns to display. "
+            f"Comma-separated columns to display (case-insensitive). "
             f"Available: {', '.join(DEVICE_FIELD_NAMES)}. "
             f"Default: {', '.join(_DEVICE_DEFAULT_FIELDS)}"
         ),
     )
     dev_p.add_argument(
         "--sort", metavar="FIELD", dest="sort_by",
-        help=f"Sort by field. Available: {', '.join(DEVICE_FIELD_NAMES)}. Default: name",
+        help=f"Sort by field (case-insensitive). Available: {', '.join(DEVICE_FIELD_NAMES)}. Default: name",
     )
 
     # pcli com get workspaces

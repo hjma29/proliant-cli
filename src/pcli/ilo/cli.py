@@ -6,14 +6,20 @@ and table printing.
 
 Usage::
 
-    pcli ilo get firmwares                  Fleet firmware summary (BIOS, iLO, NIC, Storage)
-    pcli ilo get firmwares --fields Model,BIOS,iLO
-    pcli ilo get ilo                        iLO firmware version
-    pcli ilo get network                    NIC firmware versions
-    pcli ilo get storage                    Storage firmware versions
-    pcli ilo get serial                     Server model + serial (for COM onboarding)
-    pcli ilo get full                       Full firmware inventory
-    pcli ilo upgrade --host <name>          Auto-upgrade outdated firmware
+    pcli ilo get firmwares                          All servers, all firmware columns
+    pcli ilo get firmwares --host dl325-gen12       Single server
+    pcli ilo get firmwares --fields bios,ilo        BIOS and iLO columns only
+    pcli ilo get firmwares --fields model,bios,ilo  Model + BIOS + iLO
+    pcli ilo get firmwares --fields nic-fw,storage-fw
+    pcli ilo get ilo                                iLO firmware version
+    pcli ilo get network                            NIC firmware versions
+    pcli ilo get storage                            Storage firmware versions
+    pcli ilo get serial                             Server model + serial (for COM onboarding)
+    pcli ilo get full                               Full firmware inventory
+    pcli ilo upgrade --host <name>                  Auto-upgrade outdated firmware
+
+Available --fields for 'get firmwares' (case-insensitive):
+    Model, iLO, BIOS, NIC-FW, Storage-FW
 """
 
 from __future__ import annotations
@@ -162,15 +168,17 @@ def print_disk_map_table(results: list[tuple[str, str | None, list]]) -> None:
 def print_fleet_table(results: list[tuple[str, str | None, list]],
                       fields: str | None = None) -> None:
     all_keys = list(inventory.FLEET_KEYS)
+    # Build case-insensitive lookup: lower → canonical
+    _key_map = {k.lower(): k for k in all_keys}
 
     # Validate and select requested fields
     if fields:
-        requested = [f.strip() for f in fields.split(",") if f.strip()]
-        bad = [k for k in requested if k not in all_keys]
+        requested_raw = [f.strip() for f in fields.split(",") if f.strip()]
+        bad = [k for k in requested_raw if k.lower() not in _key_map]
         if bad:
             valid = ", ".join(all_keys)
             raise SystemExit(f"Unknown field(s): {', '.join(bad)}\nAvailable: {valid}")
-        keys = requested
+        keys = [_key_map[k.lower()] for k in requested_raw]
     else:
         keys = all_keys
     server_data: dict[str, dict[str, str]] = {}
@@ -291,19 +299,36 @@ def _build_parser() -> argparse.ArgumentParser:
         "serial": "Server model, serial number, and product ID (for COM onboarding)",
     }
     for name, help_text in get_choices.items():
-        sp = get_sub.add_parser(name, help=help_text)
-        _add_host(sp)
-        sp.add_argument("--raw", action="store_true", help="Print raw JSON instead of a formatted table")
         if name == "firmwares":
             from pcli.ilo.inventory import FLEET_KEYS
+            sp = get_sub.add_parser(
+                name,
+                help=help_text,
+                description=(
+                    "Show firmware summary for all servers (one row per server).\n\n"
+                    "Examples:\n"
+                    "  pcli ilo get firmwares                         All servers, all columns\n"
+                    "  pcli ilo get firmwares --host dl325-gen12      Single server\n"
+                    "  pcli ilo get firmwares --fields bios,ilo       BIOS and iLO only\n"
+                    "  pcli ilo get firmwares --fields model,bios     Model and BIOS only\n"
+                    "  pcli ilo get firmwares --fields nic-fw,storage-fw  NIC and Storage only\n"
+                    f"\nAvailable --fields (case-insensitive): {', '.join(FLEET_KEYS)}"
+                ),
+                formatter_class=argparse.RawDescriptionHelpFormatter,
+            )
+            _add_host(sp)
+            sp.add_argument("--raw", action="store_true", help="Print raw JSON instead of a formatted table")
             sp.add_argument(
                 "--fields", metavar="FIELDS",
                 help=(
-                    f"Comma-separated columns to display. "
-                    f"Available: {', '.join(FLEET_KEYS)}. "
-                    f"Default: all"
+                    f"Comma-separated columns (case-insensitive). "
+                    f"Available: {', '.join(FLEET_KEYS)}. Default: all"
                 ),
             )
+        else:
+            sp = get_sub.add_parser(name, help=help_text)
+            _add_host(sp)
+            sp.add_argument("--raw", action="store_true", help="Print raw JSON instead of a formatted table")
 
     upgrade_p = subparsers.add_parser(
         "upgrade",

@@ -387,7 +387,10 @@ async def fetch_fleet_summary(client: ILOClient) -> list[tuple[str, str]]:
     system = await client.get(await client.get_system_uri())
     results["Model"] = system.get("Model", "N/A")
 
-    for fw in await _member_resources(client, await client.get_firmware_inventory_uri()):
+    # Sequential iteration with early exit — avoids flooding iLO with 20+ concurrent GETs
+    inv_members = await _collection_members(client, await client.get_firmware_inventory_uri())
+    for item in inv_members:
+        fw = await client.get(item["@odata.id"])
         name = fw.get("Name", "")
         version = fw.get("Version", "N/A") or "N/A"
         name_lower = name.lower()
@@ -396,30 +399,32 @@ async def fetch_fleet_summary(client: ILOClient) -> list[tuple[str, str]]:
         elif any(key in name_lower for key in ("system rom", "bios", "system firmware")) and results["BIOS"] == "N/A":
             results["BIOS"] = version
         if results["iLO"] != "N/A" and results["BIOS"] != "N/A":
-            break
+            break  # stop — don't fetch remaining firmware items
 
     chassis = await client.get(await client.get_chassis_uri())
     na_uri = chassis.get("NetworkAdapters", {}).get("@odata.id")
     if na_uri:
-        adapters = await _member_resources(client, na_uri)
-        if adapters:
-            controllers = adapters[0].get("Controllers", [])
+        na_members = await _collection_members(client, na_uri)
+        if na_members:
+            adapter = await client.get(na_members[0]["@odata.id"])
+            controllers = adapter.get("Controllers", [])
             nic_ver = controllers[0].get("FirmwarePackageVersion", "N/A") if controllers else "N/A"
             results["NIC-FW"] = nic_ver or "N/A"
 
     storage_uri = system.get("Storage", {}).get("@odata.id")
     if storage_uri:
-        storage_members = await _member_resources(client, storage_uri)
-        if storage_members:
-            storage = storage_members[0]
+        s_members = await _collection_members(client, storage_uri)
+        if s_members:
+            storage = await client.get(s_members[0]["@odata.id"])
             controllers = storage.get("StorageControllers", [])
             if controllers:
                 results["Storage-FW"] = controllers[0].get("FirmwareVersion", "N/A") or "N/A"
             else:
                 ctrl_link = (storage.get("Controllers") or {}).get("@odata.id")
                 if ctrl_link:
-                    ctrl_members = await _member_resources(client, ctrl_link)
+                    ctrl_members = await _collection_members(client, ctrl_link)
                     if ctrl_members:
-                        results["Storage-FW"] = ctrl_members[0].get("FirmwareVersion", "N/A") or "N/A"
+                        ctrl = await client.get(ctrl_members[0]["@odata.id"])
+                        results["Storage-FW"] = ctrl.get("FirmwareVersion", "N/A") or "N/A"
 
     return [(key, results[key]) for key in FLEET_KEYS]

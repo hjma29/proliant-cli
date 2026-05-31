@@ -211,18 +211,35 @@ def _cmd_logout(_args: argparse.Namespace) -> None:
 
 # All available columns for "pcli com get devices".
 # Each entry: field_key → (header, rich_style, add_column_kwargs, value_getter)
+# value_getter receives (device, user_cache) where user_cache maps uid → email.
 _DEVICE_FIELDS: dict = {
-    "name":     ("Name",     "bold cyan", {"no_wrap": True, "ratio": 4},          lambda d: d.display_name),
-    "ilo-name": ("iLO Name", "cyan",      {"no_wrap": True, "ratio": 3},          lambda d: d.raw.get("deviceName") or d.raw.get("secondaryName") or "—"),
-    "type":     ("Type",     "dim",       {"no_wrap": True, "min_width": 7, "max_width": 8}, lambda d: d.device_type),
-    "model":    ("Model",    "white",     {"no_wrap": True, "ratio": 2},           lambda d: d.model),
-    "serial":   ("Serial",   "green",     {"no_wrap": True, "min_width": 13},      lambda d: d.serial_number),
-    "part":     ("Part #",   "dim",       {"no_wrap": True, "min_width": 11},      lambda d: d.product_id or "—"),
-    "service":  ("Service",  "yellow",    {"no_wrap": True, "ratio": 2},           lambda d: d.service_name or "—"),
+    "name":     ("Name",     "bold cyan", {"no_wrap": True, "ratio": 4},
+                 lambda d, _u: d.display_name),
+    "ilo-name": ("iLO Name", "cyan",      {"no_wrap": True, "ratio": 3},
+                 lambda d, _u: d.raw.get("deviceName") or d.raw.get("secondaryName") or "—"),
+    "type":     ("Type",     "dim",       {"no_wrap": True, "min_width": 7, "max_width": 8},
+                 lambda d, _u: d.device_type),
+    "model":    ("Model",    "white",     {"no_wrap": True, "ratio": 2},
+                 lambda d, _u: d.model),
+    "serial":   ("Serial",   "green",     {"no_wrap": True, "min_width": 13},
+                 lambda d, _u: d.serial_number),
+    "part":     ("Part #",   "dim",       {"no_wrap": True, "min_width": 11},
+                 lambda d, _u: d.product_id or "—"),
+    "service":  ("Service",  "yellow",    {"no_wrap": True, "ratio": 2},
+                 lambda d, _u: d.service_name or "—"),
     "sub-key":  ("Sub Key",  "dim",       {"no_wrap": True, "min_width": 9, "max_width": 10},
-                 lambda d: (d.subscription_key[:8] + "…") if d.subscription_key else "—"),
+                 lambda d, _u: (d.subscription_key[:8] + "…") if d.subscription_key else "—"),
     "location": ("Location", "dim",       {"no_wrap": True, "ratio": 2},
-                 lambda d: (d.raw.get("location") or {}).get("locationName") or "—"),
+                 lambda d, _u: (d.raw.get("location") or {}).get("locationName") or "—"),
+    "added":    ("Added",    "dim",       {"no_wrap": True, "min_width": 10},
+                 lambda d, _u: (d.raw.get("createdAt") or "")[:10] or "—"),
+    "updated":  ("Updated",  "dim",       {"no_wrap": True, "min_width": 10},
+                 lambda d, _u: (d.raw.get("updatedAt") or "")[:10] or "—"),
+    "added-by": ("Added By", "dim",       {"no_wrap": True, "ratio": 2},
+                 lambda d, u: u.get(
+                     ((d.raw.get("contact") or {}).get("workspaceUser") or {}).get("id", ""),
+                     "—"
+                 )),
 }
 
 _DEVICE_DEFAULT_FIELDS = ("name", "type", "model", "serial", "service", "sub-key")
@@ -247,7 +264,9 @@ def _parse_fields(fields_str: Optional[str], available: dict, defaults: tuple) -
 # ---------------------------------------------------------------------------
 
 def print_devices_table(device_list: list, raw: bool = False,
-                        fields: Optional[str] = None) -> None:
+                        fields: Optional[str] = None,
+                        sort_by: Optional[str] = None,
+                        user_cache: Optional[dict] = None) -> None:
     if raw:
         print(json.dumps([d.raw for d in device_list], indent=2))
         return
@@ -257,6 +276,14 @@ def print_devices_table(device_list: list, raw: bool = False,
         return
 
     selected = _parse_fields(fields, _DEVICE_FIELDS, _DEVICE_DEFAULT_FIELDS)
+    uc = user_cache or {}
+
+    # Sorting
+    sort_key = (sort_by or "name").lower()
+    if sort_key not in _DEVICE_FIELDS:
+        raise SystemExit(f"Unknown sort field: {sort_key}\nAvailable: {', '.join(_DEVICE_FIELDS)}")
+    sorted_list = sorted(device_list,
+                         key=lambda d: _DEVICE_FIELDS[sort_key][3](d, uc).lower())
 
     table = Table(
         title=f"GreenLake Devices ({len(device_list)} total)",
@@ -268,8 +295,8 @@ def print_devices_table(device_list: list, raw: bool = False,
         header, style, kwargs, _ = _DEVICE_FIELDS[key]
         table.add_column(header, style=style, **kwargs)
 
-    for d in sorted(device_list, key=lambda x: x.display_name.lower()):
-        table.add_row(*[_DEVICE_FIELDS[key][3](d) for key in selected])
+    for d in sorted_list:
+        table.add_row(*[_DEVICE_FIELDS[key][3](d, uc) for key in selected])
 
     console.print(table)
 
@@ -352,6 +379,8 @@ async def _ensure_session(args: argparse.Namespace) -> COMSession:
 async def _cmd_show_devices(args: argparse.Namespace) -> None:
     session = await _ensure_session(args)
     device_type = getattr(args, "type", None)
+    fields = getattr(args, "fields", None)
+    sort_by = getattr(args, "sort_by", None)
 
     with console.status("[bold cyan]Fetching devices from GreenLake..."):
         try:
@@ -363,8 +392,24 @@ async def _cmd_show_devices(args: argparse.Namespace) -> None:
             console.print(f"[red]Error:[/red] {e}")
             sys.exit(1)
 
+    # Resolve user IDs → emails only when added-by column is requested
+    user_cache: dict = {}
+    requested_fields = [f.strip().lower() for f in fields.split(",")] if fields else list(_DEVICE_DEFAULT_FIELDS)
+    if "added-by" in requested_fields:
+        user_ids = {
+            ((d.raw.get("contact") or {}).get("workspaceUser") or {}).get("id", "")
+            for d in device_list
+        } - {""}
+        if user_ids:
+            from pcli.com.login import load_token
+            token_data = load_token() or {}
+            glp_token = token_data.get("glp_access_token", "")
+            if glp_token:
+                with console.status("[dim]Resolving user names..."):
+                    user_cache = await _devices.resolve_user_ids(user_ids, glp_token)
+
     print_devices_table(device_list, raw=getattr(args, "raw", False),
-                        fields=getattr(args, "fields", None))
+                        fields=fields, sort_by=sort_by, user_cache=user_cache)
 
 
 async def _cmd_show_workspaces(args: argparse.Namespace) -> None:
@@ -503,6 +548,10 @@ def _build_parser() -> argparse.ArgumentParser:
             f"Available: {', '.join(DEVICE_FIELD_NAMES)}. "
             f"Default: {', '.join(_DEVICE_DEFAULT_FIELDS)}"
         ),
+    )
+    dev_p.add_argument(
+        "--sort", metavar="FIELD", dest="sort_by",
+        help=f"Sort by field. Available: {', '.join(DEVICE_FIELD_NAMES)}. Default: name",
     )
 
     # pcli com get workspaces

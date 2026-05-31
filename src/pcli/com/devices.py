@@ -6,6 +6,7 @@ GreenLake platform device operations — corresponds to GLP-Devices.psm1.
 Covers: Get-HPEGLDevice, Add-HPEGLDeviceCompute, Connect-HPEGLDeviceComputeiLOtoCOM
 """
 
+import asyncio
 import re
 from dataclasses import dataclass
 from typing import Optional
@@ -17,6 +18,7 @@ from pcli.com.client import COMClient
 
 GLOBAL_API_BASE = "https://global.api.greenlake.hpe.com"
 DEVICES_URI = f"{GLOBAL_API_BASE}/devices/v1/devices"
+IDENTITY_URI = f"{GLOBAL_API_BASE}/identity/v1/users"
 
 # Strip common verbose prefixes from model strings to keep them short
 _MODEL_STRIP_RE = re.compile(
@@ -166,6 +168,33 @@ async def fetch_devices(
 async def fetch_compute_devices(session: COMSession) -> list[Device]:
     """Fetch only compute (server) devices. Shorthand for fetch_devices(type=COMPUTE)."""
     return await fetch_devices(session, device_type="COMPUTE")
+
+
+async def resolve_user_ids(user_ids: set[str], glp_token: str) -> dict[str, str]:
+    """Resolve a set of GLP user UUIDs to email addresses in parallel.
+
+    Returns a dict mapping user_id → email (falls back to user_id if unresolvable).
+    """
+    if not user_ids:
+        return {}
+
+    async def _fetch_one(uid: str, client: httpx.AsyncClient) -> tuple[str, str]:
+        try:
+            r = await client.get(
+                f"{IDENTITY_URI}/{uid}",
+                headers={"Authorization": f"Bearer {glp_token}"},
+            )
+            if r.status_code == 200:
+                data = r.json()
+                email = data.get("username") or data.get("email") or uid
+                return uid, email
+        except Exception:
+            pass
+        return uid, uid  # fallback: show raw UUID
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        results = await asyncio.gather(*[_fetch_one(uid, client) for uid in user_ids])
+    return dict(results)
 
 
 async def add_compute_devices(

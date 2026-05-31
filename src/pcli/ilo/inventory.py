@@ -383,34 +383,40 @@ async def fetch_serial_info(client: ILOClient) -> list[tuple[str, str]]:
 
 
 async def fetch_fleet_summary(client: ILOClient) -> list[tuple[str, str]]:
-    results: dict[str, str] = {key: "N/A" for key in FLEET_KEYS}
-    system = await client.get(await client.get_system_uri())
-    results["Model"] = system.get("Model", "N/A")
+    # Fetch system + manager in parallel — both are available without hitting
+    # firmware inventory (which can be slow on some iLOs)
+    sys_uri, mgr_uri = await asyncio.gather(
+        client.get_system_uri(),
+        client.get_manager_uri(),
+    )
+    system, manager = await asyncio.gather(
+        client.get(sys_uri),
+        client.get(mgr_uri),
+    )
 
-    # Sequential iteration with early exit — avoids flooding iLO with 20+ concurrent GETs
-    inv_members = await _collection_members(client, await client.get_firmware_inventory_uri())
-    for item in inv_members:
-        fw = await client.get(item["@odata.id"])
-        name = fw.get("Name", "")
-        version = fw.get("Version", "N/A") or "N/A"
-        name_lower = name.lower()
-        if "ilo" in name_lower and results["iLO"] == "N/A":
-            results["iLO"] = f"{name} {version}".strip()
-        elif any(key in name_lower for key in ("system rom", "bios", "system firmware")) and results["BIOS"] == "N/A":
-            results["BIOS"] = version
-        if results["iLO"] != "N/A" and results["BIOS"] != "N/A":
-            break  # stop — don't fetch remaining firmware items
+    model = system.get("Model", "N/A")
+    bios = system.get("BiosVersion", "N/A") or "N/A"
+
+    # iLO: compose "iLO 7 1.21.00 Apr 07 2026" from manager fields
+    mgr_model = manager.get("Model", "")       # e.g. "iLO 7"
+    mgr_fw    = manager.get("FirmwareVersion", "N/A") or "N/A"
+    # iLO 6 includes model in FirmwareVersion ("iLO 6 v1.74"); iLO 7 does not
+    if mgr_model and not mgr_fw.startswith(mgr_model):
+        ilo_str = f"{mgr_model} {mgr_fw}".strip()
+    else:
+        ilo_str = mgr_fw
 
     chassis = await client.get(await client.get_chassis_uri())
     na_uri = chassis.get("NetworkAdapters", {}).get("@odata.id")
+    nic_ver = "N/A"
     if na_uri:
         na_members = await _collection_members(client, na_uri)
         if na_members:
             adapter = await client.get(na_members[0]["@odata.id"])
             controllers = adapter.get("Controllers", [])
-            nic_ver = controllers[0].get("FirmwarePackageVersion", "N/A") if controllers else "N/A"
-            results["NIC-FW"] = nic_ver or "N/A"
+            nic_ver = (controllers[0].get("FirmwarePackageVersion", "N/A") if controllers else "N/A") or "N/A"
 
+    storage_ver = "N/A"
     storage_uri = system.get("Storage", {}).get("@odata.id")
     if storage_uri:
         s_members = await _collection_members(client, storage_uri)
@@ -418,13 +424,19 @@ async def fetch_fleet_summary(client: ILOClient) -> list[tuple[str, str]]:
             storage = await client.get(s_members[0]["@odata.id"])
             controllers = storage.get("StorageControllers", [])
             if controllers:
-                results["Storage-FW"] = controllers[0].get("FirmwareVersion", "N/A") or "N/A"
+                storage_ver = controllers[0].get("FirmwareVersion", "N/A") or "N/A"
             else:
                 ctrl_link = (storage.get("Controllers") or {}).get("@odata.id")
                 if ctrl_link:
                     ctrl_members = await _collection_members(client, ctrl_link)
                     if ctrl_members:
                         ctrl = await client.get(ctrl_members[0]["@odata.id"])
-                        results["Storage-FW"] = ctrl.get("FirmwareVersion", "N/A") or "N/A"
+                        storage_ver = ctrl.get("FirmwareVersion", "N/A") or "N/A"
 
-    return [(key, results[key]) for key in FLEET_KEYS]
+    return [
+        ("Model",      model),
+        ("iLO",        ilo_str),
+        ("BIOS",       bios),
+        ("NIC-FW",     nic_ver),
+        ("Storage-FW", storage_ver),
+    ]

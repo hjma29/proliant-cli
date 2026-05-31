@@ -73,10 +73,13 @@ class ILOClient:
             ) from exc
 
     async def __aenter__(self) -> "ILOClient":
+        # iLO 6 and iLO 7 only support HTTP/1.1; http2=True causes httpx to
+        # advertise h2 in TLS ALPN but falls back silently — no actual benefit.
+        # Left as-is (harmless); http2=False is equally fine for iLO.
         self._http = httpx.AsyncClient(
             base_url=self._base_url,
             verify=False,
-            http2=True,
+            http2=False,
             timeout=_TIMEOUT,
         )
 

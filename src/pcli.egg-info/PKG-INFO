@@ -1,0 +1,83 @@
+Metadata-Version: 2.4
+Name: pcli
+Version: 0.1.0
+Summary: HPE ProLiant unified CLI — iLO Redfish and Compute Ops Management
+Author: hjma29
+License: MIT
+Keywords: hpe,proliant,ilo,redfish,compute-ops-management,greenlake
+Classifier: Development Status :: 3 - Alpha
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Topic :: System :: Systems Administration
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: rich>=13.0
+Requires-Dist: pyyaml>=6.0
+Requires-Dist: argcomplete>=3.0
+Provides-Extra: ilo
+Requires-Dist: python-ilorest-library; extra == "ilo"
+Provides-Extra: com
+Requires-Dist: httpx[http2]>=0.27; extra == "com"
+Provides-Extra: all
+Requires-Dist: python-ilorest-library; extra == "all"
+Requires-Dist: httpx[http2]>=0.27; extra == "all"
+Provides-Extra: dev
+Requires-Dist: python-ilorest-library; extra == "dev"
+Requires-Dist: httpx[http2]>=0.27; extra == "dev"
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.23; extra == "dev"
+Requires-Dist: respx>=0.21; extra == "dev"
+Requires-Dist: pytest-cov>=4.0; extra == "dev"
+
+# pcli — HPE ProLiant unified CLI
+
+A unified command-line tool for managing HPE ProLiant servers across direct iLO access and the HPE GreenLake cloud.
+
+## Installation
+
+```bash
+git clone <repo>
+cd pcli
+pip install -e ".[all]"
+```
+
+## Usage
+
+```
+pcli ilo <command>    # Direct iLO Redfish management
+pcli com <command>    # HPE GreenLake / Compute Ops Management
+```
+
+### iLO commands
+
+```bash
+pcli ilo init                              # Create starter hosts.yml config
+pcli ilo show fleet                        # Firmware summary across all hosts
+pcli ilo show ilo                          # iLO firmware versions
+pcli ilo show network                      # NIC firmware versions
+pcli ilo show storage                      # Storage controllers + drives
+pcli ilo show bios                         # BIOS/System ROM versions
+pcli ilo show cpu                          # CPU models + microcode
+pcli ilo show memory                       # DIMM details
+pcli ilo show full                         # Full firmware inventory
+pcli ilo upgrade --host myilo              # Auto-upgrade all firmware from HPE SDR
+pcli ilo upgrade --host myilo --dry-run    # Preview without changes
+pcli ilo upgrade --host myilo --reboot     # Upgrade and reboot
+```
+
+### COM commands
+
+```bash
+pcli com login                             # Login to HPE GreenLake (Okta or API client)
+pcli com logout                            # Remove cached credentials
+pcli com get devices                       # List all devices in workspace
+pcli com get devices --type COMPUTE        # Filter by type
+pcli com get workspaces                    # List workspaces
+pcli com use workspace <name>              # Switch active workspace
+```
+
+## Config files
+
+- iLO hosts: `~/.config/pcli/ilo/hosts.yml`
+- COM credentials: `~/.config/pcli/com/credentials.yml`
+- COM token cache: `~/.config/pcli/com/token.json`

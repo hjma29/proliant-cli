@@ -1,0 +1,2 @@
+[console_scripts]
+pcli = pcli.cli:main

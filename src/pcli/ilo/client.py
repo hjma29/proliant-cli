@@ -1,108 +1,224 @@
 """
-hpeilo.client
-~~~~~~~~~~~~~
-Shared connection management and Redfish URI navigators.
-
-Design principles
------------------
-* ``ilo_session`` is a context manager — login on enter, logout on exit even
-  if the body raises.  Every module that needs a client uses it; nothing
-  else calls RedfishClient directly.
-* URI navigators (_get_*_uri) discover endpoints from the Redfish root instead
-  of hardcoding "/redfish/v1/Systems/1".  This works on multi-node or
-  non-standard chassis numbering without code changes.
-* All navigators are module-private (leading underscore) because callers in
-  inventory.py / power.py / firmware.py import them explicitly; they are not
-  part of the package's public surface.
+pcli.ilo.client
+~~~~~~~~~~~~~~~~
+Async Redfish session management built on httpx.AsyncClient.
 """
 
-import urllib3
+from __future__ import annotations
 
-from contextlib import contextmanager
-from typing import Generator
+import json
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator
 
-from redfish import RedfishClient
-from redfish.rest.v1 import ServerDownOrUnreachableError  # noqa: F401 — re-exported for callers
+import httpx
 
-# Connect timeout: give up quickly on unreachable hosts so the CLI doesn't hang.
-# Read timeout is longer to allow slow Redfish responses on busy iLOs.
-_CONNECT_TIMEOUT = urllib3.util.Timeout(connect=10, read=60)
-_RETRIES = urllib3.util.Retry(connect=1, read=2, redirect=2)
+ServerDownOrUnreachableError = httpx.ConnectError
+_TIMEOUT = httpx.Timeout(timeout=60.0, connect=10.0)
 
 
-@contextmanager
-def ilo_session(host: dict) -> Generator[RedfishClient, None, None]:
-    """Connect to an iLO, yield an authenticated client, always logout.
+class ILOClient:
+    """Async Redfish client for a single iLO host."""
 
-    Usage::
+    def __init__(self, base_url: str, username: str, password: str):
+        self._base_url = base_url.rstrip("/")
+        self._username = username
+        self._password = password
+        self._http: httpx.AsyncClient | None = None
+        self._token: str | None = None
+        self._session_uri: str | None = None
+        self._root: dict[str, Any] | None = None
+        self._uri_cache: dict[str, str] = {}
 
-        from pcli.ilo.client import ilo_session
+    @property
+    def base_url(self) -> str:
+        return self._base_url
 
-        with ilo_session(host) as client:
-            resp = client.get("/redfish/v1/Systems/1")
+    @property
+    def _auth_headers(self) -> dict[str, str]:
+        return {"X-Auth-Token": self._token} if self._token else {}
 
-    Parameters
-    ----------
-    host:
-        Dict with keys: url, username, password.
+    def _ensure_http(self) -> httpx.AsyncClient:
+        if self._http is None:
+            raise RuntimeError("Use 'async with ILOClient(...) as client:' before issuing requests")
+        return self._http
 
-    Raises
-    ------
-    ServerDownOrUnreachableError
-        Propagated to caller if the iLO is unreachable at login time.
-    """
-    client = RedfishClient(
-        base_url=host["url"],
-        username=host["username"],
-        password=host["password"],
-        timeout=_CONNECT_TIMEOUT,
-        retries=_RETRIES,
-    )
-    client.login()
-    try:
+    @staticmethod
+    def _safe_json(resp: httpx.Response) -> dict[str, Any]:
+        if not resp.content:
+            return {}
+        try:
+            data = resp.json()
+        except ValueError:
+            text = resp.text.strip()
+            return {"raw": text} if text else {}
+        return data if isinstance(data, dict) else {"value": data}
+
+    @classmethod
+    def _error_detail(cls, resp: httpx.Response) -> str:
+        payload = cls._safe_json(resp)
+        if not payload:
+            return resp.reason_phrase
+        if "raw" in payload:
+            return payload["raw"][:200]
+        return json.dumps(payload, default=str)[:200]
+
+    @classmethod
+    def _raise_for_status(cls, resp: httpx.Response, method: str, uri: str) -> None:
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = cls._error_detail(resp)
+            raise RuntimeError(
+                f"{method} {uri} failed — HTTP {resp.status_code}: {detail}"
+            ) from exc
+
+    async def __aenter__(self) -> "ILOClient":
+        self._http = httpx.AsyncClient(
+            base_url=self._base_url,
+            verify=False,
+            http2=True,
+            timeout=_TIMEOUT,
+        )
+
+        resp = await self._http.post(
+            "/redfish/v1/SessionService/Sessions",
+            json={"UserName": self._username, "Password": self._password},
+        )
+        self._raise_for_status(resp, "POST", "/redfish/v1/SessionService/Sessions")
+
+        self._token = resp.headers.get("X-Auth-Token")
+        body = self._safe_json(resp)
+        self._session_uri = body.get("@odata.id")
+        if not self._token:
+            raise RuntimeError("Redfish login succeeded but X-Auth-Token header is missing")
+        if not self._session_uri:
+            raise RuntimeError("Redfish login succeeded but session @odata.id is missing")
+
+        self._root = await self.get("/redfish/v1/")
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        http = self._http
+        session_uri = self._session_uri
+        auth_headers = dict(self._auth_headers)
+        self._http = None
+        self._token = None
+        self._session_uri = None
+        self._root = None
+        self._uri_cache.clear()
+
+        if http is None:
+            return
+
+        try:
+            if session_uri:
+                try:
+                    resp = await http.delete(session_uri, headers=auth_headers)
+                    if resp.status_code >= 400:
+                        resp.raise_for_status()
+                except Exception:
+                    pass
+        finally:
+            await http.aclose()
+
+    async def request(
+        self,
+        method: str,
+        uri: str,
+        *,
+        json: dict[str, Any] | None = None,
+        files: Any = None,
+        timeout: httpx.Timeout | float | None = None,
+    ) -> httpx.Response:
+        http = self._ensure_http()
+        resp = await http.request(
+            method,
+            uri,
+            json=json,
+            files=files,
+            headers=self._auth_headers,
+            timeout=timeout,
+        )
+        self._raise_for_status(resp, method, uri)
+        return resp
+
+    async def get(self, uri: str) -> dict[str, Any]:
+        resp = await self.request("GET", uri)
+        return self._safe_json(resp)
+
+    async def post(self, uri: str, body: dict[str, Any]) -> dict[str, Any]:
+        resp = await self.request("POST", uri, json=body)
+        return self._safe_json(resp)
+
+    async def delete(self, uri: str) -> int:
+        resp = await self.request("DELETE", uri)
+        return resp.status_code
+
+    async def patch(self, uri: str, body: dict[str, Any]) -> dict[str, Any]:
+        resp = await self.request("PATCH", uri, json=body)
+        return self._safe_json(resp)
+
+    async def _root_document(self) -> dict[str, Any]:
+        if self._root is None:
+            self._root = await self.get("/redfish/v1/")
+        return self._root
+
+    async def _first_member_uri(self, collection_key: str, label: str) -> str:
+        if collection_key in self._uri_cache:
+            return self._uri_cache[collection_key]
+
+        root = await self._root_document()
+        collection_uri = root.get(collection_key, {}).get("@odata.id")
+        if not collection_uri:
+            raise RuntimeError(f"Redfish root has no {label} collection")
+
+        members = (await self.get(collection_uri)).get("Members", [])
+        if not members:
+            raise RuntimeError(f"No {label} members found in Redfish root")
+
+        uri = members[0].get("@odata.id")
+        if not uri:
+            raise RuntimeError(f"First {label} member is missing @odata.id")
+
+        self._uri_cache[collection_key] = uri
+        return uri
+
+    async def get_system_uri(self) -> str:
+        return await self._first_member_uri("Systems", "Systems")
+
+    async def get_chassis_uri(self) -> str:
+        return await self._first_member_uri("Chassis", "Chassis")
+
+    async def get_manager_uri(self) -> str:
+        return await self._first_member_uri("Managers", "Managers")
+
+    async def get_update_service_uri(self) -> str:
+        if "UpdateService" in self._uri_cache:
+            return self._uri_cache["UpdateService"]
+
+        root = await self._root_document()
+        uri = root.get("UpdateService", {}).get("@odata.id")
+        if not uri:
+            raise RuntimeError("Redfish root has no UpdateService URI")
+
+        self._uri_cache["UpdateService"] = uri
+        return uri
+
+    async def get_firmware_inventory_uri(self) -> str:
+        if "FirmwareInventory" in self._uri_cache:
+            return self._uri_cache["FirmwareInventory"]
+
+        update_service = await self.get(await self.get_update_service_uri())
+        uri = update_service.get("FirmwareInventory", {}).get("@odata.id")
+        if not uri:
+            raise RuntimeError("UpdateService has no FirmwareInventory URI")
+
+        self._uri_cache["FirmwareInventory"] = uri
+        return uri
+
+
+@asynccontextmanager
+async def ilo_session(host: dict) -> AsyncIterator[ILOClient]:
+    """Yield an authenticated async iLO client for one host."""
+    async with ILOClient(host["url"], host["username"], host["password"]) as client:
         yield client
-    finally:
-        # logout() runs even if the caller's body raises — no leaked sessions.
-        client.logout()
-
-
-# ---------------------------------------------------------------------------
-# URI navigators — call these instead of hardcoding /redfish/v1/Systems/1
-# ---------------------------------------------------------------------------
-
-def get_system_uri(client: RedfishClient) -> str:
-    """Return the URI of the first ComputerSystem (typically /Systems/1)."""
-    root_uri = client.root.obj["Systems"]["@odata.id"]
-    members = client.get(root_uri).obj.get("Members", [])
-    if not members:
-        raise RuntimeError("No Systems members found in Redfish root")
-    return members[0]["@odata.id"]
-
-
-def get_chassis_uri(client: RedfishClient) -> str:
-    """Return the URI of the first Chassis (typically /Chassis/1)."""
-    root_uri = client.root.obj["Chassis"]["@odata.id"]
-    members = client.get(root_uri).obj.get("Members", [])
-    if not members:
-        raise RuntimeError("No Chassis members found in Redfish root")
-    return members[0]["@odata.id"]
-
-
-def get_manager_uri(client: RedfishClient) -> str:
-    """Return the URI of the first Manager (the iLO manager resource)."""
-    root_uri = client.root.obj["Managers"]["@odata.id"]
-    members = client.get(root_uri).obj.get("Members", [])
-    if not members:
-        raise RuntimeError("No Managers members found in Redfish root")
-    return members[0]["@odata.id"]
-
-
-def get_update_service_uri(client: RedfishClient) -> str:
-    """Return the URI of the UpdateService."""
-    return client.root.obj["UpdateService"]["@odata.id"]
-
-
-def get_firmware_inventory_uri(client: RedfishClient) -> str:
-    """Return the URI of the FirmwareInventory collection."""
-    update_uri = get_update_service_uri(client)
-    return client.get(update_uri).obj["FirmwareInventory"]["@odata.id"]

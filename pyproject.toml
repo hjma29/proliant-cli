@@ -28,17 +28,15 @@ dependencies = [
 
 [project.optional-dependencies]
 ilo = [
-    "python-ilorest-library",
+    "httpx[http2]>=0.27",
 ]
 com = [
     "httpx[http2]>=0.27",
 ]
 all = [
-    "python-ilorest-library",
     "httpx[http2]>=0.27",
 ]
 dev = [
-    "python-ilorest-library",
     "httpx[http2]>=0.27",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",

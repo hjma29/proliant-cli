@@ -1,56 +1,25 @@
 """
 hpeilo.cli
 ~~~~~~~~~~
-Command-line interface: subcommand-based argument parsing, parallel host
-queries, and table printing.
-
-This is the only module that should import argparse, sys, or print anything.
-All other modules are pure library code with no side effects at import time.
-
-Usage::
-
-    pcli ilo show fleet                          Fleet summary across all servers
-    pcli ilo show ilo                            iLO firmware version
-    pcli ilo show network                        NIC firmware versions
-    pcli ilo show nic                            NIC link status + MAC
-    pcli ilo show storage                        Storage controllers + drives
-    pcli ilo show cpu                            CPU models + microcode
-    pcli ilo show memory                         DIMM details
-    pcli ilo show com                            HPE Compute Ops Management status
-    pcli ilo show full                           Full firmware inventory
-    pcli ilo show disk-map                       Drive bay/serial map
-    pcli ilo show serial                         Server model, serial number, and product ID
-    pcli ilo show ilo --host dl325-gen12         Target a single server
-    pcli ilo show nic --raw                      Raw JSON output
-
-    pcli ilo upgrade --host dl325-gen12          Auto-upgrade all firmware from HPE SDR
-    pcli ilo upgrade --host dl325-gen12 --dry-run             Preview only
-    pcli ilo upgrade --host dl325-gen12 --reboot              Upgrade + reboot
-    pcli ilo upgrade --host dl325-gen12 --component bios      BIOS/System ROM only
-    pcli ilo upgrade --host dl325-gen12 --component ilo       iLO firmware only
-    pcli ilo upgrade --host dl325-gen12 --component nic       NIC firmware only
-    pcli ilo upgrade --host dl325-gen12 --component storage   Storage controllers only
-
-    pcli ilo fw components --host dl325-gen12    List staged components
-    pcli ilo fw queue      --host dl325-gen12    Show update task queue
-    pcli ilo fw stage      --host dl325-gen12 --url <url>   Stage from URL
-    pcli ilo fw flash      --host dl325-gen12 <filename>    Queue for flash
-    pcli ilo fw clear      --host dl325-gen12    Clear task queue
+Command-line interface: subcommand-based argument parsing, async host queries,
+and table printing.
 """
+
+from __future__ import annotations
 
 # PYTHON_ARGCOMPLETE_OK
 import argparse
+import asyncio
 import json
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from importlib.metadata import version as _pkg_version, PackageNotFoundError
+from collections.abc import Awaitable, Callable
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
+from typing import Any
 
 import argcomplete
 
-from redfish.rest.v1 import ServerDownOrUnreachableError
-
 from pcli.ilo import firmware, inventory
-from pcli.ilo.client import ilo_session
+from pcli.ilo.client import ILOClient, ServerDownOrUnreachableError, ilo_session
 from pcli.ilo.config import (
     COL_ILO_WIDTH,
     COL_NAME_WIDTH,
@@ -60,86 +29,63 @@ from pcli.ilo.config import (
     load_hosts,
 )
 
-# ---------------------------------------------------------------------------
-# Dispatch table — maps show subcommand name to the fetch function.
-# ---------------------------------------------------------------------------
-_FETCH_DISPATCH: dict[str, callable] = {
-    "ilo":      inventory.fetch_ilo_version,
-    "network":  inventory.fetch_network_versions,
-    "nic":      inventory.fetch_nic_status,
-    "storage":  inventory.fetch_storage_versions,
-    "cpu":      inventory.fetch_cpu_info,
-    "memory":   inventory.fetch_memory_info,
-    "com":      inventory.fetch_com_status,
-    "full":     inventory.fetch_all_firmware,
+FetchFn = Callable[[ILOClient], Awaitable[list[Any]]]
+
+_FETCH_DISPATCH: dict[str, FetchFn] = {
+    "ilo": inventory.fetch_ilo_version,
+    "network": inventory.fetch_network_versions,
+    "nic": inventory.fetch_nic_status,
+    "storage": inventory.fetch_storage_versions,
+    "cpu": inventory.fetch_cpu_info,
+    "memory": inventory.fetch_memory_info,
+    "com": inventory.fetch_com_status,
+    "full": inventory.fetch_all_firmware,
     "disk_map": inventory.fetch_disk_map,
-    "fleet":    inventory.fetch_fleet_summary,
-    "serial":   inventory.fetch_serial_info,
+    "fleet": inventory.fetch_fleet_summary,
+    "serial": inventory.fetch_serial_info,
 }
 
-_RAW_DISPATCH: dict[str, callable] = {
-    "ilo":      inventory.fetch_firmware_raw,
-    "network":  inventory.fetch_network_raw,
-    "nic":      inventory.fetch_nic_raw,
-    "storage":  inventory.fetch_storage_raw,
-    "cpu":      inventory.fetch_cpu_raw,
-    "memory":   inventory.fetch_memory_raw,
-    "com":      inventory.fetch_com_raw,
-    "full":     inventory.fetch_firmware_raw,
+_RAW_DISPATCH: dict[str, FetchFn] = {
+    "ilo": inventory.fetch_firmware_raw,
+    "network": inventory.fetch_network_raw,
+    "nic": inventory.fetch_nic_raw,
+    "storage": inventory.fetch_storage_raw,
+    "cpu": inventory.fetch_cpu_raw,
+    "memory": inventory.fetch_memory_raw,
+    "com": inventory.fetch_com_raw,
+    "full": inventory.fetch_firmware_raw,
     "disk_map": inventory.fetch_disk_map_raw,
-    "fleet":    inventory.fetch_firmware_raw,
-    "serial":   inventory.fetch_serial_info,
+    "fleet": inventory.fetch_firmware_raw,
+    "serial": inventory.fetch_serial_info,
 }
 
 
-# ---------------------------------------------------------------------------
-# Host querying
-# ---------------------------------------------------------------------------
-
-def query_host(host: dict, fetch_fn: callable) -> tuple[str, str | None, list[tuple[str, str]]]:
-    """Connect to one iLO host, run the requested fetch, and return results.
-
-    Parameters
-    ----------
-    host:
-        Dict with keys: name, url, username, password.
-    fetch_fn:
-        A callable that accepts a RedfishClient and returns list[tuple[str, str]].
-
-    Returns
-    -------
-    tuple[str, str | None, list[tuple[str, str]]]
-        (host_name, error_message_or_None, results_list)
-        On success  error is None and results contains data.
-        On failure  error contains the exception message and results is [].
-    """
+async def query_host_async(host: dict, fetch_fn: FetchFn) -> tuple[str, str | None, list[Any]]:
     try:
-        with ilo_session(host) as client:
-            results = fetch_fn(client)
+        async with ilo_session(host) as client:
+            results = await fetch_fn(client)
         return host["name"], None, results
     except ServerDownOrUnreachableError as exc:
         return host["name"], f"Unreachable: {exc}", []
-    except Exception as exc:  # noqa: BLE001 — surface all errors as rows, not crashes
+    except Exception as exc:  # noqa: BLE001
         return host["name"], f"Error: {exc}", []
 
 
-def _run_parallel_fn(hosts: list[dict], fetch_fn: callable) -> list[tuple[str, str | None, list]]:
-    """Submit all hosts to the thread pool and collect results in arrival order."""
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        futures = {pool.submit(query_host, host, fetch_fn): host["name"] for host in hosts}
-        return [future.result() for future in as_completed(futures)]
+async def _run_parallel_async(hosts: list[dict], fetch_fn: FetchFn) -> list[tuple[str, str | None, list[Any]]]:
+    semaphore = asyncio.Semaphore(MAX_WORKERS)
 
+    async def _run_one(host: dict) -> tuple[str, str | None, list[Any]]:
+        async with semaphore:
+            return await query_host_async(host, fetch_fn)
 
-# ---------------------------------------------------------------------------
-# Table printers
-# ---------------------------------------------------------------------------
+    return list(await asyncio.gather(*(_run_one(host) for host in hosts)))
+
 
 def _header_line(server_col: int, label_col: int, value_col: int) -> str:
     return f"{'Server':<{server_col}}   {'Name':<{label_col}}   {'Version':<{value_col}}"
 
 
 def print_ilo_table(results: list[tuple[str, str | None, list]]) -> None:
-    """Print iLO firmware version table."""
     server_w, ilo_w, name_w = COL_SERVER_WIDTH, COL_ILO_WIDTH, COL_NAME_WIDTH
     total_w = server_w + ilo_w + name_w + 4
     print("\n--- iLO Firmware Versions ---")
@@ -155,7 +101,6 @@ def print_ilo_table(results: list[tuple[str, str | None, list]]) -> None:
 
 
 def _print_component_table(results: list[tuple[str, str | None, list]], title: str) -> None:
-    """Generic table printer for NIC / storage / CPU / memory rows."""
     server_w, name_w, ver_w = COL_SERVER_WIDTH, COL_NIC_WIDTH, COL_NAME_WIDTH
     total_w = server_w + name_w + ver_w + 4
     print(f"--- {title} ---")
@@ -171,7 +116,6 @@ def _print_component_table(results: list[tuple[str, str | None, list]], title: s
 
 
 def _print_raw_table(results: list[tuple[str, str | None, list]]) -> None:
-    """Print raw JSON responses, one block per URI."""
     for host_name, error, rows in sorted(results, key=lambda r: r[0]):
         print(f"\n=== {host_name} ===")
         if error:
@@ -183,7 +127,6 @@ def _print_raw_table(results: list[tuple[str, str | None, list]]) -> None:
 
 
 def print_disk_map_table(results: list[tuple[str, str | None, list]]) -> None:
-    """Print SmartArray Volume → physical drive bay mapping."""
     server_w = COL_SERVER_WIDTH
     vol_w = 52
     bay_w = 80
@@ -206,17 +149,7 @@ def print_disk_map_table(results: list[tuple[str, str | None, list]]) -> None:
 
 
 def print_fleet_table(results: list[tuple[str, str | None, list]]) -> None:
-    """Print fleet comparison table — one row per server, firmware versions as columns.
-
-    Columns: Server | Model | iLO | BIOS | NIC-FW | Storage-FW
-    Servers are sorted by name. This is the go-to command for a quick
-    fleet-wide firmware audit.
-    """
-    from pcli.ilo.inventory import FLEET_KEYS
-
-    keys = list(FLEET_KEYS)  # ["Model", "iLO", "BIOS", "NIC-FW", "Storage-FW"]
-
-    # Collect per-server dicts
+    keys = list(inventory.FLEET_KEYS)
     server_data: dict[str, dict[str, str]] = {}
     for host_name, error, rows in results:
         if error:
@@ -225,72 +158,53 @@ def print_fleet_table(results: list[tuple[str, str | None, list]]) -> None:
         else:
             server_data[host_name] = dict(rows)
 
-    # Compute column widths dynamically
     col_w: dict[str, int] = {k: len(k) for k in keys}
-    srv_w = max(len("Server"), max(len(n) for n in server_data))
+    srv_w = max(len("Server"), max(len(name) for name in server_data))
     for vals in server_data.values():
-        for k in keys:
-            col_w[k] = max(col_w[k], len(vals.get(k, "N/A")))
+        for key in keys:
+            col_w[key] = max(col_w[key], len(vals.get(key, "N/A")))
 
-    # Header
-    header = f"{'Server':<{srv_w}}"
-    for k in keys:
-        header += f"   {k:<{col_w[k]}}"
-    sep = "-" * len(header)
-
+    header = f"{'Server':<{srv_w}}" + "".join(f"   {key:<{col_w[key]}}" for key in keys)
     print("\n--- Fleet Summary ---")
     print(header)
-    print(sep)
-
+    print("-" * len(header))
     for host_name in sorted(server_data):
         vals = server_data[host_name]
-        row = f"{host_name:<{srv_w}}"
-        for k in keys:
-            row += f"   {vals.get(k, 'N/A'):<{col_w[k]}}"
+        row = f"{host_name:<{srv_w}}" + "".join(f"   {vals.get(key, 'N/A'):<{col_w[key]}}" for key in keys)
         print(row)
         if "_error" in vals:
             print(f"  {'':>{srv_w}}   {vals['_error']}")
 
 
 def print_serial_table(results: list[tuple[str, str | None, list]]) -> None:
-    """Print server identity table — one row per server with Model, Serial, ProductID."""
-    KEYS = ("Model", "Serial", "ProductID")
-
+    keys = ("Model", "Serial", "ProductID")
     server_data: dict[str, dict[str, str]] = {}
     for host_name, error, rows in results:
         if error:
-            server_data[host_name] = {k: "ERROR" for k in KEYS}
+            server_data[host_name] = {k: "ERROR" for k in keys}
             server_data[host_name]["_error"] = error
         else:
             server_data[host_name] = dict(rows)
 
-    srv_w = max(len("Server"), max(len(n) for n in server_data))
-    col_w: dict[str, int] = {k: len(k) for k in KEYS}
+    srv_w = max(len("Server"), max(len(name) for name in server_data))
+    col_w: dict[str, int] = {k: len(k) for k in keys}
     for vals in server_data.values():
-        for k in KEYS:
-            col_w[k] = max(col_w[k], len(vals.get(k, "N/A")))
+        for key in keys:
+            col_w[key] = max(col_w[key], len(vals.get(key, "N/A")))
 
-    header = f"{'Server':<{srv_w}}"
-    for k in KEYS:
-        header += f"   {k:<{col_w[k]}}"
-    sep = "-" * len(header)
-
+    header = f"{'Server':<{srv_w}}" + "".join(f"   {key:<{col_w[key]}}" for key in keys)
     print("\n--- Server Identity ---")
     print(header)
-    print(sep)
-
+    print("-" * len(header))
     for host_name in sorted(server_data):
         vals = server_data[host_name]
-        row = f"{host_name:<{srv_w}}"
-        for k in KEYS:
-            row += f"   {vals.get(k, 'N/A'):<{col_w[k]}}"
+        row = f"{host_name:<{srv_w}}" + "".join(f"   {vals.get(key, 'N/A'):<{col_w[key]}}" for key in keys)
         print(row)
         if "_error" in vals:
             print(f"  {'':>{srv_w}}   {vals['_error']}")
 
 
 def print_full_table(results: list[tuple[str, str | None, list]]) -> None:
-    """Print all firmware inventory entries."""
     server_w, name_w, ver_w = COL_SERVER_WIDTH, COL_NAME_WIDTH, COL_ILO_WIDTH
     total_w = server_w + name_w + ver_w + 4
     print("\n--- Full Firmware Inventory ---")
@@ -305,10 +219,6 @@ def print_full_table(results: list[tuple[str, str | None, list]]) -> None:
             print(f"{label:<{server_w}}   {name:<{name_w}}   {version}")
 
 
-# ---------------------------------------------------------------------------
-# Argument parser
-# ---------------------------------------------------------------------------
-
 def _build_parser() -> argparse.ArgumentParser:
     try:
         _version = _pkg_version("pcli")
@@ -321,9 +231,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", "-V", action="version", version=f"%(prog)s {_version}")
 
-    def _host_completer(**kwargs):
+    def _host_completer(**_kwargs):
         try:
-            return [h["name"] for h in load_hosts()]
+            return [host["name"] for host in load_hosts()]
         except Exception:
             return []
 
@@ -336,7 +246,6 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
     subparsers.required = True
 
-    # ── show ─────────────────────────────────────────────────────────────────
     show_p = subparsers.add_parser(
         "show",
         help="Show hardware/firmware inventory",
@@ -345,33 +254,30 @@ def _build_parser() -> argparse.ArgumentParser:
     show_sub = show_p.add_subparsers(dest="what", metavar="WHAT")
     show_sub.required = True
 
-    _SHOW_CHOICES = {
-        "fleet":    "Fleet summary: key firmware versions per server (one row per server)",
-        "ilo":      "iLO firmware version",
-        "network":  "NIC firmware versions",
-        "nic":      "NIC link status + MAC address",
-        "storage":  "Storage controller + drive firmware",
-        "cpu":      "CPU model + microcode version",
-        "memory":   "DIMM info + firmware revision",
-        "com":      "HPE Compute Ops Management registration status",
-        "full":     "Full firmware inventory",
+    show_choices = {
+        "fleet": "Fleet summary: key firmware versions per server (one row per server)",
+        "ilo": "iLO firmware version",
+        "network": "NIC firmware versions",
+        "nic": "NIC link status + MAC address",
+        "storage": "Storage controller + drive firmware",
+        "cpu": "CPU model + microcode version",
+        "memory": "DIMM info + firmware revision",
+        "com": "HPE Compute Ops Management registration status",
+        "full": "Full firmware inventory",
         "disk-map": "Drive bay + serial number map (cross-ref with lsblk)",
-        "serial":   "Server model, serial number, and product ID (for COM onboarding)",
+        "serial": "Server model, serial number, and product ID (for COM onboarding)",
     }
-    for name, help_text in _SHOW_CHOICES.items():
+    for name, help_text in show_choices.items():
         sp = show_sub.add_parser(name, help=help_text)
         _add_host(sp)
-        sp.add_argument("--raw", action="store_true",
-                        help="Print raw JSON instead of a formatted table")
+        sp.add_argument("--raw", action="store_true", help="Print raw JSON instead of a formatted table")
 
-    # ── upgrade ───────────────────────────────────────────────────────────────
     upgrade_p = subparsers.add_parser(
         "upgrade",
         help="Firmware upgrade and task queue management",
         description=(
             "Auto-upgrade outdated firmware from HPE SDR, with optional component filtering.\n"
-            "Subcommands give access to individual staging and queue operations.\n"
-            "\n"
+            "Subcommands give access to individual staging and queue operations.\n\n"
             "Examples:\n"
             "  pcli ilo upgrade --host dl325-gen12                       Upgrade all components\n"
             "  pcli ilo upgrade --host dl325-gen12 --dry-run             Preview without changes\n"
@@ -385,83 +291,61 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     upgrade_sub = upgrade_p.add_subparsers(dest="upgrade_action", metavar="ACTION")
-    upgrade_sub.required = False          # bare 'pcli ilo upgrade' = auto-upgrade
+    upgrade_sub.required = False
     upgrade_p.set_defaults(upgrade_action="auto")
 
-    # bare: pcli ilo upgrade [--host NAME] [--dry-run] [--reboot] [--component FILTER]
     _add_host(upgrade_p, required=False)
-    upgrade_p.add_argument("--dry-run", action="store_true", dest="dry_run",
-                           help="Preview without making changes")
-    upgrade_p.add_argument("--reboot", action="store_true",
-                           help="Reboot server after queuing all updates")
+    upgrade_p.add_argument("--dry-run", action="store_true", dest="dry_run", help="Preview without making changes")
+    upgrade_p.add_argument("--reboot", action="store_true", help="Reboot server after queuing all updates")
     upgrade_p.add_argument(
-        "--component", metavar="FILTER",
+        "--component",
+        metavar="FILTER",
         choices=["all", "ilo", "bios", "nic", "storage"],
         default="all",
         help="Limit upgrade to a specific component type: all | ilo | bios | nic | storage (default: all)",
     )
 
-    # pcli ilo upgrade components --host NAME
-    up_comp = upgrade_sub.add_parser("components",
-                                     help="List staged components in iLO repository")
+    up_comp = upgrade_sub.add_parser("components", help="List staged components in iLO repository")
     _add_host(up_comp, required=True)
-
-    # pcli ilo upgrade queue --host NAME
     up_queue = upgrade_sub.add_parser("queue", help="Show the firmware update task queue")
     _add_host(up_queue, required=True)
-
-    # pcli ilo upgrade stage --host NAME --url URL [--dry-run]
-    up_stage = upgrade_sub.add_parser("stage",
-                                      help="Stage a firmware package from a URL")
+    up_stage = upgrade_sub.add_parser("stage", help="Stage a firmware package from a URL")
     _add_host(up_stage, required=True)
-    up_stage.add_argument("--url", metavar="URL", required=True,
-                          help="Direct URL to .fwpkg file on HPE SDR")
+    up_stage.add_argument("--url", metavar="URL", required=True, help="Direct URL to .fwpkg file on HPE SDR")
     up_stage.add_argument("--dry-run", action="store_true", dest="dry_run")
-
-    # pcli ilo upgrade flash --host NAME FILENAME [--dry-run]
-    up_flash = upgrade_sub.add_parser("flash",
-                                      help="Queue a staged file for flash on next reboot")
+    up_flash = upgrade_sub.add_parser("flash", help="Queue a staged file for flash on next reboot")
     _add_host(up_flash, required=True)
-    up_flash.add_argument("filename", metavar="FILENAME",
-                          help="Filename of the staged component to queue")
+    up_flash.add_argument("filename", metavar="FILENAME", help="Filename of the staged component to queue")
     up_flash.add_argument("--dry-run", action="store_true", dest="dry_run")
-
-    # pcli ilo upgrade clear --host NAME [--dry-run]
-    up_clear = upgrade_sub.add_parser("clear",
-                                      help="Clear all entries from the task queue")
+    up_clear = upgrade_sub.add_parser("clear", help="Clear all entries from the task queue")
     _add_host(up_clear, required=True)
     up_clear.add_argument("--dry-run", action="store_true", dest="dry_run")
 
-    # ── init ──────────────────────────────────────────────────────────────────
     subparsers.add_parser(
         "init",
         help="Create a starter hosts.yml at ~/.config/pcli/ilo/hosts.yml",
         description="Create ~/.config/pcli/ilo/hosts.yml with example entries to fill in.",
     )
-
     return parser
 
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
-
 def main(argv: list[str] | None = None) -> None:
-    """Parse arguments and dispatch to the appropriate handler."""
     parser = _build_parser()
     argcomplete.autocomplete(parser)
     args = parser.parse_args(argv)
+    asyncio.run(_async_main(args))
 
+
+async def _async_main(args: argparse.Namespace) -> None:
     if args.command == "show":
-        _run_show(args)
+        await _run_show(args)
     elif args.command == "upgrade":
-        _run_upgrade(args)
+        await _run_upgrade(args)
     elif args.command == "init":
         _run_init()
 
 
 def _load_hosts_or_exit(name: str | None) -> list[dict]:
-    """Load hosts, exiting with a clear message on failure."""
     try:
         return load_hosts(name=name)
     except FileNotFoundError:
@@ -478,7 +362,6 @@ def _load_hosts_or_exit(name: str | None) -> list[dict]:
 
 
 def _run_init() -> None:
-    """Create a starter hosts.yml at ~/.config/pcli/ilo/hosts.yml."""
     from pathlib import Path
     dest = Path.home() / ".config" / "pcli" / "ilo" / "hosts.yml"
     if dest.exists():
@@ -501,99 +384,88 @@ def _run_init() -> None:
         "    password: yourpassword\n"
     )
     print(f"Created: {dest}")
-    print(f"Edit it to fill in your server addresses and credentials.")
-    print(f"\nThen try:  pcli ilo show fleet")
+    print("Edit it to fill in your server addresses and credentials.")
+    print("\nThen try:  pcli ilo show fleet")
 
 
-def _run_show(args: argparse.Namespace) -> None:
-    """Dispatch 'pcli ilo show <what>' commands."""
-    # Normalise disk-map → disk_map for dict key lookup
+async def _run_show(args: argparse.Namespace) -> None:
     what = args.what.replace("-", "_")
     hosts = _load_hosts_or_exit(getattr(args, "host", None))
-    raw: bool = getattr(args, "raw", False)
-
+    raw = getattr(args, "raw", False)
     fetch_fn = _RAW_DISPATCH[what] if raw else _FETCH_DISPATCH[what]
-    results = _run_parallel_fn(hosts, fetch_fn)
+    results = await _run_parallel_async(hosts, fetch_fn)
 
     if raw:
         _print_raw_table(results)
         return
 
-    _PRINTERS = {
-        "fleet":    print_fleet_table,
-        "ilo":      print_ilo_table,
-        "network":  lambda r: _print_component_table(r, "NIC Firmware"),
-        "nic":      lambda r: _print_component_table(r, "NIC Link Status + MAC"),
-        "storage":  lambda r: _print_component_table(r, "Storage Firmware"),
-        "cpu":      lambda r: _print_component_table(r, "CPU Info"),
-        "memory":   lambda r: _print_component_table(r, "Memory Info"),
-        "com":      lambda r: _print_component_table(r, "HPE Compute Ops Management"),
-        "full":     print_full_table,
+    printers = {
+        "fleet": print_fleet_table,
+        "ilo": print_ilo_table,
+        "network": lambda r: _print_component_table(r, "NIC Firmware"),
+        "nic": lambda r: _print_component_table(r, "NIC Link Status + MAC"),
+        "storage": lambda r: _print_component_table(r, "Storage Firmware"),
+        "cpu": lambda r: _print_component_table(r, "CPU Info"),
+        "memory": lambda r: _print_component_table(r, "Memory Info"),
+        "com": lambda r: _print_component_table(r, "HPE Compute Ops Management"),
+        "full": print_full_table,
         "disk_map": print_disk_map_table,
-        "serial":   print_serial_table,
+        "serial": print_serial_table,
     }
-    _PRINTERS[what](results)
+    printers[what](results)
 
 
-def _run_upgrade(args: argparse.Namespace) -> None:
-    """Dispatch 'pcli ilo upgrade [ACTION]' commands."""
-    action = args.upgrade_action  # "auto" | "components" | "queue" | "stage" | "flash" | "clear"
-    dry_run: bool = getattr(args, "dry_run", False)
+async def _run_upgrade(args: argparse.Namespace) -> None:
+    action = args.upgrade_action
+    dry_run = getattr(args, "dry_run", False)
 
     if action == "auto":
-        # Auto-upgrade requires --host
         if not args.host:
             print("ERROR: 'pcli ilo upgrade' requires --host <name>", file=sys.stderr)
             sys.exit(1)
-        hosts = _load_hosts_or_exit(args.host)
-        _run_fw_upgrade(hosts[0], dry_run=dry_run, reboot=getattr(args, "reboot", False),
-                        component=getattr(args, "component", "all"))
+        host = _load_hosts_or_exit(args.host)[0]
+        await _run_fw_upgrade(
+            host,
+            dry_run=dry_run,
+            reboot=getattr(args, "reboot", False),
+            component=getattr(args, "component", "all"),
+        )
         return
 
-    # All other actions target exactly one host (required=True enforced by parser)
-    hosts = _load_hosts_or_exit(args.host)
-    host = hosts[0]
-
+    host = _load_hosts_or_exit(args.host)[0]
     try:
-        with ilo_session(host) as client:
+        async with ilo_session(host) as client:
             if action == "components":
-                components = firmware.get_component_repository(client)
-                _print_fw_components(host["name"], components)
-
+                _print_fw_components(host["name"], await firmware.get_component_repository(client))
             elif action == "queue":
-                queue = firmware.get_task_queue(client)
-                _print_fw_queue(host["name"], queue)
-
+                _print_fw_queue(host["name"], await firmware.get_task_queue(client))
             elif action == "stage":
-                result = firmware.stage_from_uri(client, args.url, dry_run=dry_run)
+                result = await firmware.stage_from_uri(client, args.url, dry_run=dry_run)
                 if dry_run:
                     print(f"[dry-run] Would POST to: {result['target']}")
                     print(f"[dry-run] Payload: {json.dumps(result['payload'], indent=2)}")
                 else:
                     print(f"Staging initiated on {host['name']}:")
                     print(json.dumps(result, indent=2))
-
             elif action == "flash":
-                result = firmware.add_to_task_queue(client, args.filename, dry_run=dry_run)
+                result = await firmware.add_to_task_queue(client, args.filename, dry_run=dry_run)
                 if dry_run:
                     print(f"[dry-run] Would POST to: {result['target']}")
                     print(f"[dry-run] Payload: {json.dumps(result['payload'], indent=2)}")
                 else:
                     print(f"Queued '{args.filename}' for flash on next reboot ({host['name']}):")
                     print(json.dumps(result, indent=2))
-
             elif action == "clear":
-                uris = firmware.clear_task_queue(client, dry_run=dry_run)
+                uris = await firmware.clear_task_queue(client, dry_run=dry_run)
                 if dry_run:
                     if uris:
                         print(f"[dry-run] Would delete {len(uris)} task queue entries:")
-                        for u in uris:
-                            print(f"  {u}")
+                        for uri in uris:
+                            print(f"  {uri}")
                     else:
                         print("[dry-run] Task queue is already empty.")
                 else:
                     print(f"Cleared {len(uris)} task queue entries from {host['name']}.")
-
     except ServerDownOrUnreachableError as exc:
         print(f"ERROR: {host['name']} unreachable: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -602,44 +474,26 @@ def _run_upgrade(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
-def _run_fw_upgrade(host: dict, *, dry_run: bool = False, reboot: bool = False,
-                    component: str = "all") -> None:
-    """Auto-upgrade all outdated firmware on a single host using HPE SDR.
-
-    Parameters
-    ----------
-    component:
-        Filter which components to upgrade:
-        "all"     — everything (default)
-        "ilo"     — iLO firmware only
-        "bios"    — System ROM / BIOS only
-        "nic"     — Network adapter firmware only
-        "storage" — Storage controllers only
-    """
-    from rich.console import Console
-    from rich.table import Table
-    from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+async def _run_fw_upgrade(host: dict, *, dry_run: bool = False, reboot: bool = False, component: str = "all") -> None:
     from rich import box
+    from rich.console import Console
+    from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+    from rich.table import Table
+
     from pcli.ilo import sdr
     from pcli.ilo.power import reset_server
 
     console = Console()
-
-    # ── Step 1: Get current firmware inventory ──────────────────────────────
     with console.status(f"[bold cyan]Connecting to {host['name']}..."):
         try:
-            with ilo_session(host) as client:
-                all_fw_full = inventory.fetch_firmware_inventory_full(client)
-                nic_fw = inventory.fetch_nic_firmware_inventory(client)
-                all_fw = [(e.get("Name","N/A"), e.get("Version","N/A")) for e in all_fw_full]
-                model_info = client.get(
-                    __import__("pcli.ilo.client", fromlist=["get_system_uri"]).get_system_uri(client)
-                ).obj.get("Model", "unknown")
+            async with ilo_session(host) as client:
+                all_fw_full = await inventory.fetch_firmware_inventory_full(client)
+                nic_fw = await inventory.fetch_nic_firmware_inventory(client)
+                model_info = (await client.get(await client.get_system_uri())).get("Model", "unknown")
         except ServerDownOrUnreachableError as exc:
             console.print(f"[red]ERROR:[/red] {host['name']} unreachable: {exc}")
             sys.exit(1)
 
-    # ── Step 2: Detect gen + fetch SDR ──────────────────────────────────────
     try:
         gen = sdr.detect_gen(model_info)
     except ValueError as exc:
@@ -650,74 +504,60 @@ def _run_fw_upgrade(host: dict, *, dry_run: bool = False, reboot: bool = False,
         try:
             pack_date, pack_url = sdr.latest_pack_url(gen)
             pack_components = sdr.list_pack(pack_url)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             console.print(f"[red]ERROR:[/red] Cannot reach HPE SDR: {exc}")
             sys.exit(1)
 
-    # ── Step 3: Find upgrades ───────────────────────────────────────────────
-    # Combine FirmwareInventory + NIC entries (NICs don't appear in FirmwareInventory)
     candidates = sdr.find_upgrades(all_fw_full + nic_fw, pack_components)
-
-    # Only show non-updatable entries for storage controllers — skip TPM, video, drives
-    _SKIP_NON_UPDATABLE = ("tpm", "video controller", "nvme drive", "ssd", "dimm", "memory",
-                           "processor", "microcode", "embedded video")
+    skip_non_updatable = ("tpm", "video controller", "nvme drive", "ssd", "dimm", "memory", "processor", "microcode", "embedded video")
     non_updatable = [
-        e for e in all_fw_full
-        if not e.get("Updateable", True)
-        and e.get("Version", "N/A") not in ("N/A", None, "")
-        and not any(k in e.get("Name", "").lower() for k in _SKIP_NON_UPDATABLE)
+        entry for entry in all_fw_full
+        if not entry.get("Updateable", True)
+        and entry.get("Version", "N/A") not in ("N/A", None, "")
+        and not any(key in entry.get("Name", "").lower() for key in skip_non_updatable)
     ]
 
-    # Print comparison table
-    table = Table(title=f"Firmware Audit — {host['name']} ({model_info})",
-                  box=box.ROUNDED, show_lines=False)
-    table.add_column("Component",   style="bold")
-    table.add_column("Installed",   style="yellow")
-    table.add_column("SDR Latest",  style="cyan")
+    table = Table(title=f"Firmware Audit — {host['name']} ({model_info})", box=box.ROUNDED, show_lines=False)
+    table.add_column("Component", style="bold")
+    table.add_column("Installed", style="yellow")
+    table.add_column("SDR Latest", style="cyan")
     table.add_column("Status")
 
-    updates = [c for c in candidates if c.needs_update]
-    up_to_date = [c for c in candidates if not c.needs_update]
+    updates = [candidate for candidate in candidates if candidate.needs_update]
+    up_to_date = [candidate for candidate in candidates if not candidate.needs_update]
 
-    # ── Apply component filter ──────────────────────────────────────────────────
-    def _component_match(c: sdr.UpgradeCandidate, comp: str) -> bool:
+    def _component_match(candidate: Any, comp: str) -> bool:
         if comp == "all":
             return True
-        nl = c.name.lower()
+        name_lower = candidate.name.lower()
         if comp == "ilo":
-            return nl.startswith("ilo")
+            return name_lower.startswith("ilo")
         if comp == "bios":
-            return "system rom" in nl or "bios" in nl
+            return "system rom" in name_lower or "bios" in name_lower
         if comp == "nic":
-            # NIC candidates have either a chip_model on their sdr, or sdr=None (no SDR pkg)
-            return bool(getattr(c.sdr, "chip_model", None)) or (c.sdr is None and c.updateable)
+            return bool(getattr(candidate.sdr, "chip_model", None)) or (candidate.sdr is None and candidate.updateable)
         if comp == "storage":
-            return any(k in nl for k in ("controller", "array", "boot controller", "ns204", "nvme"))
+            return any(key in name_lower for key in ("controller", "array", "boot controller", "ns204", "nvme"))
         return True
 
     if component != "all":
-        orig_count = len(updates)
-        updates = [c for c in updates if _component_match(c, component)]
-        if len(updates) < orig_count:
-            console.print(f"  [dim]Filtered to component=[bold]{component}[/bold]: "
-                          f"{len(updates)} of {orig_count} updates selected[/dim]")
+        original_count = len(updates)
+        updates = [candidate for candidate in updates if _component_match(candidate, component)]
+        if len(updates) < original_count:
+            console.print(f"  [dim]Filtered to component=[bold]{component}[/bold]: {len(updates)} of {original_count} updates selected[/dim]")
 
-    for c in updates:
-        table.add_row(c.name, c.current, c.sdr.filename,
-                      "[green bold]UPDATE AVAILABLE[/green bold]")
-    for c in up_to_date:
-        sdr_col = c.sdr.filename if c.sdr else "—"
-        status = "[dim]up to date[/dim]" if c.sdr else "[dim italic]no SDR package[/dim italic]"
-        table.add_row(c.name, c.current, sdr_col, status)
-    for e in non_updatable:
-        table.add_row(e.get("Name","?"), e.get("Version","?"), "—",
-                      "[dim italic]not updatable via iLO[/dim italic]")
+    for candidate in updates:
+        table.add_row(candidate.name, candidate.current, candidate.sdr.filename, "[green bold]UPDATE AVAILABLE[/green bold]")
+    for candidate in up_to_date:
+        sdr_col = candidate.sdr.filename if candidate.sdr else "—"
+        status = "[dim]up to date[/dim]" if candidate.sdr else "[dim italic]no SDR package[/dim italic]"
+        table.add_row(candidate.name, candidate.current, sdr_col, status)
+    for entry in non_updatable:
+        table.add_row(entry.get("Name", "?"), entry.get("Version", "?"), "—", "[dim italic]not updatable via iLO[/dim italic]")
 
     console.print()
     console.print(table)
-    console.print(f"  SDR pack: [dim]{pack_date}[/dim]  |  "
-                  f"[green]{len(updates)} update(s) available[/green], "
-                  f"{len(up_to_date)} up to date\n")
+    console.print(f"  SDR pack: [dim]{pack_date}[/dim]  |  [green]{len(updates)} update(s) available[/green], {len(up_to_date)} up to date\n")
 
     if not updates:
         console.print("[green]✓ All firmware is up to date.[/green]")
@@ -725,19 +565,17 @@ def _run_fw_upgrade(host: dict, *, dry_run: bool = False, reboot: bool = False,
 
     if dry_run:
         console.print("[yellow][dry-run] Would stage and queue:[/yellow]")
-        for c in updates:
-            console.print(f"  • {c.sdr.filename}  ({c.current} → SDR {c.sdr.version_str})")
+        for candidate in updates:
+            console.print(f"  • {candidate.sdr.filename}  ({candidate.current} → SDR {candidate.sdr.version_str})")
         return
 
-    # ── Step 4: Stage + queue — HPE required order: iLO → BIOS → others ──────
-    # Sort: iLO first (applied immediately, no reboot), BIOS second, rest after.
-    def _upgrade_priority(c: sdr.UpgradeCandidate) -> int:
-        nl = c.name.lower()
-        if nl.startswith("ilo"):
-            return 0   # iLO: flash immediately, no reboot needed
-        if "system rom" in nl or "bios" in nl:
-            return 1   # BIOS: second, applied on reboot
-        return 2       # Everything else: applied on same reboot as BIOS
+    def _upgrade_priority(candidate: Any) -> int:
+        name_lower = candidate.name.lower()
+        if name_lower.startswith("ilo"):
+            return 0
+        if "system rom" in name_lower or "bios" in name_lower:
+            return 1
+        return 2
 
     updates.sort(key=_upgrade_priority)
 
@@ -749,57 +587,37 @@ def _run_fw_upgrade(host: dict, *, dry_run: bool = False, reboot: bool = False,
         transient=False,
     ) as progress:
         for idx, candidate in enumerate(updates, 1):
-            fname = candidate.sdr.filename
-            label = f"[{idx}/{len(updates)}] {fname}"
+            filename = candidate.sdr.filename
+            label = f"[{idx}/{len(updates)}] {filename}"
             is_ilo = candidate.name.lower().startswith("ilo")
-
             task = progress.add_task(f"{label}  staging…", total=None)
-
             try:
-                # Stage from SDR
-                with ilo_session(host) as client:
-                    firmware.stage_from_uri(client, candidate.sdr.url)
-
+                async with ilo_session(host) as client:
+                    await firmware.stage_from_uri(client, candidate.sdr.url)
                 progress.update(task, description=f"{label}  waiting for iLO to download…")
-
-                # Poll until staged (iLO downloads in background)
-                with ilo_session(host) as client:
-                    firmware.wait_for_stage(client, fname, timeout=300, poll_interval=10)
-
+                async with ilo_session(host) as client:
+                    await firmware.wait_for_stage(client, filename, timeout=300, poll_interval=10)
                 progress.update(task, description=f"{label}  queueing for flash…")
-
-                # Queue for flash
-                with ilo_session(host) as client:
-                    firmware.add_to_task_queue(client, fname)
-
-                progress.update(task,
-                    description=f"[green]✓[/green] {label}  queued  "
-                                f"({candidate.current} → {candidate.sdr.version_str})")
-
-                # iLO applies itself immediately — wait for it to come back before continuing
+                async with ilo_session(host) as client:
+                    await firmware.add_to_task_queue(client, filename)
+                progress.update(task, description=f"[green]✓[/green] {label}  queued  ({candidate.current} → {candidate.sdr.version_str})")
                 if is_ilo:
                     progress.update(task, description=f"{label}  iLO restarting (~90s)…")
                     try:
-                        firmware.wait_for_online(host, offline_grace=15, timeout=180)
-                        progress.update(task,
-                            description=f"[green]✓[/green] {label}  iLO back online  "
-                                        f"({candidate.current} → {candidate.sdr.version_str})")
+                        await firmware.wait_for_online(host, offline_grace=15, timeout=180)
+                        progress.update(task, description=f"[green]✓[/green] {label}  iLO back online  ({candidate.current} → {candidate.sdr.version_str})")
                     except TimeoutError:
-                        progress.update(task,
-                            description=f"[yellow]⚠[/yellow] {label}  iLO restart timed out — continuing")
+                        progress.update(task, description=f"[yellow]⚠[/yellow] {label}  iLO restart timed out — continuing")
+            except Exception as exc:  # noqa: BLE001
+                progress.update(task, description=f"[red]✗[/red] {label}  FAILED: {exc}")
+                console.print(f"[red]ERROR staging {filename}: {exc}[/red]")
 
-            except Exception as exc:
-                progress.update(task,
-                    description=f"[red]✗[/red] {label}  FAILED: {exc}")
-                console.print(f"[red]ERROR staging {fname}: {exc}[/red]")
-
-    # ── Step 5: Reboot (optional) ───────────────────────────────────────────
     if reboot:
         console.print(f"\n[bold yellow]Rebooting {host['name']}...[/bold yellow]")
         try:
-            with ilo_session(host) as client:
-                reset_server(client, reset_type="GracefulRestart")
-        except Exception as exc:
+            async with ilo_session(host) as client:
+                await reset_server(client, reset_type="GracefulRestart")
+        except Exception as exc:  # noqa: BLE001
             console.print(f"[red]ERROR: reboot failed: {exc}[/red]")
             sys.exit(1)
 
@@ -811,52 +629,47 @@ def _run_fw_upgrade(host: dict, *, dry_run: bool = False, reboot: bool = False,
         ) as progress:
             task = progress.add_task("Waiting for server to come back online…", total=None)
             try:
-                firmware.wait_for_online(host, offline_grace=30, timeout=600)
+                await firmware.wait_for_online(host, offline_grace=30, timeout=600)
                 progress.update(task, description="[green]✓ Server back online[/green]")
             except TimeoutError as exc:
                 progress.update(task, description=f"[red]✗ {exc}[/red]")
                 sys.exit(1)
 
-        # Verify updated versions
         console.print("\n[bold]Verifying firmware versions after reboot...[/bold]")
-        with ilo_session(host) as client:
-            new_fw = dict(inventory.fetch_all_firmware(client))
+        async with ilo_session(host) as client:
+            new_fw = dict(await inventory.fetch_all_firmware(client))
 
         result_table = Table(box=box.SIMPLE)
         result_table.add_column("Component")
         result_table.add_column("Before")
         result_table.add_column("After")
         result_table.add_column("Result")
-        all_ok = True
-        for c in updates:
-            after = new_fw.get(c.name, "?")
-            ok = sdr.parse_inventory_version(after) >= c.sdr.version
-            if not ok:
-                all_ok = False
+        for candidate in updates:
+            after = new_fw.get(candidate.name, "?")
+            ok = sdr.parse_inventory_version(after) >= candidate.sdr.version
             result_table.add_row(
-                c.name, c.current, after,
-                "[green]✓ Updated[/green]" if ok else "[yellow]⚠ Check manually[/yellow]"
+                candidate.name,
+                candidate.current,
+                after,
+                "[green]✓ Updated[/green]" if ok else "[yellow]⚠ Check manually[/yellow]",
             )
         console.print(result_table)
 
-        # Clear stale queue entries — iLO 7 leaves Pending tasks after UEFI applies them
-        with ilo_session(host) as client:
-            queue = firmware.get_task_queue(client)
-            stale = [t for t in queue if t.get("State") in ("Pending", "Complete")]
+        async with ilo_session(host) as client:
+            queue = await firmware.get_task_queue(client)
+            stale = [task for task in queue if task.get("State") in ("Pending", "Complete")]
             if stale:
-                firmware.clear_task_queue(client)
+                await firmware.clear_task_queue(client)
                 console.print(f"  [dim]Cleared {len(stale)} stale task(s) from queue.[/dim]")
     else:
         console.print(
-            f"\n[bold yellow]Updates queued.[/bold yellow] "
-            f"Reboot [bold]{host['name']}[/bold] to apply.\n"
+            f"\n[bold yellow]Updates queued.[/bold yellow] Reboot [bold]{host['name']}[/bold] to apply.\n"
             f"  • Use [bold]--reboot[/bold] flag to reboot automatically\n"
             f"  • Run [bold]pcli ilo upgrade queue --host {host['name']}[/bold] to check queue status"
         )
 
 
 def _print_fw_components(host_name: str, components: list[dict]) -> None:
-    """Print staged components table."""
     print(f"\n--- Staged Components: {host_name} ---")
     if not components:
         print("  (no components staged)")
@@ -864,16 +677,15 @@ def _print_fw_components(host_name: str, components: list[dict]) -> None:
     name_w, ver_w, size_w = 50, 15, 12
     print(f"{'Name':<{name_w}}   {'Version':<{ver_w}}   {'Size (MB)':<{size_w}}")
     print("-" * (name_w + ver_w + size_w + 6))
-    for c in components:
-        name = c.get("Name", c.get("Filename", "unknown"))
-        ver  = c.get("Version", "—")
-        size = c.get("SizeBytes", 0)
+    for component in components:
+        name = component.get("Name", component.get("Filename", "unknown"))
+        version = component.get("Version", "—")
+        size = component.get("SizeBytes", 0)
         size_mb = f"{size / 1_048_576:.1f}" if size else "—"
-        print(f"{name[:name_w]:<{name_w}}   {ver:<{ver_w}}   {size_mb}")
+        print(f"{name[:name_w]:<{name_w}}   {version:<{ver_w}}   {size_mb}")
 
 
 def _print_fw_queue(host_name: str, queue: list[dict]) -> None:
-    """Print firmware update task queue table."""
     print(f"\n--- Update Task Queue: {host_name} ---")
     if not queue:
         print("  (task queue is empty)")
@@ -881,10 +693,10 @@ def _print_fw_queue(host_name: str, queue: list[dict]) -> None:
     name_w, state_w, result_w = 50, 15, 20
     print(f"{'Name/Filename':<{name_w}}   {'State':<{state_w}}   {'Result':<{result_w}}")
     print("-" * (name_w + state_w + result_w + 6))
-    for t in queue:
-        name   = t.get("Name", t.get("Filename", "unknown"))
-        state  = t.get("State", "—")
-        result = t.get("Result", {})
+    for task in queue:
+        name = task.get("Name", task.get("Filename", "unknown"))
+        state = task.get("State", "—")
+        result = task.get("Result", {})
         result_str = result.get("MessageId", "—") if isinstance(result, dict) else str(result)
         print(f"{name[:name_w]:<{name_w}}   {state:<{state_w}}   {result_str[:result_w]}")
 

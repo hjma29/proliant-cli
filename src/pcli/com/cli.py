@@ -15,6 +15,7 @@ Usage::
 
     pcli com get devices                   All devices in workspace
     pcli com get devices --type COMPUTE
+    pcli com get devices --fields name,serial,service,ilo-name,part
     pcli com get devices --raw             Raw JSON
 
     pcli com get workspaces                All workspaces (active one marked with *)
@@ -204,10 +205,49 @@ def _cmd_logout(_args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Device field definitions
+# ---------------------------------------------------------------------------
+
+# All available columns for "pcli com get devices".
+# Each entry: field_key → (header, rich_style, add_column_kwargs, value_getter)
+_DEVICE_FIELDS: dict = {
+    "name":     ("Name",     "bold cyan", {"no_wrap": True, "ratio": 4},          lambda d: d.display_name),
+    "ilo-name": ("iLO Name", "cyan",      {"no_wrap": True, "ratio": 3},          lambda d: d.raw.get("deviceName") or d.raw.get("secondaryName") or "—"),
+    "type":     ("Type",     "dim",       {"no_wrap": True, "min_width": 7, "max_width": 8}, lambda d: d.device_type),
+    "model":    ("Model",    "white",     {"no_wrap": True, "ratio": 2},           lambda d: d.model),
+    "serial":   ("Serial",   "green",     {"no_wrap": True, "min_width": 13},      lambda d: d.serial_number),
+    "part":     ("Part #",   "dim",       {"no_wrap": True, "min_width": 11},      lambda d: d.product_id or "—"),
+    "service":  ("Service",  "yellow",    {"no_wrap": True, "ratio": 2},           lambda d: d.service_name or "—"),
+    "sub-key":  ("Sub Key",  "dim",       {"no_wrap": True, "min_width": 9, "max_width": 10},
+                 lambda d: (d.subscription_key[:8] + "…") if d.subscription_key else "—"),
+    "location": ("Location", "dim",       {"no_wrap": True, "ratio": 2},
+                 lambda d: (d.raw.get("location") or {}).get("locationName") or "—"),
+}
+
+_DEVICE_DEFAULT_FIELDS = ("name", "type", "model", "serial", "service", "sub-key")
+
+DEVICE_FIELD_NAMES = tuple(_DEVICE_FIELDS.keys())
+
+
+def _parse_fields(fields_str: Optional[str], available: dict, defaults: tuple) -> list[str]:
+    """Parse a comma-separated --fields string into a validated list of field keys."""
+    if not fields_str:
+        return list(defaults)
+    keys = [f.strip().lower() for f in fields_str.split(",") if f.strip()]
+    bad = [k for k in keys if k not in available]
+    if bad:
+        valid = ", ".join(available.keys())
+        raise SystemExit(f"Unknown field(s): {', '.join(bad)}\nAvailable: {valid}")
+    return keys
+
+
+# ---------------------------------------------------------------------------
 # Table printers
 # ---------------------------------------------------------------------------
 
-def print_devices_table(device_list: list, raw: bool = False) -> None:
+def print_devices_table(device_list: list, raw: bool = False,
+                        fields: Optional[str] = None) -> None:
     if raw:
         print(json.dumps([d.raw for d in device_list], indent=2))
         return
@@ -216,29 +256,20 @@ def print_devices_table(device_list: list, raw: bool = False) -> None:
         console.print("[yellow]No devices found.[/yellow]")
         return
 
+    selected = _parse_fields(fields, _DEVICE_FIELDS, _DEVICE_DEFAULT_FIELDS)
+
     table = Table(
         title=f"GreenLake Devices ({len(device_list)} total)",
         box=box.ROUNDED,
         show_lines=False,
         expand=True,
     )
-    table.add_column("Name",     style="bold cyan", no_wrap=True, ratio=4)
-    table.add_column("Type",     style="dim",       no_wrap=True, min_width=7, max_width=8)
-    table.add_column("Model",    style="white",     no_wrap=True, ratio=2)
-    table.add_column("Serial",   style="green",     no_wrap=True, min_width=13)
-    table.add_column("Service",  style="yellow",    no_wrap=True, ratio=2)
-    table.add_column("Sub Key",  style="dim",       no_wrap=True, min_width=9, max_width=10)
+    for key in selected:
+        header, style, kwargs, _ = _DEVICE_FIELDS[key]
+        table.add_column(header, style=style, **kwargs)
 
     for d in sorted(device_list, key=lambda x: x.display_name.lower()):
-        sub = d.subscription_key[:8] + "…" if d.subscription_key else "—"
-        table.add_row(
-            d.display_name,
-            d.device_type,
-            d.model,
-            d.serial_number,
-            d.service_name or "—",
-            sub,
-        )
+        table.add_row(*[_DEVICE_FIELDS[key][3](d) for key in selected])
 
     console.print(table)
 
@@ -332,7 +363,8 @@ async def _cmd_show_devices(args: argparse.Namespace) -> None:
             console.print(f"[red]Error:[/red] {e}")
             sys.exit(1)
 
-    print_devices_table(device_list, raw=getattr(args, "raw", False))
+    print_devices_table(device_list, raw=getattr(args, "raw", False),
+                        fields=getattr(args, "fields", None))
 
 
 async def _cmd_show_workspaces(args: argparse.Namespace) -> None:
@@ -464,6 +496,14 @@ def _build_parser() -> argparse.ArgumentParser:
                        choices=["COMPUTE", "NETWORK", "STORAGE"],
                        help="Filter by device type")
     dev_p.add_argument("--raw", action="store_true", help="Print raw JSON")
+    dev_p.add_argument(
+        "--fields", metavar="FIELDS",
+        help=(
+            f"Comma-separated columns to display. "
+            f"Available: {', '.join(DEVICE_FIELD_NAMES)}. "
+            f"Default: {', '.join(_DEVICE_DEFAULT_FIELDS)}"
+        ),
+    )
 
     # pcli com get workspaces
     ws_p = get_sub.add_parser("workspaces", help="List all workspaces (* = active)")

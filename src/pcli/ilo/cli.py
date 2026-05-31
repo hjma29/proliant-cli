@@ -3,6 +3,17 @@ hpeilo.cli
 ~~~~~~~~~~
 Command-line interface: subcommand-based argument parsing, async host queries,
 and table printing.
+
+Usage::
+
+    pcli ilo get firmwares                  Fleet firmware summary (BIOS, iLO, NIC, Storage)
+    pcli ilo get firmwares --fields Model,BIOS,iLO
+    pcli ilo get ilo                        iLO firmware version
+    pcli ilo get network                    NIC firmware versions
+    pcli ilo get storage                    Storage firmware versions
+    pcli ilo get serial                     Server model + serial (for COM onboarding)
+    pcli ilo get full                       Full firmware inventory
+    pcli ilo upgrade --host <name>          Auto-upgrade outdated firmware
 """
 
 from __future__ import annotations
@@ -41,7 +52,7 @@ _FETCH_DISPATCH: dict[str, FetchFn] = {
     "com": inventory.fetch_com_status,
     "full": inventory.fetch_all_firmware,
     "disk_map": inventory.fetch_disk_map,
-    "fleet": inventory.fetch_fleet_summary,
+    "firmwares": inventory.fetch_fleet_summary,
     "serial": inventory.fetch_serial_info,
 }
 
@@ -55,7 +66,7 @@ _RAW_DISPATCH: dict[str, FetchFn] = {
     "com": inventory.fetch_com_raw,
     "full": inventory.fetch_firmware_raw,
     "disk_map": inventory.fetch_disk_map_raw,
-    "fleet": inventory.fetch_firmware_raw,
+    "firmwares": inventory.fetch_firmware_raw,
     "serial": inventory.fetch_serial_info,
 }
 
@@ -148,8 +159,20 @@ def print_disk_map_table(results: list[tuple[str, str | None, list]]) -> None:
             print(f"{label:<{server_w}}   {vol_label:<{vol_w}}   {bay_info}")
 
 
-def print_fleet_table(results: list[tuple[str, str | None, list]]) -> None:
-    keys = list(inventory.FLEET_KEYS)
+def print_fleet_table(results: list[tuple[str, str | None, list]],
+                      fields: str | None = None) -> None:
+    all_keys = list(inventory.FLEET_KEYS)
+
+    # Validate and select requested fields
+    if fields:
+        requested = [f.strip() for f in fields.split(",") if f.strip()]
+        bad = [k for k in requested if k not in all_keys]
+        if bad:
+            valid = ", ".join(all_keys)
+            raise SystemExit(f"Unknown field(s): {', '.join(bad)}\nAvailable: {valid}")
+        keys = requested
+    else:
+        keys = all_keys
     server_data: dict[str, dict[str, str]] = {}
     for host_name, error, rows in results:
         if error:
@@ -246,16 +269,16 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
     subparsers.required = True
 
-    show_p = subparsers.add_parser(
-        "show",
-        help="Show hardware/firmware inventory",
+    get_p = subparsers.add_parser(
+        "get",
+        help="Get hardware/firmware inventory",
         description="Query iLO and display hardware or firmware information.",
     )
-    show_sub = show_p.add_subparsers(dest="what", metavar="WHAT")
-    show_sub.required = True
+    get_sub = get_p.add_subparsers(dest="what", metavar="WHAT")
+    get_sub.required = True
 
-    show_choices = {
-        "fleet": "Fleet summary: key firmware versions per server (one row per server)",
+    get_choices = {
+        "firmwares": "Firmware summary: key firmware versions per server (one row per server)",
         "ilo": "iLO firmware version",
         "network": "NIC firmware versions",
         "nic": "NIC link status + MAC address",
@@ -267,10 +290,20 @@ def _build_parser() -> argparse.ArgumentParser:
         "disk-map": "Drive bay + serial number map (cross-ref with lsblk)",
         "serial": "Server model, serial number, and product ID (for COM onboarding)",
     }
-    for name, help_text in show_choices.items():
-        sp = show_sub.add_parser(name, help=help_text)
+    for name, help_text in get_choices.items():
+        sp = get_sub.add_parser(name, help=help_text)
         _add_host(sp)
         sp.add_argument("--raw", action="store_true", help="Print raw JSON instead of a formatted table")
+        if name == "firmwares":
+            from pcli.ilo.inventory import FLEET_KEYS
+            sp.add_argument(
+                "--fields", metavar="FIELDS",
+                help=(
+                    f"Comma-separated columns to display. "
+                    f"Available: {', '.join(FLEET_KEYS)}. "
+                    f"Default: all"
+                ),
+            )
 
     upgrade_p = subparsers.add_parser(
         "upgrade",
@@ -337,8 +370,8 @@ def main(argv: list[str] | None = None) -> None:
 
 
 async def _async_main(args: argparse.Namespace) -> None:
-    if args.command == "show":
-        await _run_show(args)
+    if args.command == "get":
+        await _run_get(args)
     elif args.command == "upgrade":
         await _run_upgrade(args)
     elif args.command == "init":
@@ -385,10 +418,10 @@ def _run_init() -> None:
     )
     print(f"Created: {dest}")
     print("Edit it to fill in your server addresses and credentials.")
-    print("\nThen try:  pcli ilo show fleet")
+    print("\nThen try:  pcli ilo get firmwares")
 
 
-async def _run_show(args: argparse.Namespace) -> None:
+async def _run_get(args: argparse.Namespace) -> None:
     what = args.what.replace("-", "_")
     hosts = _load_hosts_or_exit(getattr(args, "host", None))
     raw = getattr(args, "raw", False)
@@ -400,7 +433,7 @@ async def _run_show(args: argparse.Namespace) -> None:
         return
 
     printers = {
-        "fleet": print_fleet_table,
+        "firmwares": lambda r: print_fleet_table(r, fields=getattr(args, "fields", None)),
         "ilo": print_ilo_table,
         "network": lambda r: _print_component_table(r, "NIC Firmware"),
         "nic": lambda r: _print_component_table(r, "NIC Link Status + MAC"),

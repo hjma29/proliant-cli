@@ -23,6 +23,13 @@ Usage::
     pcli com get devices --fields name,serial,added,added-by --sort added
     pcli com get devices --raw             Raw JSON
 
+    pcli com get bundles                   Active SPP firmware bundles in COM
+    pcli com get bundles --all             Include inactive/superseded bundles
+    pcli com get bundles --gen 12          Gen12 bundles only
+    pcli com get bundles --gen 11          Gen11 bundles only
+    pcli com get bundles --type patch      PATCH bundles only (base/patch/hotfix)
+    pcli com get bundles --raw             Raw JSON
+
     pcli com get workspaces                All workspaces (active one marked with *)
     pcli com get workspaces --raw          Raw JSON
 
@@ -50,6 +57,7 @@ from pcli.com.auth import COMSession, CredentialsError, AuthError
 from pcli.com.client import run
 from pcli.com import devices as _devices
 from pcli.com import workspaces as _workspaces
+from pcli.com import firmware as _firmware
 
 console = Console()
 
@@ -449,6 +457,67 @@ async def _cmd_show_workspaces(args: argparse.Namespace) -> None:
     print_workspaces_table(workspace_list, raw=getattr(args, "raw", False))
 
 
+def print_bundles_table(bundle_list: list, raw: bool = False) -> None:
+    if raw:
+        import json as _json
+        print(_json.dumps([b.raw for b in bundle_list], indent=2))
+        return
+
+    if not bundle_list:
+        console.print("[yellow]No bundles found.[/yellow]")
+        return
+
+    table = Table(
+        title=f"COM SPP Firmware Bundles ({len(bundle_list)} shown)",
+        box=box.ROUNDED,
+        show_lines=False,
+        expand=True,
+    )
+    table.add_column("Gen",     style="bold cyan",  no_wrap=True, min_width=8)
+    table.add_column("Type",    style="dim",        no_wrap=True, min_width=6)
+    table.add_column("Version", style="white",      no_wrap=True, min_width=14)
+    table.add_column("Release", style="dim",        no_wrap=True, min_width=10)
+    table.add_column("Active",  style="green",      no_wrap=True, min_width=6)
+    table.add_column("Display Name", style="white", no_wrap=True, ratio=2)
+
+    for b in bundle_list:
+        active_str = "[green]✓[/green]" if b.is_active else "[dim]—[/dim]"
+        table.add_row(
+            b.generation,
+            b.bundle_type,
+            b.release_version,
+            b.release_date,
+            active_str,
+            b.display_name,
+        )
+
+    console.print(table)
+
+
+async def _cmd_show_bundles(args: argparse.Namespace) -> None:
+    session = await _ensure_session(args)
+    active_only = not getattr(args, "all", False)
+    gen = getattr(args, "gen", None)
+    bundle_type = getattr(args, "bundle_type", None)
+
+    with console.status("[bold cyan]Fetching SPP bundles from COM..."):
+        try:
+            bundle_list = await _firmware.fetch_bundles(
+                session,
+                active_only=active_only,
+                gen=gen,
+                bundle_type=bundle_type,
+            )
+        except AuthError as e:
+            console.print(f"[red]Auth error:[/red] {e}")
+            sys.exit(1)
+        except Exception as e:
+            console.print(f"[red]Error:[/red] {e}")
+            sys.exit(1)
+
+    print_bundles_table(bundle_list, raw=getattr(args, "raw", False))
+
+
 async def _cmd_use_workspace(args: argparse.Namespace) -> None:
     from pcli.com.login import switch_workspace
     name_or_id = args.workspace
@@ -598,6 +667,35 @@ def _build_parser() -> argparse.ArgumentParser:
     ws_p = get_sub.add_parser("workspaces", help="List all workspaces (* = active)")
     ws_p.add_argument("--raw", action="store_true", help="Print raw JSON")
 
+    # pcli com get bundles
+    bun_p = get_sub.add_parser(
+        "bundles",
+        help="List SPP firmware bundles available in COM",
+        description=(
+            "List Service Pack for ProLiant (SPP) firmware bundles available in COM.\n\n"
+            "By default shows only active (current) bundles. Bundles are organised\n"
+            "by server generation (Gen10/11/12) and type (BASE, PATCH, HOTFIX).\n\n"
+            "Examples:\n"
+            "  pcli com get bundles                   Active bundles (all gens)\n"
+            "  pcli com get bundles --all             Include superseded bundles\n"
+            "  pcli com get bundles --gen 12          Gen12 only\n"
+            "  pcli com get bundles --gen 11          Gen11 only\n"
+            "  pcli com get bundles --type base       BASE bundles only\n"
+            "  pcli com get bundles --type patch      PATCH bundles only\n"
+            "  pcli com get bundles --gen 12 --type base   Latest Gen12 BASE SPPs\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    bun_p.add_argument("--all", action="store_true",
+                       help="Include inactive/superseded bundles (default: active only)")
+    bun_p.add_argument("--gen", type=int, choices=[10, 11, 12], metavar="GEN",
+                       help="Filter by server generation: 10, 11, or 12")
+    bun_p.add_argument("--type", dest="bundle_type",
+                       choices=["base", "patch", "hotfix"],
+                       metavar="TYPE",
+                       help="Filter by bundle type: base, patch, or hotfix")
+    bun_p.add_argument("--raw", action="store_true", help="Print raw JSON")
+
     # ── use ───────────────────────────────────────────────────────────────
     use_p = subparsers.add_parser("use", help="Switch active resource")
     use_sub = use_p.add_subparsers(dest="what", metavar="WHAT")
@@ -649,6 +747,8 @@ def main(argv: Optional[list[str]] = None) -> None:
             run(_cmd_show_devices(args))
         elif args.what == "workspaces":
             run(_cmd_show_workspaces(args))
+        elif args.what == "bundles":
+            run(_cmd_show_bundles(args))
     elif args.command == "use":
         if args.what == "workspace":
             run(_cmd_use_workspace(args))

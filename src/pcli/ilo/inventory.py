@@ -608,6 +608,8 @@ def fetch_fleet_summary(client: RedfishClient) -> list[tuple[str, str]]:
             results["iLO"] = f"{name} {ver}".strip()
         elif any(k in nl for k in ("system rom", "bios", "system firmware")) and results["BIOS"] == "N/A":
             results["BIOS"] = ver
+        if results["iLO"] != "N/A" and results["BIOS"] != "N/A":
+            break  # found both — skip remaining firmware items
 
     # Primary NIC firmware
     chassis = client.get(get_chassis_uri(client)).obj

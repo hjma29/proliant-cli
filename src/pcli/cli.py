@@ -76,3 +76,7 @@ def main(argv: list[str] | None = None) -> None:
         print(f"pcli: unknown namespace '{namespace}'\n", file=sys.stderr)
         print(_USAGE)
         sys.exit(2)
+
+
+if __name__ == "__main__":
+    main()

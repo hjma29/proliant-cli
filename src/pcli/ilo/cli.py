@@ -48,6 +48,19 @@ from pcli.ilo.config import (
 
 FetchFn = Callable[[ILOClient], Awaitable[list[Any]]]
 
+
+def _ilo_fields_completer(choices: tuple):
+    """Argcomplete completer for comma-separated ilo field lists."""
+    def completer(prefix: str, **kwargs):
+        if "," in prefix:
+            before, current = prefix.rsplit(",", 1)
+            before += ","
+        else:
+            before, current = "", prefix
+        return [before + c for c in choices if c.lower().startswith(current.lower())]
+    return completer
+
+
 _FETCH_DISPATCH: dict[str, FetchFn] = {
     "ilo": inventory.fetch_ilo_version,
     "network": inventory.fetch_network_versions,
@@ -318,13 +331,15 @@ def _build_parser() -> argparse.ArgumentParser:
             )
             _add_host(sp)
             sp.add_argument("--raw", action="store_true", help="Print raw JSON instead of a formatted table")
-            sp.add_argument(
+            fleet_fields_arg = sp.add_argument(
                 "--fields", metavar="FIELDS",
                 help=(
                     f"Comma-separated columns (case-insensitive). "
                     f"Available: {', '.join(FLEET_KEYS)}. Default: all"
                 ),
             )
+            fleet_keys_lower = tuple(k.lower() for k in FLEET_KEYS)
+            fleet_fields_arg.completer = _ilo_fields_completer(fleet_keys_lower)  # type: ignore[attr-defined]
         else:
             sp = get_sub.add_parser(name, help=help_text)
             _add_host(sp)

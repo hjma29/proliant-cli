@@ -256,6 +256,18 @@ _DEVICE_DEFAULT_FIELDS = ("name", "type", "model", "serial", "service", "sub-key
 DEVICE_FIELD_NAMES = tuple(_DEVICE_FIELDS.keys())
 
 
+def _comma_sep_completer(choices: tuple):
+    """Argcomplete completer for comma-separated field lists like 'name,ser<TAB>'."""
+    def completer(prefix: str, **kwargs):
+        if "," in prefix:
+            before, current = prefix.rsplit(",", 1)
+            before += ","
+        else:
+            before, current = "", prefix
+        return [before + c for c in choices if c.lower().startswith(current.lower())]
+    return completer
+
+
 def _parse_fields(fields_str: Optional[str], available: dict, defaults: tuple) -> list[str]:
     """Parse a comma-separated --fields string into a validated list of field keys."""
     if not fields_str:
@@ -567,7 +579,7 @@ def _build_parser() -> argparse.ArgumentParser:
                        choices=["COMPUTE", "NETWORK", "STORAGE"],
                        help="Filter by device type")
     dev_p.add_argument("--raw", action="store_true", help="Print raw JSON")
-    dev_p.add_argument(
+    fields_arg = dev_p.add_argument(
         "--fields", metavar="FIELDS",
         help=(
             f"Comma-separated columns to display (case-insensitive). "
@@ -575,8 +587,10 @@ def _build_parser() -> argparse.ArgumentParser:
             f"Default: {', '.join(_DEVICE_DEFAULT_FIELDS)}"
         ),
     )
+    fields_arg.completer = _comma_sep_completer(DEVICE_FIELD_NAMES)  # type: ignore[attr-defined]
     dev_p.add_argument(
         "--sort", metavar="FIELD", dest="sort_by",
+        choices=list(DEVICE_FIELD_NAMES),
         help=f"Sort by field (case-insensitive). Available: {', '.join(DEVICE_FIELD_NAMES)}. Default: name",
     )
 

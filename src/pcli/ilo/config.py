@@ -42,10 +42,10 @@ def _find_hosts_file() -> Path:
       4. ./inventory/hosts.yml       (repo dev layout)
       5. <binary dir>/inventory/hosts.yml  (PyInstaller bundle)
     """
-    if env := os.environ.get("HPEILO_HOSTS"):
+    if env := os.environ.get("PCLI_ILO_HOSTS"):
         return Path(env)
     candidates = [
-        Path.home() / ".config" / "hpeilo" / "hosts.yml",
+        Path.home() / ".config" / "pcli" / "ilo" / "hosts.yml",
         Path.cwd() / "hosts.yml",
         Path.cwd() / "inventory" / "hosts.yml",
     ]
@@ -60,7 +60,7 @@ def _find_hosts_file() -> Path:
         if p.exists():
             return p
     # Return the preferred user path so the FileNotFoundError message is helpful
-    return Path.home() / ".config" / "hpeilo" / "hosts.yml"
+    return Path.home() / ".config" / "pcli" / "ilo" / "hosts.yml"
 
 HOSTS_FILE: Path = _find_hosts_file()
 

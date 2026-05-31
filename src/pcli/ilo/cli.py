@@ -480,14 +480,14 @@ def _load_hosts_or_exit(name: str | None) -> list[dict]:
 def _run_init() -> None:
     """Create a starter hosts.yml at ~/.config/pcli/ilo/hosts.yml."""
     from pathlib import Path
-    dest = Path.home() / ".config" / "hpeilo" / "hosts.yml"
+    dest = Path.home() / ".config" / "pcli" / "ilo" / "hosts.yml"
     if dest.exists():
         print(f"Already exists: {dest}")
         print("Edit it to add or update your servers.")
         return
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(
-        "# hpeilo hosts file\n"
+        "# pcli ilo hosts file\n"
         "# Add one entry per iLO server.\n"
         "ilos:\n"
         "  - name: my-server-1\n"

@@ -75,13 +75,8 @@ def _windows_first_run_check() -> None:
     if answer not in ("", "y", "yes"):
         return
 
-    # Copy the exe as pcli.exe so the 'pcli' command works regardless of download name
-    import shutil as _shutil
-    pcli_exe = os.path.join(exe_dir, "pcli.exe")
-    if not os.path.exists(pcli_exe):
-        _shutil.copy2(sys.executable, pcli_exe)
-
     _win_add_to_path(exe_dir)
+    _win_add_powershell_completion()
     _win_add_powershell_completion()
     print("✓ Done! Opening a new terminal window...\n")
 

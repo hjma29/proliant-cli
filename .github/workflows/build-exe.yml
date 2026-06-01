@@ -17,7 +17,7 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact: pcli-windows-amd64.exe
+            artifact: pcli.exe
             pyinstaller_name: pcli.exe
           - os: ubuntu-latest
             artifact: pcli-linux-amd64

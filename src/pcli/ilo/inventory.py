@@ -350,6 +350,127 @@ async def fetch_firmware_raw(client: ILOClient) -> list[tuple[str, str]]:
     return await _fetch_members_raw(client, await client.get_firmware_inventory_uri())
 
 
+# ---------------------------------------------------------------------------
+# Update method classification
+# ---------------------------------------------------------------------------
+
+# (pattern, update_method, reboot_required)
+# Checked in order — first match wins.
+_UPDATE_METHOD_RULES: list[tuple[str, str, bool]] = [
+    # BMC (iLO flashes directly, no reboot needed)
+    ("ilo ",           "BMC",  False),
+    ("ilo\t",          "BMC",  False),
+    ("integrated lights-out", "BMC", False),
+    # UEFI — system board components
+    ("system rom",     "UEFI", True),
+    ("system bios",    "UEFI", True),
+    ("bios",           "UEFI", True),
+    ("system programmable logic", "UEFI", True),
+    ("cpld",           "UEFI", True),
+    ("power management controller fw bootloader", "UEFI", True),
+    ("power management controller", "BMC",  True),
+    ("power supply",   "UEFI", True),
+    ("intelligent platform abstraction", "UEFI", True),
+    ("intelligent provisioning", "UEFI", True),
+    ("server platform services", "UEFI", True),
+    ("redundant system rom", "UEFI", True),
+    ("tpm firmware",   "UEFI", True),
+    ("embedded video", "UEFI", True),
+    ("backplane",      "UEFI", True),
+    ("ubm",            "UEFI", True),   # UBM backplane controllers
+    # Storage controllers (HPE-branded) — UEFI
+    ("smart array",    "UEFI", True),
+    ("hpe mr",         "UEFI", True),
+    ("hpe sr",         "UEFI", True),
+    ("hpe p",          "UEFI", True),   # P408i, P816i, etc.
+    ("storage controller", "UEFI", True),
+    ("embedded sata",  "UEFI", True),
+    ("ns204",          "UEFI", True),
+    # HPE-branded drives — UEFI
+    ("nvme ssd",       "UEFI", True),
+    ("sas ssd",        "UEFI", True),
+    ("sata ssd",       "UEFI", True),
+    ("nvm express",    "UEFI", True),
+]
+
+# Components that contain these strings AND are in OCP slots → OS required
+_OCP_CONTEXT_KEYWORDS = ("ocp", "ocp2", "ocp3", "ocp 3", "ocpslot")
+
+# NIC vendor patterns that require OS (RuntimeAgent only)
+_OS_REQUIRED_NIC_PATTERNS = (
+    "intel ",          # Intel NICs (X710, XXV710, Fortville — note trailing space)
+    "intel(r)",        # Intel(R) branding
+    "broadcom nx1",    # Broadcom NX1 Windows/Linux driver packages
+)
+
+
+def classify_update_method(name: str, device_context: str) -> tuple[str, bool]:
+    """Classify a firmware component's update method.
+
+    Returns:
+        (update_method, reboot_required) where update_method is one of:
+        "BMC"  — iLO flashes it directly (no server reboot needed)
+        "UEFI" — UEFI processes it on next server reboot (no OS needed)
+        "OS"   — Requires a running OS + iSUT/SUM RuntimeAgent
+    """
+    name_lo = name.lower()
+    ctx_lo = device_context.lower()
+
+    # iLO firmware: starts with "ilo" (e.g. "iLO 6", "iLO 7")
+    if name_lo.startswith("ilo ") or name_lo in ("ilo6", "ilo7", "ilo5"):
+        return "BMC", False
+
+    # BCM/Mellanox/NVIDIA NICs in OCP3 slots → OS required (no PLDM OOB)
+    if any(k in ctx_lo for k in _OCP_CONTEXT_KEYWORDS):
+        if any(k in name_lo for k in ("bcm", "broadcom", "mellanox", "nvidia", "marvell", "qlogic")):
+            return "OS", True
+
+    # Intel NICs and Broadcom NX1 driver packages → always OS
+    if any(k in name_lo for k in _OS_REQUIRED_NIC_PATTERNS):
+        return "OS", True
+
+    # Match ordered rules
+    for pattern, method, reboot in _UPDATE_METHOD_RULES:
+        if pattern in name_lo:
+            return method, reboot
+
+    # HPE-branded PCIe NICs (BCM57xxx, Mellanox, NVIDIA) in non-OCP slots → UEFI via PLDM
+    if any(k in name_lo for k in ("bcm", "broadcom", "mellanox", "nvidia fwpkg", "cx", "connectx")):
+        return "UEFI", True
+
+    # OS driver/software packages (.exe Windows, .rpm Linux, .zip ESX)
+    if any(k in name_lo for k in (
+        "windows", "linux", "esxi", "vmware", "driver", "software", "utility",
+        "service pack for windows", "service pack for linux",
+    )):
+        return "OS", False
+
+    return "UEFI", True   # safe default: most firmware is UEFI-flashed on reboot
+
+
+async def fetch_firmware_update_method(client: ILOClient) -> list[dict]:
+    """Fetch full firmware inventory and classify each component's update method.
+
+    Returns list of dicts with keys:
+        Name, Version, UpdateBy, Reboot, Context
+    """
+    members = await _member_resources(client, await client.get_firmware_inventory_uri())
+    result = []
+    for item in members:
+        name = item.get("Name", "N/A") or "N/A"
+        version = item.get("Version", "N/A") or "N/A"
+        ctx = (item.get("Oem", {}).get("Hpe", {}).get("DeviceContext") or "")
+        update_by, reboot = classify_update_method(name, ctx)
+        result.append({
+            "Name": name,
+            "Version": version,
+            "UpdateBy": update_by,
+            "Reboot": reboot,
+            "Context": ctx,
+        })
+    return result
+
+
 async def fetch_com_raw(client: ILOClient) -> list[tuple[str, str]]:
     manager_uri = await client.get_manager_uri()
     manager = await client.get(manager_uri)

@@ -16,10 +16,17 @@ Usage::
     pcli ilo get storage                            Storage firmware versions
     pcli ilo get serial                             Server model + serial (for COM onboarding)
     pcli ilo get full                               Full firmware inventory
+    pcli ilo get update-method                      All firmware with BMC/UEFI/OS update method
+    pcli ilo get update-method --host dl345-gen12   Single server update method view
     pcli ilo upgrade --host <name>                  Auto-upgrade outdated firmware
 
 Available --fields for 'get firmwares' (case-insensitive):
     Model, iLO, BIOS, NIC-FW, Storage-FW
+
+Update methods shown by 'get update-method':
+    BMC  = iLO flashes directly, no reboot needed
+    UEFI = UEFI processes on next reboot, no OS needed
+    OS   = Requires running OS + iSUT/SUM RuntimeAgent
 """
 
 from __future__ import annotations
@@ -73,6 +80,7 @@ _FETCH_DISPATCH: dict[str, FetchFn] = {
     "disk_map": inventory.fetch_disk_map,
     "firmwares": inventory.fetch_fleet_summary,
     "serial": inventory.fetch_serial_info,
+    "update_method": inventory.fetch_firmware_update_method,
 }
 
 _RAW_DISPATCH: dict[str, FetchFn] = {
@@ -87,6 +95,7 @@ _RAW_DISPATCH: dict[str, FetchFn] = {
     "disk_map": inventory.fetch_disk_map_raw,
     "firmwares": inventory.fetch_firmware_raw,
     "serial": inventory.fetch_serial_info,
+    "update_method": inventory.fetch_firmware_raw,
 }
 
 
@@ -248,6 +257,56 @@ def print_serial_table(results: list[tuple[str, str | None, list]]) -> None:
             print(f"  {'':>{srv_w}}   {vals['_error']}")
 
 
+def print_update_method_table(results: list[tuple[str, str | None, list]]) -> None:
+    """Print firmware inventory with update method classification (BMC / UEFI / OS)."""
+    from rich import box
+    from rich.console import Console
+    from rich.table import Table
+
+    console = Console()
+    for host_name, error, rows in sorted(results, key=lambda r: r[0]):
+        table = Table(
+            title=f"{host_name}",
+            box=box.ROUNDED,
+            show_lines=False,
+            show_header=True,
+        )
+        table.add_column("Component", style="bold", no_wrap=False, max_width=45)
+        table.add_column("Version", style="dim", max_width=28)
+        table.add_column("Update By", justify="center", width=10)
+        table.add_column("Reboot", justify="center", width=7)
+        table.add_column("Context", style="dim", max_width=28)
+
+        if error:
+            table.add_row(f"[red]ERROR:[/red] {error}", "", "", "", "")
+        else:
+            for entry in rows:
+                method = entry["UpdateBy"]
+                reboot = entry["Reboot"]
+                if method == "BMC":
+                    method_str = "[cyan bold]BMC[/cyan bold]"
+                elif method == "UEFI":
+                    method_str = "[green bold]UEFI[/green bold]"
+                else:
+                    method_str = "[yellow bold]OS[/yellow bold]"
+                reboot_str = "[red]Yes[/red]" if reboot else "[green]No[/green]"
+                table.add_row(
+                    entry["Name"],
+                    entry["Version"],
+                    method_str,
+                    reboot_str,
+                    entry["Context"],
+                )
+        console.print(table)
+
+    # Print legend
+    console.print(
+        "  [cyan bold]BMC[/cyan bold]  = iLO flashes directly (no reboot)  "
+        "[green bold]UEFI[/green bold] = UEFI applies on next reboot (no OS)  "
+        "[yellow bold]OS[/yellow bold]   = requires running OS + iSUT/SUM"
+    )
+
+
 def print_full_table(results: list[tuple[str, str | None, list]]) -> None:
     server_w, name_w, ver_w = COL_SERVER_WIDTH, COL_NAME_WIDTH, COL_ILO_WIDTH
     total_w = server_w + name_w + ver_w + 4
@@ -310,6 +369,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "full": "Full firmware inventory",
         "disk-map": "Drive bay + serial number map (cross-ref with lsblk)",
         "serial": "Server model, serial number, and product ID (for COM onboarding)",
+        "update-method": "Full firmware inventory with update method (BMC / UEFI / OS) per component",
     }
     for name, help_text in get_choices.items():
         if name == "firmwares":
@@ -340,6 +400,25 @@ def _build_parser() -> argparse.ArgumentParser:
             )
             fleet_keys_lower = tuple(k.lower() for k in FLEET_KEYS)
             fleet_fields_arg.completer = _ilo_fields_completer(fleet_keys_lower)  # type: ignore[attr-defined]
+        elif name == "update-method":
+            sp = get_sub.add_parser(
+                name,
+                help=help_text,
+                description=(
+                    "Show all firmware components with update method classification.\n\n"
+                    "Update methods:\n"
+                    "  BMC  — iLO flashes the component directly (no server reboot needed)\n"
+                    "  UEFI — UEFI processes it on next server reboot (no OS required)\n"
+                    "  OS   — Requires a running OS + iSUT/SUM RuntimeAgent\n\n"
+                    "Examples:\n"
+                    "  pcli ilo get update-method                        All servers\n"
+                    "  pcli ilo get update-method --host dl345-gen12     Single server\n"
+                    "  pcli ilo get update-method --host dl380-gen11     Show Gen11 server\n"
+                ),
+                formatter_class=argparse.RawDescriptionHelpFormatter,
+            )
+            _add_host(sp)
+            sp.add_argument("--raw", action="store_true", help="Print raw JSON instead of a formatted table")
         else:
             sp = get_sub.add_parser(name, help=help_text)
             _add_host(sp)
@@ -484,6 +563,7 @@ async def _run_get(args: argparse.Namespace) -> None:
         "full": print_full_table,
         "disk_map": print_disk_map_table,
         "serial": print_serial_table,
+        "update_method": print_update_method_table,
     }
     printers[what](results)
 

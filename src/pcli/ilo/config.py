@@ -26,12 +26,12 @@ COL_NAME_WIDTH: int = 65
 MAX_WORKERS: int = 10
 
 # ---------------------------------------------------------------------------
-# Config file — pcli.ini uses simple INI format, no YAML indentation required.
+# Config file — hosts-ilo.ini uses simple INI format, no YAML indentation required.
 # Search order (first match wins):
 #   1. PCLI_CONFIG env var           (explicit override)
-#   2. ./pcli.ini                    (same dir where pcli runs — recommended)
-#   3. <binary dir>/pcli.ini         (next to the .exe on Windows)
-#   4. ~/.config/pcli/pcli.ini       (user config dir)
+#   2. ./hosts-ilo.ini                    (same dir where pcli runs — recommended)
+#   3. <binary dir>/hosts-ilo.ini         (next to the .exe on Windows)
+#   4. ~/.config/pcli/hosts-ilo.ini       (user config dir)
 # ---------------------------------------------------------------------------
 
 def _find_config_file() -> Path:
@@ -39,31 +39,31 @@ def _find_config_file() -> Path:
         return Path(env)
 
     candidates = [
-        Path.cwd() / "pcli.ini",
+        Path.cwd() / "hosts-ilo.ini",
     ]
     if getattr(sys, "frozen", False):
         # PyInstaller: check same directory as the binary
-        candidates.append(Path(sys.executable).parent / "pcli.ini")
+        candidates.append(Path(sys.executable).parent / "hosts-ilo.ini")
     else:
         # Dev: repo root
-        candidates.append(Path(__file__).parent.parent.parent.parent / "pcli.ini")
+        candidates.append(Path(__file__).parent.parent.parent.parent / "hosts-ilo.ini")
 
-    candidates.append(Path.home() / ".config" / "pcli" / "pcli.ini")
+    candidates.append(Path.home() / ".config" / "pcli" / "hosts-ilo.ini")
 
     for p in candidates:
         if p.exists():
             return p
     # Return CWD path so error messages show the most useful location
-    return Path.cwd() / "pcli.ini"
+    return Path.cwd() / "hosts-ilo.ini"
 
 
 HOSTS_FILE: Path = _find_config_file()
 
 
 def load_hosts(name: str | None = None) -> list[dict]:
-    """Load and return the list of iLO host dicts from pcli.ini.
+    """Load and return the list of iLO host dicts from hosts-ilo.ini.
 
-    pcli.ini format::
+    hosts-ilo.ini format::
 
         [defaults]
         username = Administrator
@@ -88,7 +88,7 @@ def load_hosts(name: str | None = None) -> list[dict]:
     Raises
     ------
     FileNotFoundError
-        If pcli.ini does not exist.
+        If hosts-ilo.ini does not exist.
     ValueError
         If ``name`` is specified but no matching host is found, or a
         server section is missing the required ``host`` key.
@@ -108,7 +108,7 @@ def load_hosts(name: str | None = None) -> list[dict]:
             continue
         host_addr = cfg.get(section, "host", fallback="").strip()
         if not host_addr:
-            raise ValueError(f"Section [{section}] in pcli.ini is missing the 'host' key")
+            raise ValueError(f"Section [{section}] in hosts-ilo.ini is missing the 'host' key")
         hosts.append({
             "name": section,
             "url": f"https://{host_addr}",
@@ -120,7 +120,7 @@ def load_hosts(name: str | None = None) -> list[dict]:
         matched = [h for h in hosts if h["name"] == name]
         if not matched:
             known = ", ".join(h["name"] for h in hosts)
-            raise ValueError(f"Host '{name}' not found in pcli.ini. Known hosts: {known}")
+            raise ValueError(f"Host '{name}' not found in hosts-ilo.ini. Known hosts: {known}")
         return matched
 
     return hosts

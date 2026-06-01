@@ -343,7 +343,7 @@ def _build_parser() -> argparse.ArgumentParser:
     def _add_host(p: argparse.ArgumentParser, required: bool = False) -> None:
         p.add_argument(
             "--host", metavar="NAME", required=required,
-            help="Target a single host by name (from hosts.yml)",
+            help="Target a single host by name (from hosts-ilo.ini)",
         ).completer = _host_completer
 
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
@@ -475,8 +475,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser(
         "init",
-        help="Create a starter hosts.yml at ~/.config/pcli/ilo/hosts.yml",
-        description="Create ~/.config/pcli/ilo/hosts.yml with example entries to fill in.",
+        help="Create a starter hosts-ilo.ini at ~/.config/pcli/ilo/hosts-ilo.ini",
+        description="Create ~/.config/pcli/ilo/hosts-ilo.ini with example entries to fill in.",
     )
     return parser
 
@@ -502,7 +502,7 @@ def _load_hosts_or_exit(name: str | None) -> list[dict]:
         return load_hosts(name=name)
     except FileNotFoundError:
         from pcli.ilo.config import HOSTS_FILE
-        print(f"ERROR: pcli.ini not found. Expected at: {HOSTS_FILE}", file=sys.stderr)
+        print(f"ERROR: hosts-ilo.ini not found. Expected at: {HOSTS_FILE}", file=sys.stderr)
         print("       Run 'pcli ilo init' to create a starter config in the current directory.", file=sys.stderr)
         sys.exit(1)
     except ValueError as exc:
@@ -512,7 +512,7 @@ def _load_hosts_or_exit(name: str | None) -> list[dict]:
 
 def _run_init() -> None:
     from pathlib import Path
-    dest = Path.cwd() / "pcli.ini"
+    dest = Path.cwd() / "hosts-ilo.ini"
     if dest.exists():
         print(f"Already exists: {dest}")
         print("Edit it to add or update your servers.")

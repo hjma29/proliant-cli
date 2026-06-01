@@ -17,8 +17,7 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact: pcli.exe
-            pyinstaller_name: pcli.exe
+            artifact: pcli-windows-amd64.zip
           - os: ubuntu-latest
             artifact: pcli-linux-amd64
             pyinstaller_name: pcli
@@ -40,11 +39,23 @@ jobs:
           pip install .[all]
           pip install pyinstaller
 
-      - name: Build binary
+      - name: Build binary (Windows — onedir to avoid temp DLL extraction issues)
+        if: runner.os == 'Windows'
+        run: |
+          pyinstaller --onedir --name pcli --console src/pcli/cli.py
+
+      - name: Build binary (Linux/macOS)
+        if: runner.os != 'Windows'
         run: |
           pyinstaller --onefile --name pcli --console src/pcli/cli.py
 
-      - name: Rename binary
+      - name: Package Windows binary as zip
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist\pcli\* -DestinationPath dist\pcli-windows-amd64.zip
+
+      - name: Rename binary (Linux/macOS)
+        if: runner.os != 'Windows'
         shell: bash
         run: mv dist/${{ matrix.pyinstaller_name }} dist/${{ matrix.artifact }}
 

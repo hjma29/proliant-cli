@@ -77,20 +77,22 @@ def _windows_first_run_check() -> None:
 
     _win_add_to_path(exe_dir)
     _win_add_powershell_completion()
-    _win_add_powershell_completion()
     print("✓ Done! Opening a new terminal window...\n")
 
-    # Launch PowerShell with the updated PATH injected so pcli works immediately
-    # (the new process inherits parent's env by default, not the registry update).
+    # Open PowerShell with the exe dir in PATH so pcli works immediately.
+    # Set PATH inline (registry change not visible until new login session).
+    # Use -NoExit so the window stays open for the user to work in.
     import subprocess
-    shell = _shutil.which("pwsh.exe") or _shutil.which("powershell.exe") or "powershell.exe"
-    new_env = os.environ.copy()
-    new_env["PATH"] = exe_dir + os.pathsep + new_env.get("PATH", "")
+    import shutil
+    shell = shutil.which("pwsh.exe") or shutil.which("powershell.exe") or "powershell.exe"
+    ps_cmd = (
+        f'$env:PATH = "{exe_dir}" + [IO.Path]::PathSeparator + $env:PATH; '
+        f'Set-Location "{exe_dir}"; '
+        f'Write-Host "pcli is ready. Type pcli to get started." -ForegroundColor Green'
+    )
     subprocess.Popen(
-        [shell, "-NoExit", "-Command",
-         f'cd "{exe_dir}"; Write-Host "Setup complete! Type pcli to get started.`n"; pcli'],
+        [shell, "-NoExit", "-NoLogo", "-Command", ps_cmd],
         creationflags=subprocess.CREATE_NEW_CONSOLE,
-        env=new_env,
     )
 
 

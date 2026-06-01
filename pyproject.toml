@@ -22,7 +22,6 @@ classifiers = [
 # Core deps shared by all subcommands
 dependencies = [
     "rich>=13.0",
-    "pyyaml>=6.0",
     "argcomplete>=3.0",
 ]
 

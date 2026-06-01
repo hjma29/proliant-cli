@@ -483,7 +483,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
-    argcomplete.autocomplete(parser)
+    # argcomplete works on bash/zsh; silently skip on Windows (cmd/PowerShell)
+    if sys.platform != "win32":
+        argcomplete.autocomplete(parser)
     args = parser.parse_args(argv)
     asyncio.run(_async_main(args))
 
@@ -502,11 +504,8 @@ def _load_hosts_or_exit(name: str | None) -> list[dict]:
         return load_hosts(name=name)
     except FileNotFoundError:
         from pcli.ilo.config import HOSTS_FILE
-        print(f"ERROR: hosts.yml not found. Searched: {HOSTS_FILE}", file=sys.stderr)
-        print("       Run 'pcli ilo init' to create a starter config.", file=sys.stderr)
-        sys.exit(1)
-    except KeyError:
-        print("ERROR: hosts.yml is missing the 'ilos' key", file=sys.stderr)
+        print(f"ERROR: pcli.ini not found. Expected at: {HOSTS_FILE}", file=sys.stderr)
+        print("       Run 'pcli ilo init' to create a starter config in the current directory.", file=sys.stderr)
         sys.exit(1)
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
@@ -515,25 +514,34 @@ def _load_hosts_or_exit(name: str | None) -> list[dict]:
 
 def _run_init() -> None:
     from pathlib import Path
-    dest = Path.home() / ".config" / "pcli" / "ilo" / "hosts.yml"
+    dest = Path.cwd() / "pcli.ini"
     if dest.exists():
         print(f"Already exists: {dest}")
         print("Edit it to add or update your servers.")
         return
-    dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(
-        "# pcli ilo hosts file\n"
-        "# Add one entry per iLO server.\n"
-        "ilos:\n"
-        "  - name: my-server-1\n"
-        "    url: https://10.0.0.1\n"
-        "    username: Administrator\n"
-        "    password: yourpassword\n"
+        "# pcli iLO inventory\n"
+        "# Place this file in the same directory as pcli (or pcli.exe on Windows).\n"
+        "#\n"
+        "# [defaults]  — shared credentials for all servers (can be overridden per server)\n"
+        "# [section]   — one section per iLO server; section name = display name\n"
+        "#               'host' is the only required field (IP or hostname, no https://)\n"
         "\n"
-        "  - name: my-server-2\n"
-        "    url: https://10.0.0.2\n"
-        "    username: Administrator\n"
-        "    password: yourpassword\n"
+        "[defaults]\n"
+        "username = Administrator\n"
+        "password = yourpassword\n"
+        "\n"
+        "[my-server-1]\n"
+        "host = 10.0.0.1\n"
+        "\n"
+        "[my-server-2]\n"
+        "host = 10.0.0.2\n"
+        "\n"
+        "# Example: server with different credentials\n"
+        "# [lab-server]\n"
+        "# host = myilo.example.com\n"
+        "# username = localadmin\n"
+        "# password = differentpass\n"
     )
     print(f"Created: {dest}")
     print("Edit it to fill in your server addresses and credentials.")

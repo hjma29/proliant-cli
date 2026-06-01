@@ -37,18 +37,27 @@ _POWERSHELL_COMPLETION_BLOCK = """\
 # pcli tab completion (added by pcli)
 Register-ArgumentCompleter -Native -CommandName pcli -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
-    $tmp = [System.IO.Path]::GetTempFileName()
-    $env:_ARGCOMPLETE_STDOUT_FILENAME = $tmp
-    $env:COMP_LINE = $commandAst.ToString()
-    $env:COMP_POINT = $cursorPosition
-    $env:_ARGCOMPLETE = "1"
-    $env:_ARGCOMPLETE_SHELL = "powershell"
-    pcli 2>&1 | Out-Null
-    Get-Content $tmp | ForEach-Object {
-        [System.Management.Automation.CompletionResult]::new($_, $_, "ParameterValue", $_)
+    $t = @($commandAst.CommandElements | ForEach-Object { $_.ToString() })
+    $pos = if ($wordToComplete -eq '') { $t.Count } else { $t.Count - 1 }
+    $candidates = @()
+    if ($pos -eq 1) {
+        $candidates = @('ilo', 'com')
+    } elseif ($pos -eq 2) {
+        if ($t[1] -eq 'ilo') { $candidates = @('get', 'upgrade', 'init') }
+        elseif ($t[1] -eq 'com') { $candidates = @('login', 'logout', 'get', 'use', 'add') }
+    } elseif ($pos -eq 3) {
+        if ($t[1] -eq 'ilo') {
+            if ($t[2] -eq 'get') { $candidates = @('firmwares','ilo','network','nic','storage','cpu','memory','com','full','disk-map','serial','update-method') }
+            elseif ($t[2] -eq 'upgrade') { $candidates = @('components','queue','stage','flash','clear') }
+        } elseif ($t[1] -eq 'com') {
+            if ($t[2] -eq 'get') { $candidates = @('devices','workspaces','bundles') }
+            elseif ($t[2] -eq 'use') { $candidates = @('workspace') }
+            elseif ($t[2] -eq 'add') { $candidates = @('device') }
+        }
     }
-    Remove-Item $tmp -ErrorAction SilentlyContinue
-    Remove-Item Env:_ARGCOMPLETE_STDOUT_FILENAME, Env:_ARGCOMPLETE, Env:_ARGCOMPLETE_SHELL -ErrorAction SilentlyContinue
+    $candidates | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
+        [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
+    }
 }
 """
 

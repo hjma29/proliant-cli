@@ -9,3 +9,4 @@ build/
 htmlcov/
 *.egg
 hosts-ilo.ini
+spp/

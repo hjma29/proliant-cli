@@ -1,0 +1,32 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install .[all]
+          pip install pyinstaller
+
+      - name: Build exe
+        run: |
+          pyinstaller --onefile --name pcli --console src/pcli/cli.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pcli-windows
+          path: dist/pcli.exe
+          retention-days: 30

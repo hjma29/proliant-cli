@@ -17,12 +17,12 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact: proliant-cli-windows-amd64.zip
+            artifact: proliant-cli-windows.zip
           - os: ubuntu-latest
-            artifact: pcli-linux-amd64
+            artifact: proliant-cli-linux
             pyinstaller_name: pcli
           - os: macos-latest
-            artifact: pcli-macos-amd64
+            artifact: proliant-cli-macos
             pyinstaller_name: pcli
 
     runs-on: ${{ matrix.os }}
@@ -52,7 +52,7 @@ jobs:
       - name: Package Windows binary as zip
         if: runner.os == 'Windows'
         shell: pwsh
-        run: Compress-Archive -Path dist\pcli\* -DestinationPath dist\proliant-cli-windows-amd64.zip
+        run: Compress-Archive -Path dist\pcli\* -DestinationPath dist\proliant-cli-windows.zip
 
       - name: Rename binary (Linux/macOS)
         if: runner.os != 'Windows'

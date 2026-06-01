@@ -83,18 +83,12 @@ def _windows_first_run_check() -> None:
     # The new window loads $PROFILE so Tab completion works immediately.
     import subprocess
     import shutil
-    shell = shutil.which("pwsh.exe") or shutil.which("powershell.exe")
-    if shell:
-        subprocess.Popen(
-            [shell, "-NoExit", "-Command",
-             f'cd "{exe_dir}"; Write-Host "Setup complete! Type pcli to get started.`n"; pcli'],
-            creationflags=subprocess.CREATE_NEW_CONSOLE,
-        )
-    else:
-        subprocess.Popen(
-            ["cmd.exe", "/k", f'cd /d "{exe_dir}" && echo Setup complete! Type "pcli" to get started. && pcli'],
-            creationflags=subprocess.CREATE_NEW_CONSOLE,
-        )
+    shell = shutil.which("pwsh.exe") or shutil.which("powershell.exe") or "powershell.exe"
+    subprocess.Popen(
+        [shell, "-NoExit", "-Command",
+         f'cd "{exe_dir}"; Write-Host "Setup complete! Type pcli to get started.`n"; pcli'],
+        creationflags=subprocess.CREATE_NEW_CONSOLE,
+    )
 
 
 def _win_add_to_path(directory: str) -> None:

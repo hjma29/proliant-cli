@@ -77,7 +77,15 @@ def _windows_first_run_check() -> None:
 
     _win_add_to_path(exe_dir)
     _win_add_powershell_completion()
-    print("✓ Done! Restart your terminal, then type 'pcli' from anywhere.\n")
+    print("✓ Done! Opening a new terminal window...\n")
+
+    # Launch a persistent cmd window so the user can start using pcli immediately.
+    # The original window (from double-clicking) will close after this function returns.
+    import subprocess
+    subprocess.Popen(
+        ["cmd.exe", "/k", f'cd /d "{exe_dir}" && echo Setup complete! Type "pcli" to get started. && echo. && pcli'],
+        creationflags=subprocess.CREATE_NEW_CONSOLE,
+    )
 
 
 def _win_add_to_path(directory: str) -> None:

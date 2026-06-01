@@ -137,10 +137,20 @@ def _win_add_powershell_completion() -> None:
             if os.path.exists(profile):
                 with open(profile, encoding="utf-8") as f:
                     existing = f.read()
-            if "Register-ArgumentCompleter" in existing and "pcli" in existing:
-                continue  # already registered
-            with open(profile, "a", encoding="utf-8") as f:
-                f.write("\n" + _POWERSHELL_COMPLETION_BLOCK)
+            # Replace outdated argcomplete-style block or append if missing
+            if "pcli" in existing and "Register-ArgumentCompleter" in existing:
+                if _POWERSHELL_COMPLETION_BLOCK.strip() in existing:
+                    continue  # already up-to-date
+                # Strip old block (between the marker comment and closing brace)
+                import re
+                existing = re.sub(
+                    r"\n# pcli tab completion \(added by pcli\)\nRegister-ArgumentCompleter.*?\n\}",
+                    "",
+                    existing,
+                    flags=re.DOTALL,
+                )
+            with open(profile, "w", encoding="utf-8") as f:
+                f.write(existing.rstrip() + "\n" + _POWERSHELL_COMPLETION_BLOCK)
         except Exception:
             pass  # silently skip if profile write fails
 

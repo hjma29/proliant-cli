@@ -75,19 +75,27 @@ def _windows_first_run_check() -> None:
     if answer not in ("", "y", "yes"):
         return
 
+    # Copy the exe as pcli.exe so the 'pcli' command works regardless of download name
+    import shutil as _shutil
+    pcli_exe = os.path.join(exe_dir, "pcli.exe")
+    if not os.path.exists(pcli_exe):
+        _shutil.copy2(sys.executable, pcli_exe)
+
     _win_add_to_path(exe_dir)
     _win_add_powershell_completion()
     print("✓ Done! Opening a new terminal window...\n")
 
-    # Launch PowerShell (7 preferred, fall back to 5, then cmd).
-    # The new window loads $PROFILE so Tab completion works immediately.
+    # Launch PowerShell with the updated PATH injected so pcli works immediately
+    # (the new process inherits parent's env by default, not the registry update).
     import subprocess
-    import shutil
-    shell = shutil.which("pwsh.exe") or shutil.which("powershell.exe") or "powershell.exe"
+    shell = _shutil.which("pwsh.exe") or _shutil.which("powershell.exe") or "powershell.exe"
+    new_env = os.environ.copy()
+    new_env["PATH"] = exe_dir + os.pathsep + new_env.get("PATH", "")
     subprocess.Popen(
         [shell, "-NoExit", "-Command",
          f'cd "{exe_dir}"; Write-Host "Setup complete! Type pcli to get started.`n"; pcli'],
         creationflags=subprocess.CREATE_NEW_CONSOLE,
+        env=new_env,
     )
 
 

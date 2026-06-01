@@ -101,16 +101,16 @@ from component name patterns.
 
 Rules in `ilo/inventory.py::classify_update_method()`:
 
-| Component pattern | Method | Logic |
-|---|---|---|
-| `ilo`, `integrated lights-out`, `ilo management controller` | **BMC** | Always iLO self-update |
-| `system rom`, `system bios`, `bios` | **UEFI** | UEFI applies at POST |
-| `smart array`, `mr4`, `ns204`, `boot controller`, `storage controller` | **UEFI** | PLDM via UEFI agent |
-| `power management`, `power supply`, `cpld`, `upb`, `ubm` | **UEFI** | Low-level, UEFI or BMC secondary |
-| `bcm`, `broadcom`, `mellanox`, `connectx`, `nvidia` + OCP context | **OS** | OCP3 NICs: no PLDM OOB |
-| `bcm`, `broadcom`, `mellanox`, `connectx`, `nvidia` + PCIe context | **UEFI** | PCIe NICs: PLDM OOB capable |
-| `intel `, `intel(r)` (trailing space, NOT `intelligent`) | **OS** | RuntimeAgent only |
-| Fallback | **UEFI** | Conservative default |
+| Component pattern                                                      | Method   | Logic                            |
+| ---------------------------------------------------------------------- | -------- | -------------------------------- |
+| `ilo`, `integrated lights-out`, `ilo management controller`            | **BMC**  | Always iLO self-update           |
+| `system rom`, `system bios`, `bios`                                    | **UEFI** | UEFI applies at POST             |
+| `smart array`, `mr4`, `ns204`, `boot controller`, `storage controller` | **UEFI** | PLDM via UEFI agent              |
+| `power management`, `power supply`, `cpld`, `upb`, `ubm`               | **UEFI** | Low-level, UEFI or BMC secondary |
+| `bcm`, `broadcom`, `mellanox`, `connectx`, `nvidia` + OCP context      | **OS**   | OCP3 NICs: no PLDM OOB           |
+| `bcm`, `broadcom`, `mellanox`, `connectx`, `nvidia` + PCIe context     | **UEFI** | PCIe NICs: PLDM OOB capable      |
+| `intel `, `intel(r)` (trailing space, NOT `intelligent`)               | **OS**   | RuntimeAgent only                |
+| Fallback                                                               | **UEFI** | Conservative default             |
 
 **Known gotcha:** The string `"intel"` matches inside `"intelligent power"`.
 Always use `"intel "` (trailing space) and `"intel(r)"` for Intel NIC patterns.

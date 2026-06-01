@@ -22,15 +22,18 @@ HPE ProLiant unified CLI
 namespaces:
   ilo          Direct iLO Redfish management (firmware, inventory, power)
   com          HPE GreenLake / Compute Ops Management (devices, workspaces)
+  spp          HPE Service Pack for ProLiant catalog analysis
 
 Run 'pcli <namespace> --help' for namespace-specific help.
 
 examples:
-  pcli ilo get firmwares           Firmware summary across all iLO hosts
-  pcli ilo upgrade --host myilo    Upgrade firmware via HPE SDR
-  pcli com login                   Login to HPE GreenLake
-  pcli com get devices             List GreenLake devices
-  pcli com get devices --fields name,serial,added,added-by --sort added
+  pcli ilo get firmwares                       Firmware summary across all iLO hosts
+  pcli ilo upgrade --host myilo                Upgrade firmware via HPE SDR
+  pcli com login                               Login to HPE GreenLake
+  pcli com get devices                         List GreenLake devices
+  pcli spp list                                List available gen12 SPP versions
+  pcli spp inspect gen12 2026.03.00.00         Analyse a gen12 SPP catalog
+  pcli spp diff gen12 2025.09.01.00 2026.03.00.00  What changed between SPPs?
 """
 
 _POWERSHELL_COMPLETION_BLOCK = """\
@@ -41,10 +44,11 @@ Register-ArgumentCompleter -Native -CommandName pcli -ScriptBlock {
     $pos = if ($wordToComplete -eq '') { $t.Count } else { $t.Count - 1 }
     $candidates = @()
     if ($pos -eq 1) {
-        $candidates = @('ilo', 'com')
+        $candidates = @('ilo', 'com', 'spp')
     } elseif ($pos -eq 2) {
         if ($t[1] -eq 'ilo') { $candidates = @('get', 'upgrade', 'init') }
         elseif ($t[1] -eq 'com') { $candidates = @('login', 'logout', 'get', 'use', 'add') }
+        elseif ($t[1] -eq 'spp') { $candidates = @('list', 'inspect', 'diff') }
     } elseif ($pos -eq 3) {
         if ($t[1] -eq 'ilo') {
             if ($t[2] -eq 'get') { $candidates = @('firmwares','ilo','network','nic','storage','cpu','memory','com','full','disk-map','serial','update-method') }

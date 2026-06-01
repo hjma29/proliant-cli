@@ -483,9 +483,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
-    # argcomplete works on bash/zsh; silently skip on Windows (cmd/PowerShell)
-    if sys.platform != "win32":
-        argcomplete.autocomplete(parser)
+    argcomplete.autocomplete(parser)
     args = parser.parse_args(argv)
     asyncio.run(_async_main(args))
 

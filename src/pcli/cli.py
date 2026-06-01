@@ -198,6 +198,19 @@ def _dispatch_ilo(args: list[str]) -> None:
     ilo_main()
 
 
+def _dispatch_spp(args: list[str]) -> None:
+    try:
+        from pcli.spp.cli import main as spp_main
+    except ImportError as exc:
+        print(
+            f"pcli spp: missing dependencies — install with: pip install pcli[spp]\n({exc})",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    sys.argv = ["pcli spp"] + args
+    spp_main()
+
+
 def _dispatch_com(args: list[str]) -> None:
     try:
         from pcli.com.cli import main as com_main
@@ -233,8 +246,12 @@ def main(argv: list[str] | None = None) -> None:
             os.environ["_ARGCOMPLETE"] = "2"
             _dispatch_com(parts[2:])
             return
+        if len(parts) >= 2 and parts[1] == "spp":
+            os.environ["_ARGCOMPLETE"] = "2"
+            _dispatch_spp(parts[2:])
+            return
 
-        # Top-level: use argparse so argcomplete can offer 'ilo' and 'com'
+        # Top-level: use argparse so argcomplete can offer 'ilo', 'com', 'spp'
         import argparse
         import argcomplete
         parser = argparse.ArgumentParser(prog="pcli", add_help=False)
@@ -242,6 +259,7 @@ def main(argv: list[str] | None = None) -> None:
         sub = parser.add_subparsers(dest="namespace")
         sub.add_parser("ilo",  help="Direct iLO Redfish management")
         sub.add_parser("com",  help="HPE GreenLake / Compute Ops Management")
+        sub.add_parser("spp",  help="HPE Service Pack for ProLiant analysis")
         argcomplete.autocomplete(parser)
         return  # autocomplete() exits; reaching here means no completion needed
 
@@ -264,6 +282,8 @@ def main(argv: list[str] | None = None) -> None:
         _dispatch_ilo(list(args[1:]))
     elif namespace == "com":
         _dispatch_com(list(args[1:]))
+    elif namespace == "spp":
+        _dispatch_spp(list(args[1:]))
     else:
         print(f"pcli: unknown namespace '{namespace}'\n", file=sys.stderr)
         print(_USAGE)

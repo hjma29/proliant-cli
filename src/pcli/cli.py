@@ -53,16 +53,16 @@ Register-ArgumentCompleter -Native -CommandName pcli -ScriptBlock {
     if ($pos -eq 1) {
         $candidates = @('ilo', 'com', 'spp', 'oneview', 'update')
     } elseif ($pos -eq 2) {
-        if ($t[1] -eq 'ilo') { $candidates = @('get', 'upgrade', 'init') }
-        elseif ($t[1] -eq 'com') { $candidates = @('login', 'logout', 'get', 'use', 'add') }
+        if ($t[1] -eq 'ilo') { $candidates = @('list', 'upgrade', 'init') }
+        elseif ($t[1] -eq 'com') { $candidates = @('login', 'logout', 'list', 'use', 'add') }
         elseif ($t[1] -eq 'spp') { $candidates = @('list', 'inspect', 'diff') }
         elseif ($t[1] -eq 'oneview') { $candidates = @('servers', 'firmware') }
     } elseif ($pos -eq 3) {
         if ($t[1] -eq 'ilo') {
-            if ($t[2] -eq 'get') { $candidates = @('firmwares','ilo','network','nic','storage','cpu','memory','com','full','disk-map','serial','update-method') }
+            if ($t[2] -eq 'list') { $candidates = @('firmwares','ilo','network','nic','storage','cpu','memory','com','full','disk-map','serial','update-method') }
             elseif ($t[2] -eq 'upgrade') { $candidates = @('components','queue','stage','flash','clear') }
         } elseif ($t[1] -eq 'com') {
-            if ($t[2] -eq 'get') { $candidates = @('devices','workspaces','bundles') }
+            if ($t[2] -eq 'list') { $candidates = @('devices','workspaces','bundles') }
             elseif ($t[2] -eq 'use') { $candidates = @('workspace') }
             elseif ($t[2] -eq 'add') { $candidates = @('device') }
         } elseif ($t[1] -eq 'oneview') {

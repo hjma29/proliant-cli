@@ -70,27 +70,27 @@ def test_all_printers_exist():
 # ---------------------------------------------------------------------------
 
 def test_parser_show_subcommands():
-    """All 'get' subcommands must be recognised."""
+    """All 'list' subcommands must be recognised."""
     from pcli.ilo.cli import _build_parser
     parser = _build_parser()
     for what in ["firmwares", "ilo", "network", "nic", "storage",
                  "cpu", "memory", "com", "full", "disk-map"]:
-        args = parser.parse_args(["get", what])
-        assert args.command == "get"
+        args = parser.parse_args(["list", what])
+        assert args.command == "list"
         assert args.what == what
 
 
 def test_parser_show_host_filter():
     from pcli.ilo.cli import _build_parser
     parser = _build_parser()
-    args = parser.parse_args(["get", "ilo", "--host", "dl325-gen12"])
+    args = parser.parse_args(["list", "ilo", "--host", "dl325-gen12"])
     assert args.host == "dl325-gen12"
 
 
 def test_parser_show_raw_flag():
     from pcli.ilo.cli import _build_parser
     parser = _build_parser()
-    args = parser.parse_args(["get", "nic", "--raw"])
+    args = parser.parse_args(["list", "nic", "--raw"])
     assert args.raw is True
 
 

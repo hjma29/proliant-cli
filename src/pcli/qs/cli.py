@@ -156,9 +156,9 @@ examples:
     p_list.add_argument(
         "--count", "-n",
         type=int,
-        default=10,
+        default=5,
         metavar="N",
-        help="Maximum results to show (default: 10)",
+        help="Maximum results to show (default: 5)",
     )
 
     # ── describe ──────────────────────────────────────────────────────────────

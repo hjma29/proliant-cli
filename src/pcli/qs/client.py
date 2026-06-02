@@ -85,10 +85,14 @@ def search_quickspecs(model: str, count: int = 10) -> list[QSEntry]:
     # Append "QuickSpecs" so the search stays focused
     query = f"{q} QuickSpecs"
 
+    # Extract generation token (e.g. "Gen12") for strict title filtering
+    gen_filter = re.search(r"Gen\d+", q)
+    gen_token = gen_filter.group(0).lower() if gen_filter else None  # "gen12"
+
     token = fetch_coveo_token()
     payload = json.dumps({
         "q": query,
-        "numberOfResults": count * 3,  # fetch more to account for filtering
+        "numberOfResults": count * 5,  # fetch more to account for filtering + multi-version
     }).encode()
     req = urllib.request.Request(
         _COVEO_ENDPOINT,
@@ -103,11 +107,12 @@ def search_quickspecs(model: str, count: int = 10) -> list[QSEntry]:
         data = json.loads(resp.read())
 
     entries: list[QSEntry] = []
-    seen_ids: set[str] = set()
+    seen_keys: set[tuple[str, str]] = set()  # (doc_id, version) — allow multiple versions
     for item in data.get("results", []):
         raw = item.get("raw", {})
         doc_id = raw.get("kmdocid", "")
-        if not doc_id or doc_id in seen_ids:
+        version = str(raw.get("kmdocversion", ""))
+        if not doc_id or (doc_id, version) in seen_keys:
             continue
         # Skip doc IDs that reference sub-sections (contain ||)
         if "||" in doc_id:
@@ -116,13 +121,24 @@ def search_quickspecs(model: str, count: int = 10) -> list[QSEntry]:
         # Only keep actual QuickSpec documents
         if "quickspec" not in title.lower():
             continue
-        seen_ids.add(doc_id)
+        # Strict generation filter: skip if title mentions a different generation
+        if gen_token and gen_token not in title.lower():
+            continue
+        seen_keys.add((doc_id, version))
         entries.append(QSEntry(
             doc_id=doc_id,
             title=title,
-            version=str(raw.get("kmdocversion", "")),
+            version=version,
             last_modified=raw.get("kmdoclastmod", ""),
         ))
+
+    # Sort by last_modified descending
+    def _sort_key(e: QSEntry) -> str:
+        # Date format: "MM/DD/YYYY ..." → reformat for lexicographic sort
+        m = re.match(r"(\d{2})/(\d{2})/(\d{4})", e.last_modified)
+        return f"{m.group(3)}{m.group(1)}{m.group(2)}" if m else ""
+
+    entries.sort(key=_sort_key, reverse=True)
     return entries[:count]
 
 

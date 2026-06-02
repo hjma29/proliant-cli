@@ -185,6 +185,9 @@
   },
   "active": "727093c4cfd7a0ba",
   "lastOpenFiles": [
+    "src/pcli/oneview/servers.py",
+    "src/pcli/oneview/firmware.py",
+    "src/pcli/oneview/config.py",
     "src/pcli/oneview/client.py",
     "src/pcli/oneview/__init__.py",
     "src/pcli/oneview",

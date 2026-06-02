@@ -66,7 +66,7 @@ Register-ArgumentCompleter -Native -CommandName pcli -ScriptBlock {
             elseif ($t[2] -eq 'use') { $candidates = @('workspace') }
             elseif ($t[2] -eq 'add') { $candidates = @('device') }
         } elseif ($t[1] -eq 'oneview') {
-            if ($t[2] -eq 'list') { $candidates = @('servers','firmware') }
+            if ($t[2] -eq 'list') { $candidates = @('servers','firmware','networks','networksets','uplinksets') }
         }
     }
     $candidates | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {

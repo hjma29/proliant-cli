@@ -322,8 +322,6 @@ def _cmd_describe(args: argparse.Namespace) -> None:
 
 
 # ── Argument parser ────────────────────────────────────────────────────────────
-
-def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="pcli qs",
         description="Browse HPE QuickSpecs documents.",
@@ -421,6 +419,8 @@ def main(argv: list[str] | None = None) -> None:
         _cmd_list(args)
     elif args.cmd == "describe":
         _cmd_describe(args)
+    elif args.cmd == "diff":
+        _cmd_diff(args)
     else:
         parser.print_help()
         sys.exit(2)

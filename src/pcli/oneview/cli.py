@@ -341,6 +341,190 @@ def _cmd_uplinksets_list(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+# ── pcli oneview list server-profiles ────────────────────────────────────────
+
+async def _async_profiles_list() -> None:
+    from pcli.oneview.profiles import list_profiles
+
+    async with _load_client() as client:
+        with console.status("[dim]Fetching server profiles…[/dim]"):
+            profiles = await list_profiles(client)
+
+    if not profiles:
+        console.print("[yellow]No server profiles found.[/yellow]")
+        return
+
+    table = Table(
+        title=f"Server Profiles  ({len(profiles)} total)",
+        box=box.ROUNDED, show_header=True, header_style="bold cyan",
+    )
+    table.add_column("Name",        min_width=22, no_wrap=True)
+    table.add_column("Server",      min_width=20, no_wrap=True)
+    table.add_column("Status",      justify="center", no_wrap=True)
+    table.add_column("State",       justify="center", no_wrap=True)
+    table.add_column("Description", style="dim")
+
+    for p in profiles:
+        table.add_row(
+            p["name"], p["server_name"],
+            _status_style(p["status"]), p["state"],
+            p["description"] or "—",
+        )
+    console.print(table)
+
+
+def _cmd_profiles_list(args: argparse.Namespace) -> None:
+    try:
+        _run(_async_profiles_list())
+    except Exception as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        sys.exit(1)
+
+
+# ── pcli oneview describe ─────────────────────────────────────────────────────
+
+async def _async_describe_uplinkset(name: str) -> None:
+    from pcli.oneview.network import describe_uplink_set
+    from rich.panel import Panel
+    from rich.columns import Columns
+    import rich.text as rt
+
+    async with _load_client() as client:
+        with console.status(f"[dim]Fetching uplink set '{name}'…[/dim]"):
+            u = await describe_uplink_set(client, name)
+
+    reach = u["reachability"]
+    reach_s = f"[green]{reach}[/green]" if reach == "Reachable" else f"[yellow]{reach}[/yellow]"
+
+    console.print(Panel(
+        f"[bold]{u['name']}[/bold]\n"
+        f"Logical IC:    [cyan]{u['li_name']}[/cyan]\n"
+        f"Type:          {u['network_type']}  |  Mode: {u['conn_mode']}\n"
+        f"Reachability:  {reach_s}  |  Status: {_status_style(u['status'])}  |  State: {u['state']}",
+        title="Uplink Set", border_style="cyan",
+    ))
+
+    # Ports table
+    port_table = Table(title="Ports", box=box.SIMPLE_HEAD, header_style="bold")
+    port_table.add_column("Bay",   justify="center", no_wrap=True)
+    port_table.add_column("Port",  no_wrap=True)
+    port_table.add_column("Speed", no_wrap=True)
+    port_table.add_column("FEC",   no_wrap=True)
+    for p in u["ports"]:
+        port_table.add_row(p["bay"], p["port"], p["speed"], p["fec"])
+    console.print(port_table)
+
+    # Networks table
+    net_table = Table(title=f"Member Networks ({len(u['networks'])})", box=box.SIMPLE_HEAD, header_style="bold")
+    net_table.add_column("Name",   min_width=24, no_wrap=True)
+    net_table.add_column("VLAN",   justify="right", no_wrap=True)
+    net_table.add_column("Type",   no_wrap=True)
+    net_table.add_column("Status", justify="center", no_wrap=True)
+    for n in u["networks"]:
+        vlan = str(n["vlan"]) if n["vlan"] else "—"
+        net_table.add_row(n["name"], vlan, n["type"], _status_style(n["status"]))
+    console.print(net_table)
+
+
+async def _async_describe_networkset(name: str) -> None:
+    from pcli.oneview.network import describe_network_set
+    from rich.panel import Panel
+
+    async with _load_client() as client:
+        with console.status(f"[dim]Fetching network set '{name}'…[/dim]"):
+            s = await describe_network_set(client, name)
+
+    console.print(Panel(
+        f"[bold]{s['name']}[/bold]\n"
+        f"Type:           {s['type']}\n"
+        f"Native Network: {s['native_network'] or '—'}\n"
+        f"Status: {_status_style(s['status'])}  |  State: {s['state']}",
+        title="Network Set", border_style="cyan",
+    ))
+
+    net_table = Table(title=f"Member Networks ({len(s['networks'])})", box=box.SIMPLE_HEAD, header_style="bold")
+    net_table.add_column("Name",    min_width=28, no_wrap=True)
+    net_table.add_column("VLAN",    justify="right", no_wrap=True)
+    net_table.add_column("Type",    no_wrap=True)
+    net_table.add_column("Purpose", no_wrap=True)
+    net_table.add_column("Status",  justify="center", no_wrap=True)
+    net_table.add_column("Native",  justify="center", no_wrap=True)
+    for n in s["networks"]:
+        vlan = str(n["vlan"]) if n["vlan"] else "—"
+        net_table.add_row(
+            n["name"], vlan, n["type"], n["purpose"],
+            _status_style(n["status"]),
+            "[green]✓[/green]" if n["native"] else "",
+        )
+    console.print(net_table)
+
+
+async def _async_describe_profile(name: str) -> None:
+    from pcli.oneview.profiles import describe_profile
+    from rich.panel import Panel
+
+    async with _load_client() as client:
+        with console.status(f"[dim]Fetching profile '{name}'…[/dim]"):
+            p = await describe_profile(client, name)
+
+    fw_line = ""
+    if p["fw_baseline"]:
+        managed = "  [dim](managed)[/dim]" if p["manage_fw"] else "  [dim](unmanaged)[/dim]"
+        fw_line = f"\nFW Baseline:    {p['fw_baseline']} {p['fw_version']}{managed}"
+        if p["fw_install_type"]:
+            fw_line += f"\nFW Install:     {p['fw_install_type']}"
+
+    boot = ", ".join(p["boot_order"]) if p["boot_order"] else "—"
+
+    server_line = p["server_name"]
+    if p.get("server_model"):
+        server_line += f"  [dim]({p['server_model']} | SN: {p['server_serial']} | Power: {p['server_power']})[/dim]"
+
+    desc_line = f"\nDescription:    {p['description']}" if p["description"] else ""
+
+    console.print(Panel(
+        f"[bold]{p['name']}[/bold]\n"
+        f"Server:         {server_line}\n"
+        f"Enclosure Group: [cyan]{p['eg_name']}[/cyan]\n"
+        f"Status: {_status_style(p['status'])}  |  State: {p['state']}"
+        f"{fw_line}\n"
+        f"Boot Order:     {boot}"
+        f"{desc_line}",
+        title="Server Profile", border_style="cyan",
+    ))
+
+    if p["connections"]:
+        conn_table = Table(title="Connections", box=box.SIMPLE_HEAD, header_style="bold")
+        conn_table.add_column("ID",       justify="center")
+        conn_table.add_column("Name",     min_width=16, no_wrap=True)
+        conn_table.add_column("Network",  no_wrap=True)
+        conn_table.add_column("Function", no_wrap=True)
+        conn_table.add_column("Speed",    no_wrap=True)
+        for c in p["connections"]:
+            conn_table.add_row(
+                str(c.get("id", "")), c.get("name", ""),
+                c.get("networkUri", "").rsplit("/", 1)[-1],
+                c.get("functionType", ""), c.get("requestedMbps", ""),
+            )
+        console.print(conn_table)
+
+
+def _cmd_describe(args: argparse.Namespace) -> None:
+    try:
+        if args.resource == "uplinkset":
+            _run(_async_describe_uplinkset(args.name))
+        elif args.resource == "networkset":
+            _run(_async_describe_networkset(args.name))
+        elif args.resource == "server-profile":
+            _run(_async_describe_profile(args.name))
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        sys.exit(1)
+    except Exception as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        sys.exit(1)
+
+
 # ── argument parser ───────────────────────────────────────────────────────────
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -350,13 +534,16 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 examples:
-  pcli oneview list servers                     List all managed servers
-  pcli oneview list servers --fields name,model,serial,power
-  pcli oneview list firmware                    Fleet firmware (all servers)
+  pcli oneview list servers                          List all managed servers
+  pcli oneview list firmware                         Fleet firmware (all servers)
   pcli oneview list firmware --server "Enc1, bay 1"
-  pcli oneview list networks                    All ethernet networks
-  pcli oneview list networksets                 All network sets
-  pcli oneview list uplinksets                  All uplink sets
+  pcli oneview list networks                         All ethernet networks
+  pcli oneview list networksets                      All network sets
+  pcli oneview list uplinksets                       All uplink sets
+  pcli oneview list server-profiles                  All server profiles
+  pcli oneview describe uplinkset "pvlan-uplinkset"  Full uplink set detail
+  pcli oneview describe networkset "network-set-for-FM"
+  pcli oneview describe server-profile "ocp-single-node"
 """,
     )
 
@@ -368,35 +555,37 @@ examples:
     s_list = p_list.add_subparsers(dest="what", metavar="WHAT")
     s_list.required = True
 
-    # pcli oneview list servers
     p_srv = s_list.add_parser("servers", help="List all managed servers")
-    p_srv.add_argument(
-        "--fields",
-        metavar="FIELDS",
-        help="Comma-separated columns: name,model,serial,ilo,ilo_ip,power,state,profile",
-    )
+    p_srv.add_argument("--fields", metavar="FIELDS",
+        help="Comma-separated columns: name,model,serial,ilo,ilo_ip,power,state,profile")
     p_srv.set_defaults(func=_cmd_servers_list)
 
-    # pcli oneview list firmware
     p_fw = s_list.add_parser("firmware", help="Show firmware inventory")
-    p_fw.add_argument(
-        "--server",
-        metavar="NAME",
-        help='Server name (e.g. "Enc1, bay 1"). Omit for all servers.',
-    )
+    p_fw.add_argument("--server", metavar="NAME",
+        help='Server name (e.g. "Enc1, bay 1"). Omit for all servers.')
     p_fw.set_defaults(func=_cmd_firmware_list)
 
-    # pcli oneview list networks
     p_net = s_list.add_parser("networks", help="List all ethernet networks")
     p_net.set_defaults(func=_cmd_networks_list)
 
-    # pcli oneview list networksets
     p_ns = s_list.add_parser("networksets", help="List all network sets")
     p_ns.set_defaults(func=_cmd_networksets_list)
 
-    # pcli oneview list uplinksets
     p_ul = s_list.add_parser("uplinksets", help="List all uplink sets")
     p_ul.set_defaults(func=_cmd_uplinksets_list)
+
+    p_sp = s_list.add_parser("server-profiles", help="List all server profiles")
+    p_sp.set_defaults(func=_cmd_profiles_list)
+
+    # ── describe ──────────────────────────────────────────────────────────
+    p_desc = sub.add_parser("describe", help="Show detailed info for a single resource")
+    s_desc = p_desc.add_subparsers(dest="resource", metavar="RESOURCE")
+    s_desc.required = True
+
+    for res in ("uplinkset", "networkset", "server-profile"):
+        rp = s_desc.add_parser(res, help=f"Describe a {res}")
+        rp.add_argument("name", metavar="NAME", help=f"Name of the {res}")
+        rp.set_defaults(func=_cmd_describe)
 
     return parser
 

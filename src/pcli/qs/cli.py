@@ -20,7 +20,7 @@ from rich.markdown import Markdown
 from rich.rule import Rule
 from rich import box
 
-from pcli.qs.client import QSEntry, search_quickspecs, fetch_quickspec_markdown, filter_section, fetch_quickspec_versions
+from pcli.qs.client import QSEntry, search_quickspecs, fetch_quickspec_markdown, filter_section
 
 console = Console()
 

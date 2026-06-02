@@ -39,25 +39,43 @@ def _enclosure_location(server: dict) -> str:
 
 def parse_server(raw: dict) -> dict:
     """Normalize a raw /rest/server-hardware member into a flat dict."""
+    model = raw.get("model", "")
+    # Strip redundant "Synergy" prefix — context is already OneView/Synergy
+    model = model.removeprefix("Synergy ").strip()
     return {
-        "name":        raw.get("name", ""),
-        "model":       raw.get("model", ""),
-        "serial":      raw.get("serialNumber", ""),
-        "ilo_model":   raw.get("mpModel", ""),
-        "ilo_version": raw.get("mpFirmwareVersion", ""),
-        "ilo_ip":      _mp_ip(raw),
-        "power":       raw.get("powerState", ""),
-        "state":       raw.get("state", ""),
-        "profile":     raw.get("serverProfileUri", "").rsplit("/", 1)[-1] if raw.get("serverProfileUri") else "",
-        "uri":         raw.get("uri", ""),
-        # Synergy-specific
-        "enclosure":   raw.get("serverGroupUri", ""),
-        "position":    raw.get("position", 0),
+        "name":            raw.get("name", ""),
+        "model":           model,
+        "serial":          raw.get("serialNumber", ""),
+        "ilo_model":       raw.get("mpModel", ""),
+        "ilo_version":     raw.get("mpFirmwareVersion", ""),
+        "ilo_ip":          _mp_ip(raw),
+        "power":           raw.get("powerState", ""),
+        "state":           raw.get("state", ""),
+        "profile_uri":     raw.get("serverProfileUri", ""),
+        "profile":         "",  # resolved after profile name lookup
+        "uri":             raw.get("uri", ""),
+        "enclosure":       raw.get("serverGroupUri", ""),
+        "position":        raw.get("position", 0),
     }
 
 
+async def list_servers_with_profiles(client: "OneViewClient") -> list[dict]:
+    """Return all managed servers with resolved profile names."""
+    import asyncio
+    raw_servers, profiles = await asyncio.gather(
+        client.get_all("/rest/server-hardware"),
+        client.get_all("/rest/server-profiles"),
+    )
+    # Build URI → name map
+    profile_map = {p["uri"]: p.get("name", "") for p in profiles}
+    servers = [parse_server(s) for s in raw_servers]
+    for s in servers:
+        s["profile"] = profile_map.get(s["profile_uri"], "")
+    return servers
+
+
 async def list_servers(client: "OneViewClient") -> list[dict]:
-    """Return all managed server hardware, normalized."""
+    """Return all managed server hardware, normalized (no profile name resolution)."""
     raw = await client.get_all("/rest/server-hardware")
     return [parse_server(s) for s in raw]
 

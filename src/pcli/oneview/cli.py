@@ -58,18 +58,18 @@ def _state_style(state: str) -> str:
 # ── pcli oneview servers list ─────────────────────────────────────────────────
 
 async def _async_servers_list(fields: list[str] | None) -> None:
-    from pcli.oneview.servers import list_servers
+    from pcli.oneview.servers import list_servers_with_profiles
 
     async with _load_client() as client:
         with console.status(f"[dim]Fetching server inventory from OneView (API v{client.api_version})…[/dim]"):
-            servers = await list_servers(client)
+            servers = await list_servers_with_profiles(client)
 
     if not servers:
         console.print("[yellow]No servers found in OneView.[/yellow]")
         return
 
-    # Default columns
-    all_fields = ["name", "model", "serial", "ilo", "ilo_ip", "power", "state", "profile"]
+    # Default columns (ilo_ip omitted for Synergy — always blank)
+    all_fields = ["name", "model", "serial", "ilo", "power", "state", "profile"]
     show = fields if fields else all_fields
 
     table = Table(
@@ -87,7 +87,7 @@ async def _async_servers_list(fields: list[str] | None) -> None:
         "ilo_ip":  ("iLO IP",      dict(no_wrap=True)),
         "power":   ("Power",       dict(justify="center", no_wrap=True)),
         "state":   ("State",       dict(justify="center")),
-        "profile": ("Profile",     dict(style="dim")),
+        "profile": ("Profile",     dict(min_width=16)),
     }
 
     for f in show:

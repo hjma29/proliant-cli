@@ -120,7 +120,13 @@ def _cmd_describe(args: argparse.Namespace) -> None:
             )
             sys.exit(1)
         text = filter_section(markdown, matched)
-        console.print(Markdown(text))
+        # Strip the leading heading line and render it as a Rule to avoid
+        # Rich's large top-padding on ### headings
+        lines = text.splitlines()
+        heading = lines[0].lstrip("#").strip() if lines else matched
+        body = "\n".join(lines[1:]).lstrip("\n")
+        console.print(Rule(f"[bold]{heading}[/bold]"))
+        console.print(Markdown(body))
         return
 
     # Full document

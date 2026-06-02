@@ -222,6 +222,44 @@ async def fetch_cpu_info(client: ILOClient) -> list[tuple[str, str]]:
     return found or _EMPTY
 
 
+async def fetch_cpu_report_data(client: ILOClient) -> list[dict]:
+    system = await client.get(await client.get_system_uri())
+    proc_uri = system.get("Processors", {}).get("@odata.id")
+    if not proc_uri:
+        return []
+
+    found = []
+    for proc in await _member_resources(client, proc_uri):
+        if (proc.get("ProcessorType") or "").upper() == "GPU":
+            continue
+        model = (proc.get("Model") or "N/A").strip()
+        found.append({
+            "socket":   (proc.get("Socket") or "—").strip(),
+            "model":    model,
+            "cores":    proc.get("TotalCores") or "—",
+            "threads":  proc.get("TotalThreads") or "—",
+            "speed_mhz": proc.get("MaxSpeedMHz") or "—",
+        })
+    return found
+
+
+async def fetch_gpu_report_data(client: ILOClient) -> list[dict]:
+    system = await client.get(await client.get_system_uri())
+    proc_uri = system.get("Processors", {}).get("@odata.id")
+    if not proc_uri:
+        return []
+
+    found = []
+    for proc in await _member_resources(client, proc_uri):
+        if (proc.get("ProcessorType") or "").upper() != "GPU":
+            continue
+        found.append({
+            "name":  (proc.get("Name") or "N/A").strip(),
+            "model": (proc.get("Model") or "—").strip(),
+        })
+    return found
+
+
 async def fetch_memory_info(client: ILOClient) -> list[tuple[str, str]]:
     system = await client.get(await client.get_system_uri())
     memory_uri = system.get("Memory", {}).get("@odata.id")

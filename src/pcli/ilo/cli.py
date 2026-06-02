@@ -541,6 +541,10 @@ def _build_parser() -> argparse.ArgumentParser:
     report_sub.required = True
     rep_mem = report_sub.add_parser("memory", aliases=["mem"], help="Memory DIMM part-number breakdown")
     _add_host(rep_mem)
+    rep_cpu = report_sub.add_parser("cpu", help="CPU model and core count across fleet")
+    _add_host(rep_cpu)
+    rep_gpu = report_sub.add_parser("gpu", help="GPU inventory across fleet")
+    _add_host(rep_gpu)
 
     set_p = subparsers.add_parser("set", help="Change iLO configuration")
     set_sub = set_p.add_subparsers(dest="set_action", metavar="ACTION")

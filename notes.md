@@ -54,8 +54,7 @@
 | dl345-gen12 | 10.16.41.29 | Gen12 | iLO 7 v1.20 | TWA25345G1208 | P81949-B21 | ✅ HPECC_USWEST_1 |
 | dl325-gen12 | 10.16.41.31 | Gen12 | iLO 7 v1.21 | TWA25325G1206 | P81967-B21 | ✅ HPECC_USWEST_1 |
 
-Credentials: `Administrator / hpent123`
-COM token: `~/.config/hpecom/token.json` (glp_client_id / glp_client_secret for API client auth)
+Credentials: `Administrator / hpent123` COM token: `~/.config/hpecom/token.json` (glp_client_id / glp_client_secret for API client auth)
 
 ---
 
@@ -95,9 +94,7 @@ HPE components can be updated by three different agents:
 
 ### How the Classification Works
 
-The authoritative data is in `payload.json` inside each `.fwpkg` file (see below).
-For iLO Redfish FirmwareInventory — which lacks this field — `pcli` infers the method
-from component name patterns.
+The authoritative data is in `payload.json` inside each `.fwpkg` file (see below). For iLO Redfish FirmwareInventory — which lacks this field — `pcli` infers the method from component name patterns.
 
 Rules in `ilo/inventory.py::classify_update_method()`:
 
@@ -112,8 +109,7 @@ Rules in `ilo/inventory.py::classify_update_method()`:
 | `intel `, `intel(r)` (trailing space, NOT `intelligent`)               | **OS**   | RuntimeAgent only                |
 | Fallback                                                               | **UEFI** | Conservative default             |
 
-**Known gotcha:** The string `"intel"` matches inside `"intelligent power"`.
-Always use `"intel "` (trailing space) and `"intel(r)"` for Intel NIC patterns.
+**Known gotcha:** The string `"intel"` matches inside `"intelligent power"`. Always use `"intel "` (trailing space) and `"intel(r)"` for Intel NIC patterns.
 
 ### payload.json Inside fwpkg — The Source of Truth
 
@@ -160,19 +156,13 @@ ilo7_1.20.00.json                   ← sidecar, NOT part of the signed ZIP
    device targets, UpdatableBy, FileList, SHA256, UpgradeRequirements…)
 ```
 
-**Why:** The `.fwpkg` is signed as a whole ZIP blob. In Gen11, any update to `payload.json`
-(e.g. adding a new supported model, fixing install instructions) required re-signing and
-re-releasing the entire package — including the unchanged binary. In Gen12, HPE seals
-only the firmware binary inside the `.fwpkg`. The sidecar `.json` can be updated at any
-time (new server qualifications, corrected metadata) without touching the signed binary.
+**Why:** The `.fwpkg` is signed as a whole ZIP blob. In Gen11, any update to `payload.json` (e.g. adding a new supported model, fixing install instructions) required re-signing and re-releasing the entire package — including the unchanged binary. In Gen12, HPE seals only the firmware binary inside the `.fwpkg`. The sidecar `.json` can be updated at any time (new server qualifications, corrected metadata) without touching the signed binary.
 
 **Consequences for pcli:**
 - `pcli spp download` must fetch both `{stem}.fwpkg` **and** `{stem}.json` for every package.
 - SHA256 in the SPP catalog covers only the `.fwpkg` — sidecar JSON has no checksum, fetch best-effort.
-- `pcli spp inspect <file.fwpkg>` looks for `{stem}.json` as a sibling file; falls back to
-  embedded `payload.json` for Gen11 packages.
-- Gen11 `payload.json` uses **lowercase snake_case keys** (`package`, `installation`, `reboot_required`,
-  description entries use `{lang, x_late}` not `{Lang, Value}`). Gen12 sidecar uses CamelCase.
+- `pcli spp inspect <file.fwpkg>` looks for `{stem}.json` as a sibling file; falls back to embedded `payload.json` for Gen11 packages.
+- Gen11 `payload.json` uses **lowercase snake_case keys** (`package`, `installation`, `reboot_required`, description entries use `{lang, x_late}` not `{Lang, Value}`). Gen12 sidecar uses CamelCase.
 - `sdr.py::_fetch_software_ids()` fetches sibling `.json` URL for device matching — already correct.
 
 ### pcli ilo get update-method
@@ -181,8 +171,7 @@ time (new server qualifications, corrected metadata) without touching the signed
 pcli ilo get update-method [--host NAME] [--raw]
 ```
 
-Output: Rich table with columns `Component | Version | Method | Reboot | Context`.
-`Method` column color-coded: BMC=green, UEFI=yellow, OS=red.
+Output: Rich table with columns `Component | Version | Method | Reboot | Context`. `Method` column color-coded: BMC=green, UEFI=yellow, OS=red.
 
 ---
 
@@ -204,8 +193,7 @@ COM Cloud  ─► POST /compute-ops-mgmt/v1/jobs  {bundle_id, server_id}
            ─► UEFI reads Installation Queue during POST → flashes components
 ```
 
-iLO downloads individual `.fwpkg` files on demand from HPE CDN. The full SPP ISO is never
-downloaded to the server.
+iLO downloads individual `.fwpkg` files on demand from HPE CDN. The full SPP ISO is never downloaded to the server.
 
 ### No SUM Inside iLO — Two Native Agents
 
@@ -242,18 +230,15 @@ These components **cannot** be updated via COM OOB (or via pure iLO Redfish):
 | BCM OCP3 adapters (e.g. P10113-001) | OCP3 slot lacks PLDM channel on iLO 6; `bnxtnvm` in-band required |
 | Linux/VMware NIC drivers (`.rpm`/`.zip` SCs) | OS-level software, not firmware |
 
-For Gen12 servers (iLO 7), broader PLDM coverage means fewer OS-required components.
-Gen12 PCIe NICs (Broadcom, Mellanox) with PLDM support are UEFI-updatable OOB.
+For Gen12 servers (iLO 7), broader PLDM coverage means fewer OS-required components. Gen12 PCIe NICs (Broadcom, Mellanox) with PLDM support are UEFI-updatable OOB.
 
 ### SPP Bundle API — No Per-Component Data
 
-COM `GET /compute-ops/v1beta2/firmware-bundles` returns bundle metadata only. There is **no sub-resource** listing individual components with `UpdatableBy` fields.
-The per-component `UpdatableBy` only exists in:
+COM `GET /compute-ops/v1beta2/firmware-bundles` returns bundle metadata only. There is **no sub-resource** listing individual components with `UpdatableBy` fields. The per-component `UpdatableBy` only exists in:
 1. Each `.fwpkg`'s `payload.json` (primary source)
 2. HPE firmware blog documentation
 
-COM's own `firmwareInventory` on server objects is a plain `[{name, version, deviceContext}]`
-list — no `UpdatableBy` field exposed.
+COM's own `firmwareInventory` on server objects is a plain `[{name, version, deviceContext}]` list — no `UpdatableBy` field exposed.
 
 Bundle counts (as of May 2026): 85 total, 30 active — Gen12: 12, Gen11: 28, Gen10: 45.
 
@@ -276,8 +261,7 @@ for c in client.get(ctrl_link).obj.get("Members", []):
     ctrl = client.get(c["@odata.id"]).obj
 ```
 
-**dl325-gen12 special case:** `Storage` returns **zero Members** — NVMe/SATA controllers
-only appear in `FirmwareInventory`. Always fall back to FirmwareInventory keyword scan.
+**dl325-gen12 special case:** `Storage` returns **zero Members** — NVMe/SATA controllers only appear in `FirmwareInventory`. Always fall back to FirmwareInventory keyword scan.
 
 ### Full Firmware Inventory (`FirmwareInventory`)
 
@@ -314,8 +298,7 @@ GET /redfish/v1/Chassis/1/NetworkAdapters/
     SKU                                      ← HPE part name
 ```
 
-NIC firmware is **NOT** in FirmwareInventory on Gen11 (only via NetworkAdapters).
-On Gen12, some NICs appear in FirmwareInventory as PLDM targets with `SoftwareId` = PLDM GUID.
+NIC firmware is **NOT** in FirmwareInventory on Gen11 (only via NetworkAdapters). On Gen12, some NICs appear in FirmwareInventory as PLDM targets with `SoftwareId` = PLDM GUID.
 
 #### PLDM Target GUID matching
 
@@ -325,8 +308,7 @@ a6b1a447-382a-5a4f-14e4-16d714e41597
                    ^^^^─ 14e4 = Broadcom PCI vendor
                         ────── 16d7 = BCM57414 PCI device ID
 ```
-When a NIC appears in FirmwareInventory, its `SoftwareId` = this GUID.
-`sdr.py` matches against `.json` sidecar Target GUIDs — reliable even when `Model` is a marketing name.
+When a NIC appears in FirmwareInventory, its `SoftwareId` = this GUID. `sdr.py` matches against `.json` sidecar Target GUIDs — reliable even when `Model` is a marketing name.
 
 #### BCM SDR filename format — version FIRST (inverted)
 
@@ -356,8 +338,7 @@ GET /redfish/v1/Systems/1/Memory/{id}
 
 ## 6. PLDM — How Gen12 Firmware Updates Work
 
-**PLDM = Platform Level Data Model** (DMTF DSP0267) — messaging protocol for firmware
-delivery over **MCTP** (sideband bus connecting iLO directly to components, no host OS needed).
+**PLDM = Platform Level Data Model** (DMTF DSP0267) — messaging protocol for firmware delivery over **MCTP** (sideband bus connecting iLO directly to components, no host OS needed).
 
 ```
   iLO 7 (BMC) ─── MCTP sideband ─── NIC / StorageCtrl / BIOS ROM
@@ -371,8 +352,7 @@ Gen12 changed the definition of "offline" updates:
 
 Gen12 dropped the bootable SPP ISO entirely. All updates go through iLO Redfish.
 
-`pcli ilo upgrade` uses `AddFromUri` + `UpdateTaskQueue` — the exact same Redfish calls
-that SUM uses internally when connected to the iLO out-of-band management IP.
+`pcli ilo upgrade` uses `AddFromUri` + `UpdateTaskQueue` — the exact same Redfish calls that SUM uses internally when connected to the iLO out-of-band management IP.
 
 ### SUM Remote / iLO-Connected Mode
 
@@ -422,8 +402,7 @@ PWD = hpent123
 [END]
 ```
 
-**Note:** "Non-bootable SPP ISO on Gen12" means you can't *boot* from it — using it as a
-**firmware source on a jumpbox** while SUM connects to iLO remotely is fully supported.
+**Note:** "Non-bootable SPP ISO on Gen12" means you can't *boot* from it — using it as a **firmware source on a jumpbox** while SUM connects to iLO remotely is fully supported.
 
 | | SUM CLI + SPP ISO | pcli + SDR |
 |---|---|---|
@@ -442,8 +421,7 @@ PWD = hpent123
 | **2** | **System ROM (BIOS)** | May require minimum iLO version. Applied on next reboot. |
 | **3** | **Everything else** | NIC, storage controllers, CPLD, power management — all via one reboot. |
 
-`pcli ilo upgrade` enforces this order automatically: stages iLO first → waits ~90s for
-iLO restart → stages BIOS + others → single reboot applies all.
+`pcli ilo upgrade` enforces this order automatically: stages iLO first → waits ~90s for iLO restart → stages BIOS + others → single reboot applies all.
 
 ---
 
@@ -487,8 +465,7 @@ https://downloads.linux.hpe.com/SDR/repo/fwpp-gen11/2026.03.00.00/
 
 `sdr.py::latest_pack_url(gen)` auto-discovers the latest pack.
 
-SDR covers HPE-branded components only. NIC coverage is per chip variant — some SKUs
-of the same chip family may be absent from a given pack.
+SDR covers HPE-branded components only. NIC coverage is per chip variant — some SKUs of the same chip family may be absent from a given pack.
 
 ---
 
@@ -540,19 +517,15 @@ Same flow as BIOS. Always use `"UpdatableBy": ["Uefi"]`.
 
 ### ComponentRepository and UpdateTaskQueue Members
 
-On iLO 7 (Gen12), `Members[]` contains stub objects `{"@odata.id": "..."}` — no inline data.
-Must expand each stub via individual GET. (`get_component_repository()` and `get_task_queue()` already do this.)
+On iLO 7 (Gen12), `Members[]` contains stub objects `{"@odata.id": "..."}` — no inline data. Must expand each stub via individual GET. (`get_component_repository()` and `get_task_queue()` already do this.)
 
 ### iLO 7 — Stale Pending Tasks After UEFI Flash
 
-iLO 7 never marks UEFI tasks Complete after POST flash. Stale Pending tasks remain forever.
-**Do NOT treat a stale Pending task as failure** — always verify via FirmwareInventory version.
-`_run_fw_upgrade()` auto-clears all Pending/Complete tasks after post-reboot verification.
+iLO 7 never marks UEFI tasks Complete after POST flash. Stale Pending tasks remain forever. **Do NOT treat a stale Pending task as failure** — always verify via FirmwareInventory version. `_run_fw_upgrade()` auto-clears all Pending/Complete tasks after post-reboot verification.
 
 ### iLO 6 HttpPushUri — Often Returns Empty 400
 
-iLO 6 `HttpPushUri` multipart upload (`/cgi-bin/uploadFile`) often fails with empty 400.
-Use `AddFromUri` (iLO pulls from URL) instead. iLO 7 HttpPushUri works reliably.
+iLO 6 `HttpPushUri` multipart upload (`/cgi-bin/uploadFile`) often fails with empty 400. Use `AddFromUri` (iLO pulls from URL) instead. iLO 7 HttpPushUri works reliably.
 
 ---
 
@@ -602,9 +575,7 @@ Use `AddFromUri` (iLO pulls from URL) instead. iLO 7 HttpPushUri works reliably.
 
 ### The Problem
 
-`BCM235.1.164.14_BCM957414A4142HC.fwpkg` has `MinimumActiveVersion: 226.1.107.0`.
-Server shipped at `214.0.194.0`. SUM refuses to deploy (exit -3, OmitHost) when
-hard dependency is unmet.
+`BCM235.1.164.14_BCM957414A4142HC.fwpkg` has `MinimumActiveVersion: 226.1.107.0`. Server shipped at `214.0.194.0`. SUM refuses to deploy (exit -3, OmitHost) when hard dependency is unmet.
 
 ### Strategies Tried
 
@@ -632,13 +603,11 @@ USERNAME = Administrator
 PASSWORD = hpent123
 ```
 
-Result: Power Management `1.0.0 → 1.1.2`, UBM6 `1.00 → 1.06` updated. BCM skipped.
-After reboot, PLDM naturally advanced NIC: `214 → 216.0.333.11` (one step).
+Result: Power Management `1.0.0 → 1.1.2`, UBM6 `1.00 → 1.06` updated. BCM skipped. After reboot, PLDM naturally advanced NIC: `214 → 216.0.333.11` (one step).
 
 ### Next Steps to Complete NIC Update
 
-**Option A (Recommended):** Re-run SUM with `OmitComponent` — PLDM may advance 216→226 naturally.
-Requires ~2 more runs + reboots.
+**Option A (Recommended):** Re-run SUM with `OmitComponent` — PLDM may advance 216→226 naturally. Requires ~2 more runs + reboots.
 
 **Option B:** Patch `masterdependency.xml` — change `226.1.107000 → 1.0.0` in BCM_NXE blocks.
 - **Must write as UTF-8 without BOM** — PowerShell's `Set-Content -Encoding UTF8` adds BOM and crashes SUM:
@@ -688,8 +657,7 @@ Requires ~2 more runs + reboots.
 | `id_token` | ~5 min | Only to get `ccs_session` at login — ephemeral |
 | `ccs_session` | Independent | Cookie for ui-doorway requests; dies independently of access_token |
 
-**`ccs_session` is NOT the same as access_token.** After ccs-session expires, only a full
-`pcli com login` restores it — refresh doesn't help.
+**`ccs_session` is NOT the same as access_token.** After ccs-session expires, only a full `pcli com login` restores it — refresh doesn't help.
 
 ---
 

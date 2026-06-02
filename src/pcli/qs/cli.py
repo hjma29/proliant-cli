@@ -27,6 +27,72 @@ console = Console()
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
+_SEP_RE = re.compile(r"^\|[\s\-:|]+\|")
+
+
+def _parse_md_row(line: str) -> list[str]:
+    """Parse '| **A** | [B](url) | C |' → ['A', 'B', 'C']."""
+    cells = line.strip().strip("|").split("|")
+    result = []
+    for cell in cells:
+        cell = cell.strip()
+        cell = re.sub(r"\*\*(.*?)\*\*", r"\1", cell)          # bold
+        cell = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", cell)  # links
+        result.append(cell)
+    return result
+
+
+def _render_md_table(table_lines: list[str]) -> None:
+    """Render markdown table lines directly as a Rich Table (no Markdown padding)."""
+    if not table_lines:
+        return
+    header_row = _parse_md_row(table_lines[0])
+    data_rows = [
+        _parse_md_row(ln)
+        for ln in table_lines[1:]
+        if not _SEP_RE.match(ln)
+    ]
+    col_count = len(header_row)
+    t = Table(
+        box=box.SIMPLE_HEAD,
+        show_header=bool(any(header_row)),
+        header_style="bold",
+        padding=(0, 1),
+    )
+    for h in header_row:
+        t.add_column(h)
+    for row in data_rows:
+        padded = (row + [""] * col_count)[:col_count]
+        t.add_row(*padded)
+    console.print(t)
+
+
+def _render_section_body(body: str) -> None:
+    """Render section body, using Rich Table for markdown tables to avoid padding."""
+    lines = body.splitlines()
+    pending: list[str] = []
+    i = 0
+    while i < len(lines):
+        if lines[i].startswith("|"):
+            if pending:
+                text_block = "\n".join(pending).strip()
+                if text_block:
+                    console.print(Markdown(text_block))
+                pending = []
+            table_lines = []
+            while i < len(lines) and lines[i].startswith("|"):
+                table_lines.append(lines[i])
+                i += 1
+            _render_md_table(table_lines)
+        else:
+            pending.append(lines[i])
+            i += 1
+    if pending:
+        text_block = "\n".join(pending).strip()
+        if text_block:
+            console.print(Markdown(text_block))
+
+
 def _fmt_date(raw: str) -> str:
     """Convert '05/13/2026 00:00:00.000' → '2026-05-13'."""
     if not raw:
@@ -60,12 +126,11 @@ def _cmd_list(args: argparse.Namespace) -> None:
         padding=(0, 1),
     )
     t.add_column("Doc ID", style="green", no_wrap=True)
-    t.add_column("Version", justify="right", no_wrap=True)
     t.add_column("Last Modified", no_wrap=True)
     t.add_column("Title")
 
     for e in entries:
-        t.add_row(e.doc_id, e.version, _fmt_date(e.last_modified), e.title)
+        t.add_row(e.doc_id, _fmt_date(e.last_modified), e.title)
 
     console.print(t)
     console.print(
@@ -121,13 +186,11 @@ def _cmd_describe(args: argparse.Namespace) -> None:
             )
             sys.exit(1)
         text = filter_section(markdown, matched)
-        # Strip the leading heading line and render it as a Rule to avoid
-        # Rich's large top-padding on ### headings
         lines = text.splitlines()
         heading = lines[0].lstrip("#").strip() if lines else matched
         body = "\n".join(lines[1:]).lstrip("\n")
         console.print(Rule(f"[bold]{heading}[/bold]"))
-        console.print(Markdown(body))
+        _render_section_body(body)
         return
 
     # Full document

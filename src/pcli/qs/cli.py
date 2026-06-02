@@ -334,6 +334,7 @@ _QS_SECTIONS = [
 ]
 
 
+def _section_map(markdown: str, sections: list[str]) -> dict[str, str]:
     """Return {section_name: body_text} for all sections."""
     return {s: filter_section(markdown, s) for s in sections}
 

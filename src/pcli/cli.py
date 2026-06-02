@@ -24,6 +24,9 @@ namespaces:
   com          HPE GreenLake / Compute Ops Management (devices, workspaces)
   spp          HPE Service Pack for ProLiant catalog analysis
 
+commands:
+  update       Download and install the latest pcli release
+
 Run 'pcli <namespace> --help' for namespace-specific help.
 
 examples:
@@ -34,6 +37,7 @@ examples:
   pcli spp list                                List available gen12 SPP versions
   pcli spp inspect gen12 2026.03.00.00         Analyse a gen12 SPP catalog
   pcli spp diff gen12 2025.09.01.00 2026.03.00.00  What changed between SPPs?
+  pcli update                                  Upgrade pcli to the latest release
 """
 
 _POWERSHELL_COMPLETION_BLOCK = """\
@@ -44,7 +48,7 @@ Register-ArgumentCompleter -Native -CommandName pcli -ScriptBlock {
     $pos = if ($wordToComplete -eq '') { $t.Count } else { $t.Count - 1 }
     $candidates = @()
     if ($pos -eq 1) {
-        $candidates = @('ilo', 'com', 'spp')
+        $candidates = @('ilo', 'com', 'spp', 'update')
     } elseif ($pos -eq 2) {
         if ($t[1] -eq 'ilo') { $candidates = @('get', 'upgrade', 'init') }
         elseif ($t[1] -eq 'com') { $candidates = @('login', 'logout', 'get', 'use', 'add') }

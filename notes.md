@@ -247,8 +247,7 @@ Gen12 PCIe NICs (Broadcom, Mellanox) with PLDM support are UEFI-updatable OOB.
 
 ### SPP Bundle API — No Per-Component Data
 
-COM `GET /compute-ops/v1beta2/firmware-bundles` returns bundle metadata only.
-There is **no sub-resource** listing individual components with `UpdatableBy` fields.
+COM `GET /compute-ops/v1beta2/firmware-bundles` returns bundle metadata only. There is **no sub-resource** listing individual components with `UpdatableBy` fields.
 The per-component `UpdatableBy` only exists in:
 1. Each `.fwpkg`'s `payload.json` (primary source)
 2. HPE firmware blog documentation

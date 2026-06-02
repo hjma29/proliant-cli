@@ -525,6 +525,55 @@ def _cmd_describe(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def _cmd_report_memory(args: argparse.Namespace) -> None:
+    from rich.table import Table
+    from rich import box as rich_box
+    from pcli.oneview.servers import get_fleet_memory
+    from pcli.com.inventory import aggregate_by_part_number
+
+    async def _run_report():
+        async with _load_client() as client:
+            with console.status("[dim]Fetching memory inventory across fleet…[/dim]"):
+                return await get_fleet_memory(client)
+
+    dimms = _run(_run_report())
+
+    if not dimms:
+        console.print("[yellow]No memory inventory data returned.[/yellow]")
+        return
+
+    rows = aggregate_by_part_number(dimms)
+    total_dimms = sum(r["count"] for r in rows)
+    total_tb = sum(r["count"] * r["capacity_gb"] for r in rows) / 1024
+
+    table = Table(
+        title=f"Memory Part-Number Breakdown  ({total_dimms} DIMMs  /  {total_tb:.1f} TB total)",
+        box=rich_box.ROUNDED,
+        show_header=True,
+        header_style="bold cyan",
+    )
+    table.add_column("HPE Part Number", min_width=14, no_wrap=True)
+    table.add_column("Vendor",          min_width=12, no_wrap=True)
+    table.add_column("Capacity",        justify="right", no_wrap=True)
+    table.add_column("Type",            no_wrap=True)
+    table.add_column("Speed",           justify="right", no_wrap=True)
+    table.add_column("Count",           justify="right", no_wrap=True, style="bold")
+    table.add_column("Total",           justify="right", no_wrap=True)
+    table.add_column("Servers",         justify="right", no_wrap=True, style="dim")
+
+    for r in rows:
+        cap = f"{r['capacity_gb']} GB" if r["capacity_gb"] else "—"
+        speed = f"{r['speed_mts']} MT/s" if r["speed_mts"] else "—"
+        total_cap_gb = r["count"] * r["capacity_gb"]
+        total_cap = f"{total_cap_gb} GB" if total_cap_gb < 1024 else f"{total_cap_gb/1024:.1f} TB"
+        table.add_row(
+            r["hpe_pn"], r["vendor"], cap, r["type"], speed,
+            str(r["count"]), total_cap, str(len(r["servers"])),
+        )
+
+    console.print(table)
+
+
 # ── argument parser ───────────────────────────────────────────────────────────
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -590,6 +639,13 @@ examples:
         rp = s_desc.add_parser(res, aliases=aliases, help=f"Describe a {res}")
         rp.add_argument("name", metavar="NAME", help=f"Name of the {res}")
         rp.set_defaults(func=_cmd_describe, resource=res)
+
+    # ── report ────────────────────────────────────────────────────────────
+    p_report = sub.add_parser("report", help="Fleet hardware reports")
+    s_report = p_report.add_subparsers(dest="what", metavar="WHAT")
+    s_report.required = True
+    p_rep_mem = s_report.add_parser("memory", aliases=["mem"], help="Memory DIMM part-number breakdown")
+    p_rep_mem.set_defaults(func=_cmd_report_memory)
 
     return parser
 

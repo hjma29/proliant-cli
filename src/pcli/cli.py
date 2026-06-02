@@ -53,21 +53,24 @@ Register-ArgumentCompleter -Native -CommandName pcli -ScriptBlock {
     if ($pos -eq 1) {
         $candidates = @('ilo', 'com', 'spp', 'oneview', 'update')
     } elseif ($pos -eq 2) {
-        if ($t[1] -eq 'ilo') { $candidates = @('list', 'upgrade', 'init') }
+        if ($t[1] -eq 'ilo') { $candidates = @('list', 'upgrade', 'init', 'report') }
         elseif ($t[1] -eq 'com') { $candidates = @('login', 'logout', 'list', 'use', 'add', 'report') }
         elseif ($t[1] -eq 'spp') { $candidates = @('list', 'inspect', 'diff') }
-        elseif ($t[1] -eq 'oneview') { $candidates = @('list', 'describe') }
+        elseif ($t[1] -eq 'oneview') { $candidates = @('list', 'describe', 'report') }
     } elseif ($pos -eq 3) {
         if ($t[1] -eq 'ilo') {
             if ($t[2] -eq 'list') { $candidates = @('firmwares','ilo','network','nic','storage','cpu','memory','com','full','disk-map','serial','update-method') }
             elseif ($t[2] -eq 'upgrade') { $candidates = @('components','queue','stage','flash','clear') }
+            elseif ($t[2] -eq 'report') { $candidates = @('memory') }
         } elseif ($t[1] -eq 'com') {
             if ($t[2] -eq 'list') { $candidates = @('devices','workspaces','bundles') }
             elseif ($t[2] -eq 'use') { $candidates = @('workspace') }
             elseif ($t[2] -eq 'add') { $candidates = @('device') }
+            elseif ($t[2] -eq 'report') { $candidates = @('memory') }
         } elseif ($t[1] -eq 'oneview') {
             if ($t[2] -eq 'list') { $candidates = @('servers','firmware','networks','networksets','uplinksets','server-profiles') }
             elseif ($t[2] -eq 'describe') { $candidates = @('uplinkset','networkset','server-profile') }
+            elseif ($t[2] -eq 'report') { $candidates = @('memory') }
         }
     }
     $candidates | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {

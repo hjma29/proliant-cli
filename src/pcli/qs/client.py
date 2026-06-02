@@ -31,6 +31,287 @@ _COLLATERAL_URL = "https://www.hpe.com/us/en/collaterals/collateral.{docid}.html
 # Cached token — fetched once per process lifetime
 _coveo_token_cache: Optional[str] = None
 
+# Raw HTML cache keyed by doc_id — shared between fetch_quickspec_versions and
+# fetch_quickspec_markdown so a list → describe workflow only downloads once
+_html_cache: dict[str, str] = {}
+
+_MONTH_ABBR = {
+    "jan": "01", "feb": "02", "mar": "03", "apr": "04",
+    "may": "05", "jun": "06", "jul": "07", "aug": "08",
+    "sep": "09", "oct": "10", "nov": "11", "dec": "12",
+}
+
+
+# ── Data types ─────────────────────────────────────────────────────────────────
+
+@dataclass
+class QSEntry:
+    doc_id: str
+    title: str
+    version: str
+    last_modified: str  # raw date string from Coveo e.g. "05/13/2026 00:00:00.000"
+
+
+@dataclass
+class QSVersion:
+    """One internal revision of a QuickSpec document."""
+    doc_id: str
+    title: str
+    version_num: str   # "16"
+    date: str          # "2026-06-01"
+
+
+# ── Token ─────────────────────────────────────────────────────────────────────
+
+def fetch_coveo_token() -> str:
+    """Extract the Coveo search token embedded in the HPE Resource Library page."""
+    global _coveo_token_cache
+    if _coveo_token_cache:
+        return _coveo_token_cache
+
+    req = urllib.request.Request(
+        _RESOURCE_LIBRARY_URL,
+        headers={"User-Agent": "Mozilla/5.0 (pcli-qs/1.0)"},
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        html = resp.read().decode("utf-8", errors="replace")
+
+    m = re.search(r"(xx[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", html)
+    if not m:
+        raise RuntimeError(
+            "Could not find Coveo token in HPE Resource Library page. "
+            "The page structure may have changed."
+        )
+    _coveo_token_cache = m.group(1)
+    return _coveo_token_cache
+
+
+# ── Search ─────────────────────────────────────────────────────────────────────
+
+def search_quickspecs(model: str, count: int = 10) -> list[QSEntry]:
+    """
+    Search for QuickSpecs matching *model* using the Coveo search API.
+
+    *model* is a free-text query, e.g. 'DL380 Gen12', 'dl380gen12', 'DL360'.
+    Returns a list of QSEntry sorted by last-modified descending.
+    """
+    # Normalise: dl380gen12 → DL380 Gen12, dl380-gen12 → DL380 Gen12
+    q = re.sub(r"(?i)(gen)(\d+)", r" Gen\2", model.replace("-", " "))
+    q = q.upper().replace("GEN", "Gen").strip()
+    # Prefix "HPE ProLiant" for better Coveo relevance ranking
+    if not q.upper().startswith("HPE"):
+        q = "HPE ProLiant " + q
+    # Append "QuickSpecs" so the search stays focused
+    query = f"{q} QuickSpecs"
+
+    # Extract generation token (e.g. "Gen12") for strict title filtering
+    gen_filter = re.search(r"Gen\d+", q)
+    gen_token = gen_filter.group(0).lower() if gen_filter else None  # "gen12"
+
+    token = fetch_coveo_token()
+    payload = json.dumps({
+        "q": query,
+        "numberOfResults": count * 5,  # fetch more to account for filtering + multi-version
+    }).encode()
+    req = urllib.request.Request(
+        _COVEO_ENDPOINT,
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (pcli-qs/1.0)",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        data = json.loads(resp.read())
+
+    entries: list[QSEntry] = []
+    seen_keys: set[tuple[str, str]] = set()  # (doc_id, version) — allow multiple versions
+    for item in data.get("results", []):
+        raw = item.get("raw", {})
+        doc_id = raw.get("kmdocid", "")
+        version = str(raw.get("kmdocversion", ""))
+        if not doc_id or (doc_id, version) in seen_keys:
+            continue
+        # Skip doc IDs that reference sub-sections (contain ||)
+        if "||" in doc_id:
+            continue
+        title = item.get("title", raw.get("kmdocfulltitle", "")).strip()
+        # Only keep actual QuickSpec documents
+        if "quickspec" not in title.lower():
+            continue
+        # Strict generation filter: skip if title mentions a different generation
+        if gen_token and gen_token not in title.lower():
+            continue
+        seen_keys.add((doc_id, version))
+        entries.append(QSEntry(
+            doc_id=doc_id,
+            title=title,
+            version=version,
+            last_modified=raw.get("kmdoclastmod", ""),
+        ))
+
+    # Sort by last_modified descending
+    def _sort_key(e: QSEntry) -> str:
+        # Date format: "MM/DD/YYYY ..." → reformat for lexicographic sort
+        m = re.match(r"(\d{2})/(\d{2})/(\d{4})", e.last_modified)
+        return f"{m.group(3)}{m.group(1)}{m.group(2)}" if m else ""
+
+    entries.sort(key=_sort_key, reverse=True)
+    return entries[:count]
+
+
+# ── Content fetch ──────────────────────────────────────────────────────────────
+
+def _fetch_collateral_html(doc_id: str) -> str:
+    """Fetch and cache the raw HTML for *doc_id*."""
+    if doc_id in _html_cache:
+        return _html_cache[doc_id]
+    url = _COLLATERAL_URL.format(docid=doc_id)
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (pcli-qs/1.0)"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        html = resp.read().decode("utf-8", errors="replace")
+    _html_cache[doc_id] = html
+    return html
+
+
+def _parse_qs_date(date_str: str) -> str:
+    """Convert 'DD MMM YYYY' or 'DD-Mon-YYYY' to 'YYYY-MM-DD'."""
+    m = re.match(r"(\d{1,2})[\s\-]([A-Za-z]{3})[\s\-](\d{4})", date_str.strip())
+    if m:
+        day, mon, year = m.groups()
+        mon_num = _MONTH_ABBR.get(mon.lower(), "??")
+        return f"{year}-{mon_num}-{day.zfill(2)}"
+    return date_str
+
+
+def fetch_quickspec_versions(doc_id: str, title: str = "", n: int = 3) -> list[QSVersion]:
+    """
+    Extract the internal version history from the 'Summary of Changes' table
+    of the QuickSpec HTML.  Returns up to *n* most-recent versions.
+    """
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError as exc:
+        raise RuntimeError(
+            f"Missing dependency: {exc}\n"
+            "Install with: pip install beautifulsoup4"
+        ) from exc
+
+    html = _fetch_collateral_html(doc_id)
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Find the "Summary of Changes" h3 heading
+    soc_h3 = next(
+        (h for h in soup.find_all("h3")
+         if "summary of changes" in h.get_text(strip=True).lower()),
+        None,
+    )
+    if not soc_h3:
+        return []
+
+    table = soc_h3.find_next("table")
+    if not table:
+        return []
+
+    versions: list[QSVersion] = []
+    for row in table.find_all("tr"):
+        cells = row.find_all(["td", "th"])
+        if len(cells) < 2:
+            continue
+        date_text = cells[0].get_text(strip=True)
+        ver_text = cells[1].get_text(strip=True)
+        # Skip header row and continuation rows (no date in col 0)
+        if not re.match(r"\d{1,2}[\s\-][A-Za-z]{3}[\s\-]\d{4}", date_text):
+            continue
+        ver_m = re.search(r"Version\s+(\d+)", ver_text, re.IGNORECASE)
+        if not ver_m:
+            continue
+        versions.append(QSVersion(
+            doc_id=doc_id,
+            title=title,
+            version_num=ver_m.group(1),
+            date=_parse_qs_date(date_text),
+        ))
+        if len(versions) >= n:
+            break
+
+    return versions
+
+
+def fetch_quickspec_markdown(doc_id: str) -> tuple[str, list[str]]:
+    """
+    Fetch the HPE collateral HTML for *doc_id* and return:
+      (markdown_text, list_of_section_names)
+
+    Only the QuickSpec body is returned (nav, footer, "Recommended for you"
+    are stripped).
+    """
+    try:
+        from bs4 import BeautifulSoup
+        from markitdown import MarkItDown
+    except ImportError as exc:
+        raise RuntimeError(
+            f"Missing dependency: {exc}\n"
+            "Install with: pip install beautifulsoup4 markitdown"
+        ) from exc
+
+    html = _fetch_collateral_html(doc_id)
+    soup = BeautifulSoup(html, "html.parser")
+    main = soup.find("main")
+    if not main:
+        raise RuntimeError(f"Could not find <main> in page for doc {doc_id!r}")
+
+    # The content is inside <hpe-left-rail-container>
+    container = main.find("hpe-left-rail-container")
+    if not container:
+        raise RuntimeError(f"Could not find content container in page for doc {doc_id!r}")
+
+    # Extract section names from h3 tags
+    sections = [h.get_text(strip=True) for h in container.find_all("h3")]
+
+    # Convert to markdown via markitdown
+    inner_html = f"<html><body>{container}</body></html>"
+    md = MarkItDown()
+    with tempfile.NamedTemporaryFile(
+        suffix=".html", mode="w", encoding="utf-8", delete=False
+    ) as f:
+        f.write(inner_html)
+        tmpfile = f.name
+    try:
+        result = md.convert(tmpfile)
+    finally:
+        os.unlink(tmpfile)
+
+    return result.text_content, sections
+
+
+def filter_section(markdown: str, section: str) -> str:
+    """
+    Extract a single section from the full markdown by heading name.
+    Returns text from '### <section>' up to the next '### ' heading.
+    """
+    # Find the heading line (case-insensitive)
+    pattern = re.compile(
+        r"^(#{1,3}\s+" + re.escape(section) + r"\s*)$",
+        re.IGNORECASE | re.MULTILINE,
+    )
+    m = pattern.search(markdown)
+    if not m:
+        return f"Section '{section}' not found."
+
+    start = m.start()
+    # Find next same-level or higher heading
+    level = len(m.group(1)) - len(m.group(1).lstrip("#"))
+    next_heading = re.compile(
+        r"^#{1," + str(level) + r"}\s+\S",
+        re.MULTILINE,
+    )
+    end_m = next_heading.search(markdown, m.end())
+    end = end_m.start() if end_m else len(markdown)
+    return markdown[start:end].strip()
+
+
 
 # ── Data types ─────────────────────────────────────────────────────────────────
 

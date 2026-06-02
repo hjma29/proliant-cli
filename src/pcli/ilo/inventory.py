@@ -494,6 +494,33 @@ async def fetch_com_status(client: ILOClient) -> list[tuple[str, str]]:
     ]
 
 
+async def fetch_memory_report_data(client: ILOClient) -> list[dict]:
+    """Return structured DIMM dicts for part-number fleet reporting."""
+    system = await client.get(await client.get_system_uri())
+    memory_uri = system.get("Memory", {}).get("@odata.id")
+    if not memory_uri:
+        return []
+
+    result = []
+    for dimm in await _member_resources(client, memory_uri):
+        cap_mib = dimm.get("CapacityMiB") or 0
+        if not cap_mib:
+            continue
+        oem = dimm.get("Oem", {}).get("Hpe", {})
+        status = oem.get("DIMMStatus", "")
+        if status in {"NotPresent", "Unknown", ""}:
+            continue
+        hpe_pn = (oem.get("PartNumber") or dimm.get("PartNumber") or "Unknown").strip() or "Unknown"
+        result.append({
+            "hpe_pn":      hpe_pn,
+            "vendor":      oem.get("VendorName") or dimm.get("Manufacturer", ""),
+            "capacity_gb": cap_mib // 1024,
+            "type":        dimm.get("BaseModuleType", ""),
+            "speed_mts":   oem.get("MaxOperatingSpeedMTs", 0) or 0,
+        })
+    return result
+
+
 async def fetch_serial_info(client: ILOClient) -> list[tuple[str, str]]:
     system = await client.get(await client.get_system_uri())
     raw_model = system.get("Model", "N/A")

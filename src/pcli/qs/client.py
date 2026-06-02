@@ -67,6 +67,7 @@ class QSVersion:
     title: str
     version_num: str   # "16"
     date: str          # "2026-06-01"
+    link: str = ""     # full psnow URL with ?ver=N
 
 
 # ── Token ─────────────────────────────────────────────────────────────────────
@@ -180,15 +181,18 @@ def search_quickspecs(model: str, count: int = 10) -> list[QSEntry]:
 
 # ── Content fetch ──────────────────────────────────────────────────────────────
 
-def _fetch_collateral_html(doc_id: str) -> str:
-    """Fetch and cache the raw HTML for *doc_id*."""
-    if doc_id in _html_cache:
-        return _html_cache[doc_id]
+def _fetch_collateral_html(doc_id: str, ver: str = "") -> str:
+    """Fetch and cache the raw HTML for *doc_id*, optionally for a specific version."""
+    cache_key = f"{doc_id}:{ver}" if ver else doc_id
+    if cache_key in _html_cache:
+        return _html_cache[cache_key]
     url = _COLLATERAL_URL.format(docid=doc_id)
+    if ver:
+        url = f"{url}?ver={ver}"
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (pcli-qs/1.0)"})
     with urllib.request.urlopen(req, timeout=30) as resp:
         html = resp.read().decode("utf-8", errors="replace")
-    _html_cache[doc_id] = html
+    _html_cache[cache_key] = html
     return html
 
 
@@ -234,6 +238,7 @@ def fetch_quickspec_versions(doc_id: str, title: str = "", n: int = 3) -> list[Q
             title=title,
             version_num=ver_m.group(1),
             date=_parse_long_date(ver_m.group(2).strip()),
+            link=v.get("link", ""),
         ))
         if len(versions) >= n:
             break
@@ -334,11 +339,12 @@ def _fetch_from_psnow_pdf(doc_id: str) -> tuple[str, list[str]]:
     return text, sections
 
 
-def fetch_quickspec_markdown(doc_id: str) -> tuple[str, list[str]]:
+def fetch_quickspec_markdown(doc_id: str, ver: str = "") -> tuple[str, list[str]]:
     """
     Fetch the HPE collateral HTML for *doc_id* and return:
       (markdown_text, list_of_section_names)
 
+    Pass *ver* (e.g. "43") to fetch a specific older version.
     For newer HPE collateral pages the content is parsed from HTML.
     For older PSNow-style pages the QuickSpec PDF is downloaded and converted.
     Only the QuickSpec body is returned (nav, footer, "Recommended for you"
@@ -353,7 +359,7 @@ def fetch_quickspec_markdown(doc_id: str) -> tuple[str, list[str]]:
             "Install with: pip install beautifulsoup4 markitdown"
         ) from exc
 
-    html = _fetch_collateral_html(doc_id)
+    html = _fetch_collateral_html(doc_id, ver=ver)
     soup = BeautifulSoup(html, "html.parser")
     main = soup.find("main")
     if not main:

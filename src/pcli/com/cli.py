@@ -726,6 +726,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Device part number (SKU). Optional — omit if unknown.",
     )
 
+    # ── report ────────────────────────────────────────────────────────────
+    rep_p = subparsers.add_parser("report", help="Fleet inventory reports")
+    rep_sub = rep_p.add_subparsers(dest="what", metavar="WHAT")
+    rep_sub.required = True
+
+    rep_mem_p = rep_sub.add_parser("memory", help="Memory part-number breakdown across fleet")
+    rep_mem_p.add_argument("--raw", action="store_true", help="Print raw JSON")
+
     return parser
 
 

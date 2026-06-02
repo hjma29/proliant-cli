@@ -2,9 +2,8 @@
 pcli.oneview.cli — OneView subcommands.
 
 Usage:
-    pcli oneview servers list [--fields ...]
-    pcli oneview firmware list [--server NAME]
-    pcli oneview firmware get --server NAME
+    pcli oneview list servers [--fields ...]
+    pcli oneview list firmware [--server NAME]
 """
 
 # PYTHON_ARGCOMPLETE_OK
@@ -209,41 +208,38 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 examples:
-  pcli oneview servers list                     List all managed servers
-  pcli oneview servers list --fields name,model,serial,power
-  pcli oneview firmware list                    Fleet firmware (all servers)
-  pcli oneview firmware list --server "Enc1, bay 1"
+  pcli oneview list servers                     List all managed servers
+  pcli oneview list servers --fields name,model,serial,power
+  pcli oneview list firmware                    Fleet firmware (all servers)
+  pcli oneview list firmware --server "Enc1, bay 1"
 """,
     )
 
-    sub = parser.add_subparsers(dest="resource", metavar="RESOURCE")
+    sub = parser.add_subparsers(dest="command", metavar="COMMAND")
     sub.required = True
 
-    # ── servers ──────────────────────────────────────────────────────────
-    p_servers = sub.add_parser("servers", help="Server hardware inventory")
-    s_servers = p_servers.add_subparsers(dest="action", metavar="ACTION")
-    s_servers.required = True
+    # ── list ─────────────────────────────────────────────────────────────
+    p_list = sub.add_parser("list", help="List resources")
+    s_list = p_list.add_subparsers(dest="what", metavar="WHAT")
+    s_list.required = True
 
-    p_srv_list = s_servers.add_parser("list", help="List all managed servers")
-    p_srv_list.add_argument(
+    # pcli oneview list servers
+    p_srv = s_list.add_parser("servers", help="List all managed servers")
+    p_srv.add_argument(
         "--fields",
         metavar="FIELDS",
         help="Comma-separated columns: name,model,serial,ilo,ilo_ip,power,state,profile",
     )
-    p_srv_list.set_defaults(func=_cmd_servers_list)
+    p_srv.set_defaults(func=_cmd_servers_list)
 
-    # ── firmware ─────────────────────────────────────────────────────────
-    p_fw = sub.add_parser("firmware", help="Firmware inventory")
-    s_fw = p_fw.add_subparsers(dest="action", metavar="ACTION")
-    s_fw.required = True
-
-    p_fw_list = s_fw.add_parser("list", help="Show firmware inventory")
-    p_fw_list.add_argument(
+    # pcli oneview list firmware
+    p_fw = s_list.add_parser("firmware", help="Show firmware inventory")
+    p_fw.add_argument(
         "--server",
         metavar="NAME",
         help='Server name (e.g. "Enc1, bay 1"). Omit for all servers.',
     )
-    p_fw_list.set_defaults(func=_cmd_firmware_list)
+    p_fw.set_defaults(func=_cmd_firmware_list)
 
     return parser
 

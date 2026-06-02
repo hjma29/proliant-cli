@@ -38,8 +38,8 @@ examples:
   pcli spp list                                List available gen12 SPP versions
   pcli spp inspect gen12 2026.03.00.00         Analyse a gen12 SPP catalog
   pcli spp diff gen12 2025.09.01.00 2026.03.00.00  What changed between SPPs?
-  pcli oneview servers list                    List all OneView-managed servers
-  pcli oneview firmware list                   Fleet firmware inventory via OneView
+  pcli oneview list servers                    List all OneView-managed servers
+  pcli oneview list firmware                   Fleet firmware inventory via OneView
   pcli update                                  Upgrade pcli to the latest release
 """
 

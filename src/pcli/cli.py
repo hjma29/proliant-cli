@@ -189,6 +189,110 @@ def _win_add_powershell_completion() -> None:
 
 
 
+_GITHUB_REPO = "hjma29/proliant-cli"
+
+
+def _get_current_version() -> str:
+    try:
+        return _pkg_version("pcli")
+    except PackageNotFoundError:
+        return "dev"
+
+
+def _run_update() -> None:
+    """Download and replace the current pcli binary with the latest GitHub release."""
+    import urllib.request
+    import json
+    import tempfile
+    import zipfile
+    import shutil
+    import subprocess
+
+    print("Checking for updates...")
+    try:
+        url = f"https://api.github.com/repos/{_GITHUB_REPO}/releases/latest"
+        req = urllib.request.Request(url, headers={"User-Agent": "pcli-updater"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            release = json.loads(resp.read())
+    except Exception as e:
+        print(f"ERROR: Could not reach GitHub: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    latest_tag = release.get("tag_name", "")
+    latest_ver = latest_tag.lstrip("v")
+    current_ver = _get_current_version()
+
+    print(f"  Current version : {current_ver}")
+    print(f"  Latest version  : {latest_ver}")
+
+    if current_ver != "dev" and current_ver == latest_ver:
+        print("✓ Already up to date.")
+        sys.exit(0)
+
+    # Determine asset name for this platform
+    if sys.platform == "win32":
+        asset_name = "proliant-cli-windows.zip"
+    elif sys.platform == "darwin":
+        asset_name = "proliant-cli-macos"
+    else:
+        asset_name = "proliant-cli-linux"
+
+    asset_url = next(
+        (a["browser_download_url"] for a in release.get("assets", []) if a["name"] == asset_name),
+        None,
+    )
+    if not asset_url:
+        print(f"ERROR: No asset '{asset_name}' found in release {latest_tag}.", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"  Downloading {asset_name}...")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = os.path.join(tmpdir, asset_name)
+        try:
+            req = urllib.request.Request(asset_url, headers={"User-Agent": "pcli-updater"})
+            with urllib.request.urlopen(req, timeout=120) as resp, open(tmp_path, "wb") as f:
+                shutil.copyfileobj(resp, f)
+        except Exception as e:
+            print(f"ERROR: Download failed: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        if sys.platform == "win32":
+            # Extract pcli.exe from the zip
+            with zipfile.ZipFile(tmp_path) as zf:
+                names = zf.namelist()
+                exe_name = next((n for n in names if n.lower() == "pcli.exe"), names[0])
+                zf.extract(exe_name, tmpdir)
+            new_exe = os.path.join(tmpdir, exe_name)
+            current_exe = sys.executable
+            # Can't overwrite running exe on Windows — use a helper script
+            bat = os.path.join(tmpdir, "pcli_update.bat")
+            with open(bat, "w") as f:
+                f.write(
+                    f'@echo off\n'
+                    f'ping -n 3 127.0.0.1 >nul\n'  # wait ~2 seconds
+                    f'copy /y "{new_exe}" "{current_exe}"\n'
+                    f'echo pcli updated to {latest_ver}\n'
+                )
+            # Copy the bat out of the temp dir so it survives after tmpdir is deleted
+            persistent_bat = os.path.join(os.environ.get("TEMP", "C:\\Temp"), "pcli_update.bat")
+            shutil.copy(bat, persistent_bat)
+            subprocess.Popen(
+                ["cmd.exe", "/c", persistent_bat],
+                creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.DETACHED_PROCESS,
+                close_fds=True,
+            )
+            print(f"✓ Update to {latest_ver} in progress — a new window will confirm when done.")
+        else:
+            # Unix: can replace running binary in-place
+            os.chmod(tmp_path, 0o755)
+            current_exe = sys.executable
+            # Atomic replace
+            os.replace(tmp_path, current_exe)
+            # Prevent tmpdir cleanup from failing on missing file
+            open(tmp_path, "w").close()
+            print(f"✓ Updated to {latest_ver}. Run 'pcli --version' to confirm.")
+
+
 def _dispatch_ilo(args: list[str]) -> None:
     try:
         from pcli.ilo.cli import main as ilo_main
@@ -261,9 +365,10 @@ def main(argv: list[str] | None = None) -> None:
         parser = argparse.ArgumentParser(prog="pcli", add_help=False)
         parser.add_argument("-V", "--version", action="store_true")
         sub = parser.add_subparsers(dest="namespace")
-        sub.add_parser("ilo",  help="Direct iLO Redfish management")
-        sub.add_parser("com",  help="HPE GreenLake / Compute Ops Management")
-        sub.add_parser("spp",  help="HPE Service Pack for ProLiant analysis")
+        sub.add_parser("ilo",    help="Direct iLO Redfish management")
+        sub.add_parser("com",    help="HPE GreenLake / Compute Ops Management")
+        sub.add_parser("spp",    help="HPE Service Pack for ProLiant analysis")
+        sub.add_parser("update", help="Upgrade pcli to the latest release")
         argcomplete.autocomplete(parser)
         return  # autocomplete() exits; reaching here means no completion needed
 
@@ -288,6 +393,8 @@ def main(argv: list[str] | None = None) -> None:
         _dispatch_com(list(args[1:]))
     elif namespace == "spp":
         _dispatch_spp(list(args[1:]))
+    elif namespace == "update":
+        _run_update()
     else:
         print(f"pcli: unknown namespace '{namespace}'\n", file=sys.stderr)
         print(_USAGE)

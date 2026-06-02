@@ -428,6 +428,8 @@ def main(argv: list[str] | None = None) -> None:
         _dispatch_com(list(args[1:]))
     elif namespace == "spp":
         _dispatch_spp(list(args[1:]))
+    elif namespace == "oneview":
+        _dispatch_oneview(list(args[1:]))
     elif namespace == "update":
         _run_update()
     else:

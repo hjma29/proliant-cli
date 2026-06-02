@@ -168,7 +168,24 @@ ilo7_1.20.00.json                   ← sidecar, NOT part of the signed ZIP
 
 ### SPP Catalog Composition
 
-Stats for gen12 SPP `2026.03.00.00` (source: `metadata.json`):
+**Local cache layout** (`spp/` directory, gitignored):
+
+```
+spp/
+└── gen12/
+    ├── 2025.09.01.00/
+    │   └── metadata.json             ← catalog only, no packages downloaded
+    └── 2026.03.00.00/
+        ├── metadata.json             ← full SPP catalog (281 components, 307 files)
+        └── packages/
+            ├── ilo7_1.20.00.fwpkg
+            ├── ilo7_1.20.00.json     ← Gen12 sidecar
+            ├── ilo6_174.fwpkg        ← Gen11 style (embedded payload.json)
+            ├── A66_1.40_01_09_2026.fwpkg
+            └── A66_1.40_01_09_2026.json
+```
+
+**Catalog stats for gen12 SPP `2026.03.00.00`** (source: `metadata.json`):
 
 | Type | Count | Avg size | Largest file | Max size | Total |
 |------|------:|----------|--------------|----------|------:|

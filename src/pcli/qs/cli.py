@@ -16,6 +16,7 @@ import sys
 from rich.console import Console
 from rich.table import Table
 from rich.markdown import Markdown
+from rich.rule import Rule
 from rich import box
 
 from pcli.qs.client import QSEntry, search_quickspecs, fetch_quickspec_markdown, filter_section

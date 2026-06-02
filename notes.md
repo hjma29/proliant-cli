@@ -138,31 +138,39 @@ Confirmed examples:
 
 **Gen12+ fwpkg structure — sidecar JSON design:**
 
-HPE changed the package structure starting Gen12 to separate the firmware binary from its metadata:
+HPE changed the package structure for **BIOS and iLO 7** to separate the firmware binary from its metadata. **This does NOT apply to all packages** — in the Gen12 SPP 2026.03.00.00, only 10 of 134 `.fwpkg` files use the sidecar pattern; the other 124 still use the Gen11 embedded style.
+
+| Style | Count in Gen12 SPP | Which packages |
+|---|---|---|
+| **Gen12 sidecar** (1 file inside, `{stem}.json` separate) | 10 | Gen12 BIOS (`A66`, `U66`–`U77`) + iLO 7 |
+| **Gen11 embedded** (3–4 files inside, `payload.json` bundled) | 124 | NICs (BCM), drives, storage controllers, iLO 6, etc. |
 
 ```
-# Gen11 (everything bundled in one ZIP):
+# Gen11 style (everything bundled in one ZIP — still dominant even in Gen12 SPP):
 ilo6_174.fwpkg (ZIP, signed)
   ├── ilo6_174.bin        ← firmware binary
   ├── payload.json        ← install metadata (embedded)
   ├── ilo6_174.xml        ← component descriptor
   └── readme.txt
 
-# Gen12+ (binary sealed, metadata separate):
-ilo7_1.20.00.fwpkg (ZIP, signed)   ← contains ONLY the firmware binary
+# Gen12 sidecar style (BIOS + iLO 7 only):
+ilo7_1.20.00.fwpkg (ZIP, signed)   ← contains ONLY the firmware binary (.bin)
   └── ilo7_1.20.00.bin
 
-ilo7_1.20.00.json                   ← sidecar, NOT part of the signed ZIP
+A66_1.40_01_09_2026.fwpkg (ZIP, signed)   ← BIOS uses .signed.flash inside
+  └── A66_1.40_01_09_2026.signed.flash
+
+ilo7_1.20.00.json / A66_1.40_01_09_2026.json   ← sidecar, NOT part of the signed ZIP
   (description, install notes, supported models, revision history,
    device targets, UpdatableBy, FileList, SHA256, UpgradeRequirements…)
 ```
 
-**Why:** The `.fwpkg` is signed as a whole ZIP blob. In Gen11, any update to `payload.json` (e.g. adding a new supported model, fixing install instructions) required re-signing and re-releasing the entire package — including the unchanged binary. In Gen12, HPE seals only the firmware binary inside the `.fwpkg`. The sidecar `.json` can be updated at any time (new server qualifications, corrected metadata) without touching the signed binary.
+**Why (for BIOS/iLO 7):** The `.fwpkg` is signed as a whole ZIP blob. In Gen11, any update to `payload.json` (e.g. adding a new supported model, fixing install instructions) required re-signing and re-releasing the entire package — including the unchanged binary. In Gen12, HPE seals only the firmware binary inside the `.fwpkg`. The sidecar `.json` can be updated at any time (new server qualifications, corrected metadata) without touching the signed binary.
 
 **Consequences for pcli:**
-- `pcli spp download` must fetch both `{stem}.fwpkg` **and** `{stem}.json` for every package.
-- SHA256 in the SPP catalog covers only the `.fwpkg` — sidecar JSON has no checksum, fetch best-effort.
-- `pcli spp inspect <file.fwpkg>` looks for `{stem}.json` as a sibling file; falls back to embedded `payload.json` for Gen11 packages.
+- `pcli spp download` attempts to fetch `{stem}.json` alongside every `.fwpkg` — best-effort (404 is silently ignored for Gen11-style packages that have no sidecar).
+- SHA256 in the SPP catalog covers only the `.fwpkg` — sidecar JSON has no checksum.
+- `pcli spp inspect <file.fwpkg>` looks for `{stem}.json` as a sibling file first (Gen12 sidecar); falls back to embedded `payload.json` inside the ZIP (Gen11).
 - Gen11 `payload.json` uses **lowercase snake_case keys** (`package`, `installation`, `reboot_required`, description entries use `{lang, x_late}` not `{Lang, Value}`). Gen12 sidecar uses CamelCase.
 - `sdr.py::_fetch_software_ids()` fetches sibling `.json` URL for device matching — already correct.
 

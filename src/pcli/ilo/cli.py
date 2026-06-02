@@ -553,6 +553,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_host(set_dhcp)
     set_dhcp.add_argument("--confirm", action="store_true", help="Skip confirmation prompt")
+    set_dhcp.add_argument(
+        "--reset",
+        action="store_true",
+        help="Reset iLO after enabling DHCP so the change takes effect immediately (current IP will be lost)",
+    )
 
     return parser
 

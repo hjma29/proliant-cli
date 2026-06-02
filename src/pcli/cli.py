@@ -24,6 +24,7 @@ namespaces:
   com          HPE GreenLake / Compute Ops Management (devices, workspaces)
   spp          HPE Service Pack for ProLiant catalog analysis
   oneview      HPE OneView (Synergy & ProLiant fleet management)
+  qs           HPE QuickSpecs browser (list revisions, read specs)
 
 commands:
   update       Download and install the latest pcli release
@@ -40,6 +41,8 @@ examples:
   pcli spp diff gen12 2025.09.01.00 2026.03.00.00  What changed between SPPs?
   pcli oneview list servers                    List all OneView-managed servers
   pcli oneview list firmware                   Fleet firmware inventory via OneView
+  pcli qs list --model dl380gen12              List QuickSpec revisions for DL380 Gen12
+  pcli qs describe a00073551enw               Read the DL380 Gen12 QuickSpec
   pcli update                                  Upgrade pcli to the latest release
 """
 
@@ -51,12 +54,13 @@ Register-ArgumentCompleter -Native -CommandName pcli -ScriptBlock {
     $pos = if ($wordToComplete -eq '') { $t.Count } else { $t.Count - 1 }
     $candidates = @()
     if ($pos -eq 1) {
-        $candidates = @('ilo', 'com', 'spp', 'oneview', 'update')
+        $candidates = @('ilo', 'com', 'spp', 'oneview', 'qs', 'update')
     } elseif ($pos -eq 2) {
         if ($t[1] -eq 'ilo') { $candidates = @('list', 'upgrade', 'init', 'report') }
         elseif ($t[1] -eq 'com') { $candidates = @('login', 'logout', 'list', 'use', 'add', 'report') }
         elseif ($t[1] -eq 'spp') { $candidates = @('list', 'inspect', 'diff') }
         elseif ($t[1] -eq 'oneview') { $candidates = @('list', 'describe', 'report') }
+        elseif ($t[1] -eq 'qs') { $candidates = @('list', 'describe') }
     } elseif ($pos -eq 3) {
         if ($t[1] -eq 'ilo') {
             if ($t[2] -eq 'list') { $candidates = @('firmwares','ilo','network','nic','storage','cpu','memory','com','full','disk-map','serial','update-method') }
@@ -351,6 +355,19 @@ def _dispatch_com(args: list[str]) -> None:
     com_main()
 
 
+def _dispatch_qs(args: list[str]) -> None:
+    try:
+        from pcli.qs.cli import main as qs_main
+    except ImportError as exc:
+        print(
+            f"pcli qs: missing dependencies — install with: pip install pcli[qs]\n({exc})",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    sys.argv = ["pcli qs"] + args
+    qs_main()
+
+
 def _dispatch_oneview(args: list[str]) -> None:
     try:
         from pcli.oneview.cli import main as oneview_main
@@ -396,6 +413,11 @@ def main(argv: list[str] | None = None) -> None:
             _dispatch_oneview(parts[2:])
             return
 
+        if len(parts) >= 2 and parts[1] == "qs":
+            os.environ["_ARGCOMPLETE"] = "2"
+            _dispatch_qs(parts[2:])
+            return
+
         # Top-level: use argparse so argcomplete can offer 'ilo', 'com', 'spp', 'oneview'
         import argparse
         import argcomplete
@@ -406,6 +428,7 @@ def main(argv: list[str] | None = None) -> None:
         sub.add_parser("com",     help="HPE GreenLake / Compute Ops Management")
         sub.add_parser("spp",     help="HPE Service Pack for ProLiant analysis")
         sub.add_parser("oneview", help="HPE OneView fleet management")
+        sub.add_parser("qs",      help="HPE QuickSpecs browser")
         sub.add_parser("update",  help="Upgrade pcli to the latest release")
         argcomplete.autocomplete(parser)
         return  # autocomplete() exits; reaching here means no completion needed
@@ -433,6 +456,8 @@ def main(argv: list[str] | None = None) -> None:
         _dispatch_spp(list(args[1:]))
     elif namespace == "oneview":
         _dispatch_oneview(list(args[1:]))
+    elif namespace == "qs":
+        _dispatch_qs(list(args[1:]))
     elif namespace == "update":
         _run_update()
     else:

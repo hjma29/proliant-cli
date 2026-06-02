@@ -175,8 +175,6 @@ time (new server qualifications, corrected metadata) without touching the signed
   description entries use `{lang, x_late}` not `{Lang, Value}`). Gen12 sidecar uses CamelCase.
 - `sdr.py::_fetch_software_ids()` fetches sibling `.json` URL for device matching — already correct.
 
-`sdr.py::_fetch_software_ids()` already fetches the sibling `.json` URL — correct behavior.
-
 ### pcli ilo get update-method
 
 ```bash

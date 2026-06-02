@@ -26,6 +26,7 @@ _RESOURCE_LIBRARY_URL = (
 _COVEO_ENDPOINT = (
     "https://hewlettpackardproductioniwmg9b9w.org.coveo.com/rest/search/v2"
 )
+_VARIANTS_URL = "https://www.hpe.com/services/hpe/psnow/variants?assetId={asset_id}"
 _COLLATERAL_URL = "https://www.hpe.com/us/en/collaterals/collateral.{docid}.html"
 
 # Cached token — fetched once per process lifetime

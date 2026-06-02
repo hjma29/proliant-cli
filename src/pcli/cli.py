@@ -213,9 +213,9 @@ def _win_add_powershell_completion() -> None:
             if "pcli" in existing and "Register-ArgumentCompleter" in existing:
                 if _POWERSHELL_COMPLETION_BLOCK.strip() in existing:
                     continue  # already up-to-date
-                # Strip old block and rewrite
+                # Strip old block and rewrite (matches both old and new block formats)
                 existing = re.sub(
-                    r"\n# pcli tab completion \(added by pcli\)\nRegister-ArgumentCompleter.*?\n\}",
+                    r"\n# pcli tab completion \(added by pcli\)\n.*?(?=\n[^#\n]|\Z)",
                     "",
                     existing,
                     flags=re.DOTALL,

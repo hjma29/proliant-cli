@@ -131,9 +131,10 @@ def _parse_change_rows(body: str) -> list[list[str]]:
 
     # PDF plain-text format: state-machine parser
     rows: list[list[str]] = []
+    _TRUE_SEP = re.compile(r"^\|[\s\-:|]+$")  # only dashes/spaces, no alpha
     for line in lines:
         line = line.strip()
-        if not line or _SEP_RE.match(line):
+        if not line:
             continue
         if "Date" in line and "Version History" in line:
             continue
@@ -144,13 +145,22 @@ def _parse_change_rows(body: str) -> list[list[str]]:
             rows.append([m.group(1), m.group(2), m.group(3), m.group(4).strip()])
             continue
 
-        # Pipe action row (some PDF tables have these): |   |   | Action | desc |
+        # Pipe rows: either a true separator (skip) or an action row
         if line.startswith("|"):
+            if _TRUE_SEP.match(line):
+                continue
             cells = _parse_md_row(line)
             if len(cells) >= 4 and cells[2] in ("Added", "Changed", "Removed"):
                 rows.append(["", "", cells[2], cells[3]])
-            elif len(cells) == 2:
-                rows.append(["", ""] + cells)
+            elif len(cells) == 2 and cells[0] in ("Added", "Changed", "Removed"):
+                rows.append(["", "", cells[0], cells[1]])
+            elif rows:
+                # Continuation text in a pipe cell — append to last row
+                text = " ".join(c for c in cells if c)
+                if text:
+                    prev = rows[-1][3]
+                    sep = " " if prev and prev[-1] not in ("-", "–", " ") else ""
+                    rows[-1][3] = prev + sep + text
             continue
 
         # Plain action line

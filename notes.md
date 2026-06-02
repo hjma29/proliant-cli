@@ -139,8 +139,42 @@ Confirmed examples:
 - `A66_xxx.fwpkg` (BIOS): `UefiFlashable: true, ResetRequired: true` → **UEFI**
 - `BCM235.1.164.14_BCM957414A4142HC.fwpkg`: `PLDMImage: true` → **UEFI** (PLDM)
 
-**Gen12+ note:** The `.json` sidecar is shipped as a **separate file** alongside the `.fwpkg`
-(not embedded inside the ZIP). HPE's reason: keeps signature integrity.
+**Gen12+ fwpkg structure — sidecar JSON design:**
+
+HPE changed the package structure starting Gen12 to separate the firmware binary from its metadata:
+
+```
+# Gen11 (everything bundled in one ZIP):
+ilo6_174.fwpkg (ZIP, signed)
+  ├── ilo6_174.bin        ← firmware binary
+  ├── payload.json        ← install metadata (embedded)
+  ├── ilo6_174.xml        ← component descriptor
+  └── readme.txt
+
+# Gen12+ (binary sealed, metadata separate):
+ilo7_1.20.00.fwpkg (ZIP, signed)   ← contains ONLY the firmware binary
+  └── ilo7_1.20.00.bin
+
+ilo7_1.20.00.json                   ← sidecar, NOT part of the signed ZIP
+  (description, install notes, supported models, revision history,
+   device targets, UpdatableBy, FileList, SHA256, UpgradeRequirements…)
+```
+
+**Why:** The `.fwpkg` is signed as a whole ZIP blob. In Gen11, any update to `payload.json`
+(e.g. adding a new supported model, fixing install instructions) required re-signing and
+re-releasing the entire package — including the unchanged binary. In Gen12, HPE seals
+only the firmware binary inside the `.fwpkg`. The sidecar `.json` can be updated at any
+time (new server qualifications, corrected metadata) without touching the signed binary.
+
+**Consequences for pcli:**
+- `pcli spp download` must fetch both `{stem}.fwpkg` **and** `{stem}.json` for every package.
+- SHA256 in the SPP catalog covers only the `.fwpkg` — sidecar JSON has no checksum, fetch best-effort.
+- `pcli spp inspect <file.fwpkg>` looks for `{stem}.json` as a sibling file; falls back to
+  embedded `payload.json` for Gen11 packages.
+- Gen11 `payload.json` uses **lowercase snake_case keys** (`package`, `installation`, `reboot_required`,
+  description entries use `{lang, x_late}` not `{Lang, Value}`). Gen12 sidecar uses CamelCase.
+- `sdr.py::_fetch_software_ids()` fetches sibling `.json` URL for device matching — already correct.
+
 `sdr.py::_fetch_software_ids()` already fetches the sibling `.json` URL — correct behavior.
 
 ### pcli ilo get update-method

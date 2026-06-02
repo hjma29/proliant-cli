@@ -128,8 +128,15 @@ pcli com get servers  (planned)
 - PCIe variant of same chip supports PLDM OOB.
 
 **12. Gen12+ `.json` sidecar is separate from `.fwpkg` (not embedded in ZIP)**
-- HPE ships `{stem}.json` as a separate file alongside `{stem}.fwpkg` to preserve signature integrity.
+- Gen11: everything bundled in one signed ZIP (`payload.json`, `.xml`, `readme.txt` + binary).
+- Gen12+: ZIP contains **only** the firmware binary. `{stem}.json` ships as a separate sidecar.
+- **Reason:** The `.fwpkg` is signed as a whole ZIP blob. Separating the metadata lets HPE update
+  supported-model lists, install notes, and release notes without re-signing the firmware binary.
+- SHA256 in SPP catalog covers only the `.fwpkg` — sidecar JSON has no checksum (fetch best-effort).
+- Gen11 `payload.json` uses **snake_case keys** and `{lang, x_late}` value entries.
+  Gen12 sidecar uses **CamelCase keys** and `{Lang, Value}` entries.
 - `sdr.py::_fetch_software_ids()` fetches sibling `.json` URL — already correct.
+- `pcli spp download` fetches both `{stem}.fwpkg` and `{stem}.json` for every package.
 - Never assume JSON is inside the fwpkg ZIP for Gen12.
 
 **13. Autocomplete delegation: set `_ARGCOMPLETE=2` before dispatching sub-CLIs**

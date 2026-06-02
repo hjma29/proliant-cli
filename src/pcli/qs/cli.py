@@ -20,7 +20,7 @@ from rich.markdown import Markdown
 from rich.rule import Rule
 from rich import box
 
-from pcli.qs.client import QSEntry, search_quickspecs, fetch_quickspec_markdown, filter_section
+from pcli.qs.client import QSEntry, search_quickspecs, fetch_quickspec_markdown, filter_section, fetch_quickspec_versions
 
 console = Console()
 
@@ -119,6 +119,15 @@ def _cmd_list(args: argparse.Namespace) -> None:
         console.print("[yellow]No results found.[/yellow]")
         return
 
+    # Deduplicate by doc_id — Coveo indexes the same doc multiple times
+    seen: set[str] = set()
+    unique: list[QSEntry] = []
+    for e in entries:
+        if e.doc_id not in seen:
+            seen.add(e.doc_id)
+            unique.append(e)
+
+    # Fetch real version history from the HPE variants API for each doc
     t = Table(
         box=box.SIMPLE_HEAD,
         show_header=True,
@@ -126,11 +135,21 @@ def _cmd_list(args: argparse.Namespace) -> None:
         padding=(0, 1),
     )
     t.add_column("Doc ID", style="green", no_wrap=True)
-    t.add_column("Last Modified", no_wrap=True)
+    t.add_column("Version", justify="right", no_wrap=True)
+    t.add_column("Date", no_wrap=True)
     t.add_column("Title")
 
-    for e in entries:
-        t.add_row(e.doc_id, _fmt_date(e.last_modified), e.title)
+    for e in unique:
+        try:
+            vers = fetch_quickspec_versions(e.doc_id, title=e.title, n=args.count)
+        except Exception:
+            vers = []
+        if vers:
+            for v in vers:
+                t.add_row(v.doc_id, v.version_num, v.date, v.title)
+        else:
+            # Fallback: show what Coveo gave us
+            t.add_row(e.doc_id, "", _fmt_date(e.last_modified), e.title)
 
     console.print(t)
     console.print(

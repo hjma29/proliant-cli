@@ -188,56 +188,58 @@ def _parse_qs_date(date_str: str) -> str:
 
 def fetch_quickspec_versions(doc_id: str, title: str = "", n: int = 3) -> list[QSVersion]:
     """
-    Extract the internal version history from the 'Summary of Changes' table
-    of the QuickSpec HTML.  Returns up to *n* most-recent versions.
+    Fetch version history for *doc_id* from the HPE psnow variants API.
+    Returns up to *n* most-recent versions (newest first).
+
+    The variants endpoint is the same source that powers the version dropdown
+    on the HPE collateral page — no authentication required.
     """
-    try:
-        from bs4 import BeautifulSoup
-    except ImportError as exc:
-        raise RuntimeError(
-            f"Missing dependency: {exc}\n"
-            "Install with: pip install beautifulsoup4"
-        ) from exc
-
-    html = _fetch_collateral_html(doc_id)
-    soup = BeautifulSoup(html, "html.parser")
-
-    # Find the "Summary of Changes" h3 heading
-    soc_h3 = next(
-        (h for h in soup.find_all("h3")
-         if "summary of changes" in h.get_text(strip=True).lower()),
-        None,
+    # doc_id like "a00073551enw" → asset_id "a00073551:enw" (colon before last 3 chars)
+    asset_id = doc_id[:-3] + ":" + doc_id[-3:]
+    url = _VARIANTS_URL.format(asset_id=asset_id)
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (pcli-qs/1.0)",
+            "Referer": _COLLATERAL_URL.format(docid=doc_id),
+        },
     )
-    if not soc_h3:
-        return []
-
-    table = soc_h3.find_next("table")
-    if not table:
-        return []
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        data = json.loads(resp.read())
 
     versions: list[QSVersion] = []
-    for row in table.find_all("tr"):
-        cells = row.find_all(["td", "th"])
-        if len(cells) < 2:
-            continue
-        date_text = cells[0].get_text(strip=True)
-        ver_text = cells[1].get_text(strip=True)
-        # Skip header row and continuation rows (no date in col 0)
-        if not re.match(r"\d{1,2}[\s\-][A-Za-z]{3}[\s\-]\d{4}", date_text):
-            continue
-        ver_m = re.search(r"Version\s+(\d+)", ver_text, re.IGNORECASE)
+    for v in data.get("versions", []):
+        label = v.get("label", "")           # "Version 16 - June 1, 2026"
+        ver_m = re.match(r"Version\s+(\d+)\s+-\s+(.+)", label, re.IGNORECASE)
         if not ver_m:
             continue
         versions.append(QSVersion(
             doc_id=doc_id,
             title=title,
             version_num=ver_m.group(1),
-            date=_parse_qs_date(date_text),
+            date=_parse_long_date(ver_m.group(2).strip()),
         ))
         if len(versions) >= n:
             break
 
     return versions
+
+
+_MONTH_LONG = {
+    "january": "01", "february": "02", "march": "03", "april": "04",
+    "may": "05", "june": "06", "july": "07", "august": "08",
+    "september": "09", "october": "10", "november": "11", "december": "12",
+}
+
+
+def _parse_long_date(date_str: str) -> str:
+    """Convert 'June 1, 2026' → '2026-06-01'."""
+    m = re.match(r"([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})", date_str.strip())
+    if m:
+        mon, day, year = m.groups()
+        mon_num = _MONTH_LONG.get(mon.lower(), "??")
+        return f"{year}-{mon_num}-{day.zfill(2)}"
+    return date_str
 
 
 def fetch_quickspec_markdown(doc_id: str) -> tuple[str, list[str]]:

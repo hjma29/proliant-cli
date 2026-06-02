@@ -20,16 +20,16 @@ if TYPE_CHECKING:
 def parse_firmware_inventory(raw_firmware: dict) -> list[dict]:
     """Normalize /rest/server-hardware/{id}/firmware response.
 
-    Returns list of component dicts with keys:
-      component_name, component_version, component_location, component_key
+    OneView API v7000+ uses 'components' key (not 'serverFirmwareInventory').
+    Each component has: componentName, componentVersion, componentLocation, componentKey.
     """
-    inventory = raw_firmware.get("serverFirmwareInventory", [])
+    inventory = raw_firmware.get("components", [])
     result = []
     for item in inventory:
         result.append({
             "name":     item.get("componentName", ""),
             "version":  item.get("componentVersion", ""),
-            "location": item.get("componentLocation", ""),
+            "location": item.get("componentLocation", "").strip(),
             "key":      item.get("componentKey", ""),
         })
     return sorted(result, key=lambda x: x["name"].lower())
@@ -55,7 +55,7 @@ async def get_fleet_firmware(client: "OneViewClient") -> list[dict]:
     results = []
     for member in members:
         results.append({
-            "server_name": member.get("serverHardwareName", ""),
+            "server_name": member.get("serverName", ""),
             "server_uri":  member.get("serverHardwareUri", ""),
             "firmware":    parse_firmware_inventory(member),
         })

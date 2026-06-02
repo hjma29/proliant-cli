@@ -85,7 +85,7 @@ def search_quickspecs(model: str, count: int = 10) -> list[QSEntry]:
     token = fetch_coveo_token()
     payload = json.dumps({
         "q": query,
-        "numberOfResults": count,
+        "numberOfResults": count * 3,  # fetch more to account for filtering
         "sortCriteria": "@kmdoclastmod descending",
     }).encode()
     req = urllib.request.Request(
@@ -106,13 +106,20 @@ def search_quickspecs(model: str, count: int = 10) -> list[QSEntry]:
         doc_id = raw.get("kmdocid", "")
         if not doc_id:
             continue
+        # Skip doc IDs that reference sub-sections (contain ||)
+        if "||" in doc_id:
+            continue
+        title = item.get("title", raw.get("kmdocfulltitle", "")).strip()
+        # Only keep actual QuickSpec documents
+        if "quickspec" not in title.lower():
+            continue
         entries.append(QSEntry(
             doc_id=doc_id,
-            title=item.get("title", raw.get("kmdocfulltitle", "")).strip(),
+            title=title,
             version=str(raw.get("kmdocversion", "")),
             last_modified=raw.get("kmdoclastmod", ""),
         ))
-    return entries
+    return entries[:count]
 
 
 # ── Content fetch ──────────────────────────────────────────────────────────────

@@ -583,6 +583,10 @@ async def _async_main(args: argparse.Namespace) -> None:
     elif args.command == "report":
         if args.what in ("memory", "mem"):
             await _run_report_memory(args)
+        elif args.what == "cpu":
+            await _run_report_cpu(args)
+        elif args.what == "gpu":
+            await _run_report_gpu(args)
     elif args.command == "set":
         if args.set_action == "dhcp":
             await _run_set_dhcp(args)
@@ -718,6 +722,92 @@ async def _run_set_dhcp(args: argparse.Namespace) -> None:
                     print(f"[{name}] ✓ DHCP staged. Run with --reset to apply (requires iLO restart).")
         except Exception as exc:
             print(f"[{name}] ERROR: {exc}", file=sys.stderr)
+
+
+async def _run_report_cpu(args: argparse.Namespace) -> None:
+    from rich.console import Console
+    from rich.table import Table
+    from rich import box as rich_box
+
+    console = Console()
+    hosts = _load_hosts_or_exit(getattr(args, "host", None))
+
+    with console.status("[dim]Fetching CPU inventory across fleet…[/dim]"):
+        results = await _run_parallel_async(hosts, inventory.fetch_cpu_report_data)
+
+    table = Table(
+        title="CPU Inventory",
+        box=rich_box.ROUNDED,
+        show_header=True,
+        header_style="bold cyan",
+    )
+    table.add_column("Server",  min_width=16, no_wrap=True)
+    table.add_column("Socket",  no_wrap=True)
+    table.add_column("Model",   min_width=30)
+    table.add_column("Cores",   justify="right", no_wrap=True)
+    table.add_column("Threads", justify="right", no_wrap=True)
+    table.add_column("Max GHz", justify="right", no_wrap=True)
+
+    for server_name, error, cpus in results:
+        if error:
+            table.add_row(server_name, "—", f"[yellow]{error}[/yellow]", "—", "—", "—")
+            continue
+        for i, cpu in enumerate(cpus):
+            mhz = cpu["speed_mhz"]
+            ghz = f"{mhz / 1000:.2f}" if isinstance(mhz, (int, float)) else "—"
+            table.add_row(
+                server_name if i == 0 else "",
+                str(cpu["socket"]),
+                cpu["model"],
+                str(cpu["cores"]),
+                str(cpu["threads"]),
+                ghz,
+            )
+
+    console.print(table)
+
+
+async def _run_report_gpu(args: argparse.Namespace) -> None:
+    from rich.console import Console
+    from rich.table import Table
+    from rich import box as rich_box
+
+    console = Console()
+    hosts = _load_hosts_or_exit(getattr(args, "host", None))
+
+    with console.status("[dim]Fetching GPU inventory across fleet…[/dim]"):
+        results = await _run_parallel_async(hosts, inventory.fetch_gpu_report_data)
+
+    table = Table(
+        title="GPU Inventory",
+        box=rich_box.ROUNDED,
+        show_header=True,
+        header_style="bold cyan",
+    )
+    table.add_column("Server",     min_width=16, no_wrap=True)
+    table.add_column("GPU",        min_width=30)
+    table.add_column("Part/Model", min_width=20)
+
+    has_gpu = False
+    for server_name, error, gpus in results:
+        if error:
+            table.add_row(server_name, f"[yellow]{error}[/yellow]", "—")
+            continue
+        if not gpus:
+            continue
+        has_gpu = True
+        for i, gpu in enumerate(gpus):
+            table.add_row(
+                server_name if i == 0 else "",
+                gpu["name"],
+                gpu["model"],
+            )
+
+    if not has_gpu:
+        console.print("[yellow]No GPUs found across fleet.[/yellow]")
+        return
+
+    console.print(table)
 
 
 async def _run_get(args: argparse.Namespace) -> None:

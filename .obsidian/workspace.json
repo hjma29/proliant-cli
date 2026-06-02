@@ -185,6 +185,7 @@
   },
   "active": "727093c4cfd7a0ba",
   "lastOpenFiles": [
+    "src/pcli/qs/client.py",
     "src/pcli/qs/__init__.py",
     "src/pcli/qs",
     "src/pcli/com/inventory.py",
@@ -195,7 +196,6 @@
     "src/pcli/oneview/firmware.py",
     "src/pcli/oneview/config.py",
     "src/pcli/oneview/client.py",
-    "src/pcli/oneview/__init__.py",
     "README.md"
   ]
 }

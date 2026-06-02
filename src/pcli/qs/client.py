@@ -11,10 +11,12 @@ from __future__ import annotations
 import json
 import re
 import tempfile
+import time
 import os
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 
@@ -42,6 +44,46 @@ _coveo_token_cache: Optional[str] = None
 # Raw HTML cache keyed by doc_id — shared between fetch_quickspec_versions and
 # fetch_quickspec_markdown so a list → describe workflow only downloads once
 _html_cache: dict[str, str] = {}
+
+# ── Disk cache ────────────────────────────────────────────────────────────────
+
+_CACHE_TTL_LATEST = 7 * 24 * 3600   # 7 days for "latest" content (may change)
+# Versioned content never changes — cached indefinitely
+
+
+def _cache_dir() -> Path:
+    base = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    d = base / "pcli" / "qs"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _qs_cache_read(doc_id: str, ver: str) -> "tuple[str, list[str]] | None":
+    """Return (markdown, sections) from disk cache, or None on miss/expiry."""
+    path = _cache_dir() / f"{doc_id}_{ver or 'latest'}.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        # Latest content expires after TTL; versioned content never expires
+        if not ver and (time.time() - data.get("cached_at", 0)) > _CACHE_TTL_LATEST:
+            return None
+        return data["markdown"], data["sections"]
+    except Exception:
+        return None
+
+
+def _qs_cache_write(doc_id: str, ver: str, markdown: str, sections: list) -> None:
+    """Persist (markdown, sections) to disk cache silently."""
+    path = _cache_dir() / f"{doc_id}_{ver or 'latest'}.json"
+    try:
+        path.write_text(
+            json.dumps({"markdown": markdown, "sections": sections, "cached_at": time.time()}),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass  # cache write failure is non-fatal
+
 
 _MONTH_ABBR = {
     "jan": "01", "feb": "02", "mar": "03", "apr": "04",
@@ -268,7 +310,12 @@ def _fetch_from_psnow_pdf(doc_id: str, ver: str = "") -> tuple[str, list[str]]:
     Download the QuickSpec PDF and convert to markdown.
     If *ver* is given, scrapes the versioned psnow page to get the right download URL.
     Extracts sections by scanning for known QuickSpec section title strings.
+    Results are cached to disk (~/.cache/pcli/qs/).
     """
+    cached = _qs_cache_read(doc_id, ver)
+    if cached is not None:
+        return cached
+
     try:
         from markitdown import MarkItDown
     except ImportError as exc:
@@ -352,10 +399,8 @@ def _fetch_from_psnow_pdf(doc_id: str, ver: str = "") -> tuple[str, list[str]]:
         )
         text = pattern.sub(r"### \1", text)
 
-    return text, sections
-
-
-def fetch_quickspec_markdown(doc_id: str, ver: str = "") -> tuple[str, list[str]]:
+    _qs_cache_write(doc_id, ver, text, sections)
+    return text, sections(doc_id: str, ver: str = "") -> tuple[str, list[str]]:
     """
     Fetch the HPE collateral HTML for *doc_id* and return:
       (markdown_text, list_of_section_names)

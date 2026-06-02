@@ -117,6 +117,11 @@ def search_quickspecs(model: str, count: int = 10) -> list[QSEntry]:
     gen_filter = re.search(r"Gen\d+", q)
     gen_token = gen_filter.group(0).lower() if gen_filter else None  # "gen12"
 
+    # Extract model prefix for strict title filtering (e.g. "DL110", "DL380A")
+    # q is like "HPE ProLiant DL110 Gen12" → model_token = "dl110"
+    model_token_m = re.search(r"\b(DL|ML|SY|XL|BL|CL)\d+[A-Z]?\b", q)
+    model_token = model_token_m.group(0).lower() if model_token_m else None  # "dl110"
+
     token = fetch_coveo_token()
     payload = json.dumps({
         "q": query,
@@ -151,6 +156,9 @@ def search_quickspecs(model: str, count: int = 10) -> list[QSEntry]:
             continue
         # Strict generation filter: skip if title mentions a different generation
         if gen_token and gen_token not in title.lower():
+            continue
+        # Strict model filter: skip if title doesn't contain the model number
+        if model_token and model_token not in title.lower():
             continue
         seen_keys.add((doc_id, version))
         entries.append(QSEntry(

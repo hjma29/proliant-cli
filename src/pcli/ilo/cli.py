@@ -542,6 +542,18 @@ def _build_parser() -> argparse.ArgumentParser:
     rep_mem = report_sub.add_parser("memory", aliases=["mem"], help="Memory DIMM part-number breakdown")
     _add_host(rep_mem)
 
+    set_p = subparsers.add_parser("set", help="Change iLO configuration")
+    set_sub = set_p.add_subparsers(dest="set_action", metavar="ACTION")
+    set_sub.required = True
+    set_dhcp = set_sub.add_parser(
+        "dhcp",
+        help="Switch iLO management NIC from static IP to DHCP",
+        description="Patch the iLO EthernetInterface to enable DHCPv4. "
+                    "The iLO will reboot its network stack and obtain a new IP from DHCP.",
+    )
+    _add_host(set_dhcp)
+    set_dhcp.add_argument("--confirm", action="store_true", help="Skip confirmation prompt")
+
     return parser
 
 

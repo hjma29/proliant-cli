@@ -25,6 +25,7 @@ namespaces:
   spp          HPE Service Pack for ProLiant catalog analysis
   oneview      HPE OneView (Synergy & ProLiant fleet management)
   qs           HPE QuickSpecs browser (list revisions, read specs)
+  config       View and manage pcli configuration
 
 commands:
   update       Download and install the latest pcli release
@@ -43,6 +44,7 @@ examples:
   pcli oneview list firmware                   Fleet firmware inventory via OneView
   pcli qs list --model dl380gen12              List QuickSpec revisions for DL380 Gen12
   pcli qs describe a00073551enw               Read the DL380 Gen12 QuickSpec
+  pcli config list inventory                   Show iLO hosts and OneView in hosts-ilo.ini
   pcli update                                  Upgrade pcli to the latest release
 """
 
@@ -54,13 +56,14 @@ Register-ArgumentCompleter -Native -CommandName pcli -ScriptBlock {
     $pos = if ($wordToComplete -eq '') { $t.Count } else { $t.Count - 1 }
     $candidates = @()
     if ($pos -eq 1) {
-        $candidates = @('ilo', 'com', 'spp', 'oneview', 'qs', 'update')
+        $candidates = @('ilo', 'com', 'spp', 'oneview', 'qs', 'config', 'update')
     } elseif ($pos -eq 2) {
         if ($t[1] -eq 'ilo') { $candidates = @('list', 'upgrade', 'init', 'report') }
         elseif ($t[1] -eq 'com') { $candidates = @('login', 'logout', 'list', 'use', 'add', 'report') }
         elseif ($t[1] -eq 'spp') { $candidates = @('list', 'inspect', 'diff') }
         elseif ($t[1] -eq 'oneview') { $candidates = @('list', 'describe', 'report') }
         elseif ($t[1] -eq 'qs') { $candidates = @('list', 'describe') }
+        elseif ($t[1] -eq 'config') { $candidates = @('list') }
     } elseif ($pos -eq 3) {
         if ($t[1] -eq 'ilo') {
             if ($t[2] -eq 'list') { $candidates = @('firmwares','ilo','network','nic','storage','cpu','memory','com','full','disk-map','serial','update-method') }
@@ -75,6 +78,8 @@ Register-ArgumentCompleter -Native -CommandName pcli -ScriptBlock {
             if ($t[2] -eq 'list') { $candidates = @('servers','firmware','networks','networksets','uplinksets','server-profiles') }
             elseif ($t[2] -eq 'describe') { $candidates = @('uplinkset','networkset','server-profile') }
             elseif ($t[2] -eq 'report') { $candidates = @('memory') }
+        } elseif ($t[1] -eq 'config') {
+            if ($t[2] -eq 'list') { $candidates = @('inventory') }
         }
     }
     $candidates | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
@@ -379,6 +384,12 @@ def _dispatch_oneview(args: list[str]) -> None:
         sys.exit(1)
     sys.argv = ["pcli oneview"] + args
     oneview_main()
+
+
+def _dispatch_config(args: list[str]) -> None:
+    from pcli.config.cli import main as config_main
+    sys.argv = ["pcli config"] + args
+    config_main()
 
 
 def main(argv: list[str] | None = None) -> None:

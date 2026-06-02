@@ -574,6 +574,9 @@ async def _async_main(args: argparse.Namespace) -> None:
     elif args.command == "report":
         if args.what in ("memory", "mem"):
             await _run_report_memory(args)
+    elif args.command == "set":
+        if args.set_action == "dhcp":
+            await _run_set_dhcp(args)
 
 
 def _load_hosts_or_exit(name: str | None) -> list[dict]:
@@ -623,6 +626,56 @@ def _run_init() -> None:
     print(f"Created: {dest}")
     print("Edit it to fill in your server addresses and credentials.")
     print("\nThen try:  pcli ilo list firmwares")
+
+
+async def _run_set_dhcp(args: argparse.Namespace) -> None:
+    hosts = _load_hosts_or_exit(getattr(args, "host", None))
+    if len(hosts) > 1 and not getattr(args, "confirm", False):
+        print(f"This will switch {len(hosts)} iLO(s) from static IP to DHCP.")
+        print("Re-run with --confirm to proceed, or use --host <name> to target one server.")
+        sys.exit(1)
+
+    for host in hosts:
+        name = host["name"]
+        try:
+            async with ilo_session(host) as client:
+                # Check current state first
+                data = await client.get("/redfish/v1/Managers/1/EthernetInterfaces/1")
+                ni = (data.get("IPv4Addresses") or [{}])[0]
+                origin = ni.get("AddressOrigin", "Unknown")
+                current_ip = ni.get("Address", "?")
+
+                if origin == "DHCP":
+                    print(f"[{name}] Already using DHCP (current IP: {current_ip}) — skipping.")
+                    continue
+
+                if not getattr(args, "confirm", False):
+                    ans = input(
+                        f"[{name}] Current IP: {current_ip} (Static). "
+                        f"Switch to DHCP? The iLO will get a new IP. [y/N] "
+                    )
+                    if ans.strip().lower() != "y":
+                        print(f"[{name}] Skipped.")
+                        continue
+
+                payload = {
+                    "DHCPv4": {
+                        "DHCPEnabled": True,
+                        "UseDNSServers": True,
+                        "UseDomainName": True,
+                        "UseGateway": True,
+                        "UseNTPServers": True,
+                        "UseStaticRoutes": True,
+                    }
+                }
+                result = await client.patch("/redfish/v1/Managers/1/EthernetInterfaces/1", payload)
+                if "error" in result:
+                    msg = result["error"].get("message", str(result["error"]))
+                    print(f"[{name}] ERROR from iLO: {msg}", file=sys.stderr)
+                else:
+                    print(f"[{name}] ✓ DHCP enabled. iLO will obtain a new IP shortly.")
+        except Exception as exc:
+            print(f"[{name}] ERROR: {exc}", file=sys.stderr)
 
 
 async def _run_get(args: argparse.Namespace) -> None:

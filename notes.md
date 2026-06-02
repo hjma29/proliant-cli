@@ -13,6 +13,7 @@
 - [3. Firmware Update Methods — BMC / UEFI / OS](#3-firmware-update-methods--bmc--uefi--os)
   - [How the Classification Works](#how-the-classification-works)
   - [payload.json Inside fwpkg — The Source of Truth](#payloadjson-inside-fwpkg--the-source-of-truth)
+  - [pcli spp inspect — Output Sections](#pcli-spp-inspect--output-sections)
   - [SPP Catalog Composition](#spp-catalog-composition)
   - [pcli ilo get update-method](#pcli-ilo-get-update-method)
 - [4. COM Firmware Update Mechanism](#4-com-firmware-update-mechanism)
@@ -173,6 +174,61 @@ ilo7_1.20.00.json / A66_1.40_01_09_2026.json   ← sidecar, NOT part of the sign
 - `pcli spp inspect <file.fwpkg>` looks for `{stem}.json` as a sibling file first (Gen12 sidecar); falls back to embedded `payload.json` inside the ZIP (Gen11).
 - Gen11 `payload.json` uses **lowercase snake_case keys** (`package`, `installation`, `reboot_required`, description entries use `{lang, x_late}` not `{Lang, Value}`). Gen12 sidecar uses CamelCase.
 - `sdr.py::_fetch_software_ids()` fetches sibling `.json` URL for device matching — already correct.
+
+### pcli spp inspect — Output Sections
+
+`pcli spp inspect <file.fwpkg>` shows the following sections in order. Sources marked **(sidecar)** come from `{stem}.json`; **(zip)** means read directly from inside the fwpkg ZIP; **(catalog)** means passed in from `metadata.json` during `pcli spp inspect gen12 <version> <file>`.
+
+#### Header line
+Source: sidecar `Package.Files[0]` + sidecar `Package.UpgradeRequirements` + sidecar `Package.Installation.RebootRequired`
+
+```
+ilo7_1.20.00.fwpkg  64.0 MB  ✓ SHA256 verified
+  Recommended  No reboot
+  This component provides updated iLO firmware…  (first 300 chars of Description)
+```
+
+| Field | JSON key |
+|---|---|
+| Filename + size | filesystem stat |
+| SHA256 badge | catalog `SHA256Sum` vs file hash |
+| Recommended / Critical / Optional | `Package.UpgradeRequirements` |
+| Reboot required / No reboot | `Package.Installation.RebootRequired` |
+| Description excerpt | `Package.Description[lang=en]` |
+
+#### Files inside package
+Source: sidecar `Package.Files[0].FileList[]` (preferred); falls back to ZIP directory listing.
+
+Shows every file inside the fwpkg ZIP with size and type label. For Gen12 sidecar-style packages this will be just one entry (`.bin` or `.signed.flash`). For Gen11 embedded-style it will show all 3–4 files including `payload.json`, `.xml`, `readme.txt`.
+
+#### Flash Properties
+Source: sidecar (or embedded) `Devices.Device[]` + `FirmwareImages[0]` + top-level `UpdatableBy`.
+
+| Column | JSON key |
+|---|---|
+| Target Device | `Device.DeviceName` |
+| Duration | `FirmwareImages[0].InstallDurationSec` |
+| Reboot | `FirmwareImages[0].ResetRequired` |
+| Direct Flash | `FirmwareImages[0].DirectFlashOK` |
+| PLDM | `FirmwareImages[0].PLDMImage` |
+| Update Via | top-level `UpdatableBy[]` → mapped to "iLO (BMC)" / "UEFI" / "OS Agent" |
+
+One row per unique `DeviceName` (iLO 7 has 6 device entries, deduplicated to 1).
+
+#### Release Notes
+Source: sidecar `Package.RevisionHistory[0].Enhancements` + `.BugFixes` (HTML, stripped).
+
+Shows the most recent version's enhancements and bug fix notes. Skipped if empty.
+
+#### Installation Notes
+Source: sidecar `Package.InstallationNotes[lang=en]` (HTML, stripped).
+
+For iLO 7: iLOrest `flashfwpkg` command examples (remote + localhost). For BIOS: iLOrest command. Only shown for Gen12 sidecar packages; Gen11 packages use Readme instead.
+
+#### Readme
+Source: `readme.txt` embedded in the fwpkg ZIP (Gen11 only).
+
+Only shown when there are no `InstallationNotes` from sidecar (i.e., Gen11 packages). Truncated to first 60 lines.
 
 ### SPP Catalog Composition
 

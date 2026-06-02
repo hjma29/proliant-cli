@@ -380,6 +380,30 @@ examples:
         help="List available section names, then exit",
     )
 
+    # ── diff ──────────────────────────────────────────────────────────────────
+    p_diff = sub.add_parser("diff", help="Compare two versions of a QuickSpec")
+    p_diff.add_argument(
+        "--model", "-m",
+        required=True,
+        metavar="MODEL",
+        help="Server model, e.g. dl380gen12, 'DL360 Gen11'",
+    )
+    p_diff.add_argument(
+        "--v1",
+        metavar="N",
+        help="Older version number (default: second-latest)",
+    )
+    p_diff.add_argument(
+        "--v2",
+        metavar="N",
+        help="Newer version number (default: latest)",
+    )
+    p_diff.add_argument(
+        "--section", "-s",
+        metavar="SECTION",
+        help="Show detailed line diff for this section only",
+    )
+
     return p
 
 

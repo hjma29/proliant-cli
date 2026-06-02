@@ -56,7 +56,7 @@ Register-ArgumentCompleter -Native -CommandName pcli -ScriptBlock {
         if ($t[1] -eq 'ilo') { $candidates = @('list', 'upgrade', 'init') }
         elseif ($t[1] -eq 'com') { $candidates = @('login', 'logout', 'list', 'use', 'add') }
         elseif ($t[1] -eq 'spp') { $candidates = @('list', 'inspect', 'diff') }
-        elseif ($t[1] -eq 'oneview') { $candidates = @('servers', 'firmware') }
+        elseif ($t[1] -eq 'oneview') { $candidates = @('list') }
     } elseif ($pos -eq 3) {
         if ($t[1] -eq 'ilo') {
             if ($t[2] -eq 'list') { $candidates = @('firmwares','ilo','network','nic','storage','cpu','memory','com','full','disk-map','serial','update-method') }
@@ -66,8 +66,7 @@ Register-ArgumentCompleter -Native -CommandName pcli -ScriptBlock {
             elseif ($t[2] -eq 'use') { $candidates = @('workspace') }
             elseif ($t[2] -eq 'add') { $candidates = @('device') }
         } elseif ($t[1] -eq 'oneview') {
-            if ($t[2] -eq 'servers') { $candidates = @('list') }
-            elseif ($t[2] -eq 'firmware') { $candidates = @('list') }
+            if ($t[2] -eq 'list') { $candidates = @('servers','firmware') }
         }
     }
     $candidates | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {

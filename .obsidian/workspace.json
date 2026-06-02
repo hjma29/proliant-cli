@@ -165,12 +165,12 @@
               "title": "Outline of notes"
             }
           }
-        ]
+        ],
+        "currentTab": 4
       }
     ],
     "direction": "horizontal",
-    "width": 300,
-    "collapsed": true
+    "width": 472.5
   },
   "left-ribbon": {
     "hiddenItems": {
@@ -183,7 +183,7 @@
       "bases:Create new base": false
     }
   },
-  "active": "727093c4cfd7a0ba",
+  "active": "6c919976c148836a",
   "lastOpenFiles": [
     "README.md"
   ]

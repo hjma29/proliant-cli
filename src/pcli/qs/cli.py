@@ -323,7 +323,17 @@ def _cmd_describe(args: argparse.Namespace) -> None:
 
 # ── diff ──────────────────────────────────────────────────────────────────────
 
-def _section_map(markdown: str, sections: list[str]) -> dict[str, str]:
+_QS_SECTIONS = [
+    "Summary of Changes",
+    "Overview",
+    "Standard Features",
+    "Configuration Information",
+    "Core Options",
+    "Additional Options",
+    "Service and Support",
+]
+
+
     """Return {section_name: body_text} for all sections."""
     return {s: filter_section(markdown, s) for s in sections}
 
@@ -497,6 +507,7 @@ examples:
     p_desc.add_argument(
         "--section", "-s",
         metavar="SECTION",
+        choices=_QS_SECTIONS,
         help="Show only this section, e.g. 'Standard Features'",
     )
     p_desc.add_argument(
@@ -526,6 +537,7 @@ examples:
     p_diff.add_argument(
         "--section", "-s",
         metavar="SECTION",
+        choices=_QS_SECTIONS,
         help="Show detailed line diff for this section only",
     )
 
@@ -536,6 +548,11 @@ examples:
 
 def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
+    try:
+        import argcomplete
+        argcomplete.autocomplete(parser)
+    except ImportError:
+        pass
     args = parser.parse_args(argv)
 
     if not args.cmd:

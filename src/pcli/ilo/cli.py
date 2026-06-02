@@ -789,9 +789,10 @@ async def _run_report_gpu(args: argparse.Namespace) -> None:
     table.add_column("Part/Model", min_width=20)
 
     has_gpu = False
+    errors = []
     for server_name, error, gpus in results:
         if error:
-            table.add_row(server_name, f"[yellow]{error}[/yellow]", "—")
+            errors.append(server_name)
             continue
         if not gpus:
             continue
@@ -808,6 +809,8 @@ async def _run_report_gpu(args: argparse.Namespace) -> None:
         return
 
     console.print(table)
+    if errors:
+        console.print(f"[dim]Skipped (unreachable/unsupported): {', '.join(errors)}[/dim]")
 
 
 async def _run_get(args: argparse.Namespace) -> None:

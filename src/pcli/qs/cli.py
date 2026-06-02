@@ -94,7 +94,12 @@ def _render_section_body(body: str) -> None:
 
 
 def _parse_change_rows(body: str) -> list[list[str]]:
-    """Parse Summary of Changes markdown table into [date, version, action, description] rows."""
+    """Parse Summary of Changes markdown table into [date, version, action, description] rows.
+
+    The HTML-converted markdown has two row shapes:
+      Full row:         | date | version | action | desc |  → 4 cells
+      Continuation row: | action | desc |              → 2 cells (no date/version)
+    """
     lines = body.splitlines()
     table_lines = [ln for ln in lines if ln.startswith("|") and not _SEP_RE.match(ln)]
     if len(table_lines) < 2:
@@ -102,8 +107,14 @@ def _parse_change_rows(body: str) -> list[list[str]]:
     rows = []
     for ln in table_lines[1:]:  # skip header row
         cells = _parse_md_row(ln)
-        padded = (cells + [""] * 4)[:4]
-        rows.append(padded)
+        if len(cells) >= 4:
+            rows.append(cells[:4])
+        elif len(cells) == 2:
+            # Continuation: [action, desc]
+            rows.append(["", ""] + cells)
+        elif len(cells) == 3:
+            # Rare: [action, desc_part1, desc_part2] — join description
+            rows.append(["", "", cells[0], " ".join(cells[1:])])
     return rows
 
 

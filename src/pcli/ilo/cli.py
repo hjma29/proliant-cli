@@ -652,47 +652,56 @@ async def _run_set_dhcp(args: argparse.Namespace) -> None:
                 origin = ni.get("AddressOrigin", "Unknown")
                 current_ip = ni.get("Address", "?")
 
-                if origin == "DHCP":
+                if origin == "DHCP" and current_ip != "0.0.0.0":
                     print(f"[{name}] Already using DHCP (current IP: {current_ip}) — skipping.")
                     continue
 
-                reset_note = " iLO will reset and the current IP will be lost." if do_reset else \
-                             " Run with --reset to apply immediately (requires iLO restart)."
-                if not getattr(args, "confirm", False):
-                    ans = input(
-                        f"[{name}] Current IP: {current_ip} (Static). "
-                        f"Switch to DHCP?{reset_note} [y/N] "
-                    )
-                    if ans.strip().lower() != "y":
-                        print(f"[{name}] Skipped.")
+                # DHCP staged but iLO not yet reset (IP is 0.0.0.0) — or static and needs switching
+                already_staged = origin == "DHCP" and current_ip == "0.0.0.0"
+                if already_staged:
+                    print(f"[{name}] DHCP is staged but iLO hasn't been reset yet (IP: 0.0.0.0).")
+                    if not do_reset:
+                        print(f"[{name}] Run with --reset to apply.")
                         continue
+                    # Skip re-PATCH, go straight to reset
+                else:
+                    reset_note = " iLO will reset and the current IP will be lost." if do_reset else \
+                                 " Run with --reset to apply immediately (requires iLO restart)."
+                    if not getattr(args, "confirm", False):
+                        ans = input(
+                            f"[{name}] Current IP: {current_ip} (Static). "
+                            f"Switch to DHCP?{reset_note} [y/N] "
+                        )
+                        if ans.strip().lower() != "y":
+                            print(f"[{name}] Skipped.")
+                            continue
 
-                # Dual-layer PATCH: standard Redfish + Oem.Hpe mirror (both required by iLO)
-                payload = {
-                    "DHCPv4": {
-                        "DHCPEnabled": True,
-                        "UseDNSServers": True,
-                        "UseDomainName": True,
-                        "UseGateway": True,
-                        "UseNTPServers": True,
-                        "UseStaticRoutes": True,
-                    },
-                    "Oem": {
-                        "Hpe": {
-                            "DHCPv4": {"Enabled": True}
-                        }
-                    },
-                }
-                result = await client.patch("/redfish/v1/Managers/1/EthernetInterfaces/1", payload)
-                # iLO wraps success in an "error" envelope with MessageId containing "Success"
-                ext = result.get("error", {})
-                msgs = ext.get("@Message.ExtendedInfo", [])
-                is_success = not ext or any("Success" in m.get("MessageId", "") for m in msgs)
-                if not is_success:
-                    msg = ext.get("message", str(result))
-                    details = "; ".join(m.get("MessageId", "") for m in msgs)
-                    print(f"[{name}] ERROR from iLO: {msg} ({details})", file=sys.stderr)
-                    continue
+                    # Dual-layer PATCH: standard Redfish + Oem.Hpe mirror (both required by iLO)
+                    payload = {
+                        "DHCPv4": {
+                            "DHCPEnabled": True,
+                            "UseDNSServers": True,
+                            "UseDomainName": True,
+                            "UseGateway": True,
+                            "UseNTPServers": True,
+                            "UseStaticRoutes": True,
+                        },
+                        "Oem": {
+                            "Hpe": {
+                                "DHCPv4": {"Enabled": True}
+                            }
+                        },
+                    }
+                    result = await client.patch("/redfish/v1/Managers/1/EthernetInterfaces/1", payload)
+                    # iLO wraps success in an "error" envelope with MessageId containing "Success"
+                    ext = result.get("error", {})
+                    msgs = ext.get("@Message.ExtendedInfo", [])
+                    is_success = not ext or any("Success" in m.get("MessageId", "") for m in msgs)
+                    if not is_success:
+                        msg = ext.get("message", str(result))
+                        details = "; ".join(m.get("MessageId", "") for m in msgs)
+                        print(f"[{name}] ERROR from iLO: {msg} ({details})", file=sys.stderr)
+                        continue
 
                 if do_reset:
                     print(f"[{name}] ✓ DHCP staged. Resetting iLO — current IP {current_ip} will be lost...")

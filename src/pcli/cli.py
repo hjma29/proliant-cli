@@ -86,25 +86,6 @@ Register-ArgumentCompleter -Native -CommandName pcli -ScriptBlock {
         [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
     }
 }
-# Tab shows pcli -h when nothing is typed yet; otherwise uses MenuComplete popup list.
-# Only install if Tab is still on the default binding so we don't clobber a custom setup.
-if (-not (Get-PSReadLineKeyHandler | Where-Object { $_.Key -eq 'Tab' -and $_.Function -ne 'TabCompleteNext' -and $_.Function -ne 'Complete' })) {
-    Set-PSReadLineKeyHandler -Key Tab -ScriptBlock {
-        param($key, $arg)
-        $line = $null; $cursor = $null
-        [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
-        # "pcli <Tab>" or "pcli ilo <Tab>" — show help then re-draw prompt
-        if ($line -match '^pcli\s+$') {
-            Write-Host ''; pcli -h
-            [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt()
-        } elseif ($line -match '^pcli\s+(ilo|com|spp|oneview|qs|config)\s+$') {
-            Write-Host ''; pcli $Matches[1] -h
-            [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt()
-        } else {
-            [Microsoft.PowerShell.PSConsoleReadLine]::MenuComplete($key, $arg)
-        }
-    }
-}
 """
 
 

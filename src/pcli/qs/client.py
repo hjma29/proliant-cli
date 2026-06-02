@@ -380,7 +380,17 @@ def fetch_quickspec_markdown(doc_id: str, ver: str = "") -> tuple[str, list[str]
     main = soup.find("main")
     if not main:
         # Old-style PSNow download-wrapper page — fall back to PDF
-        return _fetch_from_psnow_pdf(doc_id)
+        return _fetch_from_psnow_pdf(doc_id, ver=ver)
+
+    # The content is inside <hpe-left-rail-container>
+    container = main.find("hpe-left-rail-container")
+    if not container:
+        raise RuntimeError(f"Could not find content container in page for doc {doc_id!r}")
+
+    # For versioned requests the collateral HTML always returns the latest content;
+    # fall back to the versioned PDF instead.
+    if ver:
+        return _fetch_from_psnow_pdf(doc_id, ver=ver)
 
     # The content is inside <hpe-left-rail-container>
     container = main.find("hpe-left-rail-container")

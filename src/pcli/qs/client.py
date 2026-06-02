@@ -89,7 +89,6 @@ def search_quickspecs(model: str, count: int = 10) -> list[QSEntry]:
     payload = json.dumps({
         "q": query,
         "numberOfResults": count * 3,  # fetch more to account for filtering
-        "sortCriteria": "@kmdoclastmod descending",
     }).encode()
     req = urllib.request.Request(
         _COVEO_ENDPOINT,

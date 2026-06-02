@@ -12,6 +12,7 @@ import json
 import re
 import tempfile
 import os
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Optional

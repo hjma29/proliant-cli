@@ -93,28 +93,78 @@ def _render_section_body(body: str) -> None:
             console.print(Markdown(text_block))
 
 
-def _parse_change_rows(body: str) -> list[list[str]]:
-    """Parse Summary of Changes markdown table into [date, version, action, description] rows.
+# Matches a date-leading plain-text version header from PDF conversion:
+# "01-Jun-2026  Version 17  Changed  Description..."
+_PDF_DATE_HDR = re.compile(
+    r"^(\d{2}-[A-Za-z]+-\d{4})\s+(Version\s+\d+)\s+(Added|Changed|Removed)\s+(.*)"
+)
+# Matches an action-only plain-text line from PDF: "Added  description..."
+_PDF_ACTION_LINE = re.compile(r"^(Added|Changed|Removed)\s{2,}(.*)")
 
-    The HTML-converted markdown has two row shapes:
-      Full row:         | date | version | action | desc |  → 4 cells
-      Continuation row: | action | desc |              → 2 cells (no date/version)
+
+def _parse_change_rows(body: str) -> list[list[str]]:
+    """Parse Summary of Changes text into [date, version, action, description] rows.
+
+    Handles two source formats:
+    - HTML-converted markdown: proper pipe-table rows
+      Full:         | date | version | action | desc |  (4 cells)
+      Continuation: | action | desc |              (2 cells)
+    - PDF-converted text: plain-text lines
+      Header:       "01-Jun-2026  Version N  Changed  text..."
+      Continuation: "Added  text..." or plain continuation text
     """
     lines = body.splitlines()
-    table_lines = [ln for ln in lines if ln.startswith("|") and not _SEP_RE.match(ln)]
-    if len(table_lines) < 2:
-        return []
-    rows = []
-    for ln in table_lines[1:]:  # skip header row
-        cells = _parse_md_row(ln)
-        if len(cells) >= 4:
-            rows.append(cells[:4])
-        elif len(cells) == 2:
-            # Continuation: [action, desc]
-            rows.append(["", ""] + cells)
-        elif len(cells) == 3:
-            # Rare: [action, desc_part1, desc_part2] — join description
-            rows.append(["", "", cells[0], " ".join(cells[1:])])
+
+    # Detect format: if there are enough pipe-table rows, use markdown parser
+    md_lines = [ln for ln in lines if ln.startswith("|") and not _SEP_RE.match(ln)]
+    if len(md_lines) >= 2:
+        rows = []
+        for ln in md_lines[1:]:  # skip header row
+            cells = _parse_md_row(ln)
+            if len(cells) >= 4:
+                rows.append(cells[:4])
+            elif len(cells) == 2:
+                rows.append(["", ""] + cells)
+            elif len(cells) == 3:
+                rows.append(["", "", cells[0], " ".join(cells[1:])])
+        return rows
+
+    # PDF plain-text format: state-machine parser
+    rows: list[list[str]] = []
+    for line in lines:
+        line = line.strip()
+        if not line or _SEP_RE.match(line):
+            continue
+        if "Date" in line and "Version History" in line:
+            continue
+
+        # Version header line
+        m = _PDF_DATE_HDR.match(line)
+        if m:
+            rows.append([m.group(1), m.group(2), m.group(3), m.group(4).strip()])
+            continue
+
+        # Pipe action row (some PDF tables have these): |   |   | Action | desc |
+        if line.startswith("|"):
+            cells = _parse_md_row(line)
+            if len(cells) >= 4 and cells[2] in ("Added", "Changed", "Removed"):
+                rows.append(["", "", cells[2], cells[3]])
+            elif len(cells) == 2:
+                rows.append(["", ""] + cells)
+            continue
+
+        # Plain action line
+        m = _PDF_ACTION_LINE.match(line)
+        if m:
+            rows.append(["", "", m.group(1), m.group(2).strip()])
+            continue
+
+        # Continuation — append to last row's description
+        if rows:
+            prev = rows[-1][3]
+            sep = " " if prev and not prev[-1] in ("-", "–", " ") else ""
+            rows[-1][3] = prev + sep + line
+
     return rows
 
 

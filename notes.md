@@ -510,6 +510,58 @@ PWD = hpent123
 | Multi-server | INI input file | Not yet implemented |
 | Best for | Air-gapped fleets | Internet-connected, scripted, CI |
 
+### Windows Driver Batch Updates at Scale
+
+The `.exe` and `.zip` files in the SPP catalog are Windows SoftPaqs and ESXi driver packages — NOT firmware. They are not available on the Linux SDR (confirmed 404). They are delivered via a separate channel:
+
+**SUM remote mode for Windows drivers:**
+```
+Admin workstation running SUM
+  ├── iLO IP (Redfish)  → stages firmware (.fwpkg)
+  └── OS IP (WinRM)     → inventories installed drivers, copies and runs .exe silently
+
+Per-server flow:
+  1. SUM connects to Windows OS via WinRM (port 5985/5986)
+  2. Inventories installed driver versions via WMI
+  3. Compares against SPP catalog → finds outdated packages
+  4. Copies only applicable .exe to server temp dir over network
+  5. Runs: cp066362.exe /s /f  (silent, forced)
+  6. Coordinates reboots in maintenance window
+```
+
+Both iLO IP and OS IP must be supplied in the SUM node list for full coverage (firmware + drivers). iLO-only gives firmware but misses OS drivers.
+
+**At scale:** SUM processes a CSV/INI node list with 10–20 servers in parallel. HPE OneView adds another layer: define a "Server Profile" with a firmware baseline version → OneView auto-detects drift → triggers SUM remediation unattended.
+
+**ESXi drivers** (`.zip` in SPP) follow the same pattern via VMware vLCM (vCenter Lifecycle Manager) — HPE publishes a depot that vLCM pulls directly, no manual handling needed.
+
+### iSUT vs AMS — Roles and vNIC Architecture
+
+Both are OS agents that use the **iLO vNIC host interface** (private point-to-point link `169.254.1.2 ↔ 169.254.1.1`). They serve completely different purposes and neither replaces the other.
+
+**vNIC direction:** The OS always initiates — iLO cannot push to the OS. The vNIC is just a private TCP/IP link; iLO exposes its Redfish API on `169.254.1.1` and waits. Both agents must be pre-installed on the OS.
+
+| | AMS (Agentless Management Service) | iSUT (Intelligent System Update Tool) |
+|---|---|---|
+| Direction | OS → iLO (reporting) | OS polls iLO → installs locally |
+| Purpose | Feeds OS inventory into iLO dashboard: hostname, OS ver, NIC teams, software list | Polls iLO for staged update packages → downloads → runs installer |
+| Action | Read-only telemetry | Executes `.exe` / `.rpm` / `.deb` on the OS |
+| Trigger | Continuous background sync | Commanded by SUM/OneView staging a package to iLO |
+| "Agentless" claim | Misleading branding — it IS an agent | Same |
+
+**Full update flow with iSUT:**
+```
+SUM/OneView ──Redfish──▶ iLO (stages package to UpdateService)
+                                    │
+                         iSUT polls via vNIC (169.254.1.2 → 169.254.1.1)
+                                    │
+                         iSUT sees staged package → downloads → installs
+                                    │
+                         iSUT reports status back to iLO → SUM/OneView sees result
+```
+
+For firmware-only updates (iLO/BIOS/NIC firmware via PLDM), **neither AMS nor iSUT is required** — iLO handles those directly via Redfish with no OS involvement.
+
 ---
 
 ## 7. Recommended Firmware Upgrade Order

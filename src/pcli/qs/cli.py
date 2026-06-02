@@ -20,7 +20,7 @@ from rich.markdown import Markdown
 from rich.rule import Rule
 from rich import box
 
-from pcli.qs.client import QSEntry, search_quickspecs, fetch_quickspec_markdown, filter_section
+from pcli.qs.client import QSEntry, search_quickspecs, fetch_quickspec_markdown, fetch_quickspec_versions, filter_section
 
 console = Console()
 
@@ -321,9 +321,150 @@ def _cmd_describe(args: argparse.Namespace) -> None:
     console.print(Markdown(markdown))
 
 
+# ── diff ──────────────────────────────────────────────────────────────────────
+
+def _section_map(markdown: str, sections: list[str]) -> dict[str, str]:
+    """Return {section_name: body_text} for all sections."""
+    return {s: filter_section(markdown, s) for s in sections}
+
+
+def _cmd_diff(args: argparse.Namespace) -> None:
+    from rich.table import Table
+    from rich import box as rich_box
+    import difflib
+
+    console.print(f"[dim]Looking up QuickSpec for: {args.model}…[/dim]")
+    try:
+        entries = search_quickspecs(args.model, count=1)
+    except Exception as exc:
+        console.print(f"[red]Error:[/red] {exc}", highlight=False)
+        sys.exit(1)
+    if not entries:
+        console.print("[yellow]No QuickSpec found for that model.[/yellow]")
+        sys.exit(1)
+
+    doc_id = entries[0].doc_id
+    title = entries[0].title
+
+    try:
+        versions = fetch_quickspec_versions(doc_id, title=title, n=20)
+    except Exception as exc:
+        console.print(f"[red]Error fetching version list:[/red] {exc}", highlight=False)
+        sys.exit(1)
+
+    if len(versions) < 2:
+        console.print("[yellow]Only one version available — nothing to diff.[/yellow]")
+        sys.exit(0)
+
+    ver_map = {v.version_num: v for v in versions}
+    if args.v1 and args.v2:
+        if args.v1 not in ver_map or args.v2 not in ver_map:
+            available = ", ".join(f"v{v.version_num} ({v.date})" for v in versions)
+            console.print(f"[red]Version not found.[/red] Available: {available}")
+            sys.exit(1)
+        v_old = ver_map[args.v1]
+        v_new = ver_map[args.v2]
+        if int(v_old.version_num) > int(v_new.version_num):
+            v_old, v_new = v_new, v_old
+    else:
+        v_new = versions[0]
+        v_old = versions[1]
+
+    console.print(
+        f"[dim]Comparing v{v_old.version_num} ({v_old.date}) → "
+        f"v{v_new.version_num} ({v_new.date})  [{title}][/dim]"
+    )
+
+    try:
+        with console.status(f"[dim]Fetching v{v_new.version_num}…[/dim]"):
+            md_new, secs_new = fetch_quickspec_markdown(doc_id, ver=v_new.version_num)
+        with console.status(f"[dim]Fetching v{v_old.version_num}…[/dim]"):
+            md_old, secs_old = fetch_quickspec_markdown(doc_id, ver=v_old.version_num)
+    except Exception as exc:
+        console.print(f"[red]Error fetching content:[/red] {exc}", highlight=False)
+        sys.exit(1)
+
+    sec_map_new = _section_map(md_new, secs_new)
+    sec_map_old = _section_map(md_old, secs_old)
+    all_sections = list(dict.fromkeys(secs_new + secs_old))
+
+    # ── Detailed diff for a single section ────────────────────────────────────
+    if args.section:
+        target = args.section.lower()
+        matched = next((s for s in all_sections if target in s.lower()), None)
+        if not matched:
+            console.print(f"[yellow]Section '{args.section}' not found.[/yellow]")
+            console.print(f"Available: {', '.join(all_sections)}")
+            sys.exit(1)
+
+        old_lines = sec_map_old.get(matched, "").splitlines()
+        new_lines = sec_map_new.get(matched, "").splitlines()
+
+        console.print(Rule(f"[bold]{matched}[/bold]  v{v_old.version_num} → v{v_new.version_num}"))
+        diff = list(difflib.unified_diff(old_lines, new_lines, lineterm="", n=2))
+        if not diff:
+            console.print("[green]No changes in this section.[/green]")
+            return
+        for line in diff[2:]:  # skip --- +++ header lines
+            if line.startswith("+"):
+                console.print(f"[green]{line}[/green]")
+            elif line.startswith("-"):
+                console.print(f"[red]{line}[/red]")
+            else:
+                console.print(f"[dim]{line}[/dim]")
+        return
+
+    # ── Summary: which sections changed ───────────────────────────────────────
+    added, removed, changed, unchanged = [], [], [], []
+    for sec in all_sections:
+        old_text = sec_map_old.get(sec)
+        new_text = sec_map_new.get(sec)
+        if old_text is None:
+            added.append(sec)
+        elif new_text is None:
+            removed.append(sec)
+        elif old_text.strip() != new_text.strip():
+            diff = list(difflib.unified_diff(
+                old_text.splitlines(), new_text.splitlines(), lineterm="", n=0
+            ))
+            adds = sum(1 for l in diff if l.startswith("+") and not l.startswith("+++"))
+            dels = sum(1 for l in diff if l.startswith("-") and not l.startswith("---"))
+            changed.append((sec, adds, dels))
+        else:
+            unchanged.append(sec)
+
+    if not changed and not added and not removed:
+        console.print("[green]No differences found between these two versions.[/green]")
+        return
+
+    table = Table(
+        title=f"QuickSpec Diff  v{v_old.version_num} ({v_old.date}) → v{v_new.version_num} ({v_new.date})",
+        box=rich_box.ROUNDED,
+        show_header=True,
+        header_style="bold cyan",
+    )
+    table.add_column("Section",  min_width=30)
+    table.add_column("Change",   no_wrap=True)
+    table.add_column("+lines",   justify="right", no_wrap=True, style="green")
+    table.add_column("-lines",   justify="right", no_wrap=True, style="red")
+
+    for sec, adds, dels in changed:
+        table.add_row(sec, "[yellow]modified[/yellow]", f"+{adds}", f"-{dels}")
+    for sec in added:
+        table.add_row(sec, "[green]added[/green]", "—", "—")
+    for sec in removed:
+        table.add_row(sec, "[red]removed[/red]", "—", "—")
+
+    console.print(table)
+    console.print(
+        f"[dim]{len(unchanged)} section(s) unchanged. "
+        f"Use --section <name> for line-level diff.[/dim]"
+    )
+
+
 # ── Argument parser ────────────────────────────────────────────────────────────
+def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="pcli qs",
         description="Browse HPE QuickSpecs documents.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""

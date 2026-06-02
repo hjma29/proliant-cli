@@ -31,10 +31,10 @@ commands:
 Run 'pcli <namespace> --help' for namespace-specific help.
 
 examples:
-  pcli ilo get firmwares                       Firmware summary across all iLO hosts
+  pcli ilo list firmwares                       Firmware summary across all iLO hosts
   pcli ilo upgrade --host myilo                Upgrade firmware via HPE SDR
   pcli com login                               Login to HPE GreenLake
-  pcli com get devices                         List GreenLake devices
+  pcli com list devices                         List GreenLake devices
   pcli spp list                                List available gen12 SPP versions
   pcli spp inspect gen12 2026.03.00.00         Analyse a gen12 SPP catalog
   pcli spp diff gen12 2025.09.01.00 2026.03.00.00  What changed between SPPs?

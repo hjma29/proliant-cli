@@ -13,25 +13,25 @@ Usage::
 
     pcli com logout                        Remove cached credentials and token
 
-    pcli com get devices                   All devices in workspace
-    pcli com get devices --type COMPUTE    Filter by type (COMPUTE, NETWORK, STORAGE)
-    pcli com get devices --fields name,serial,service
-    pcli com get devices --fields name,serial,added,added-by
-    pcli com get devices --fields name,ilo-name,serial,location
-    pcli com get devices --sort added      Sort by date added
-    pcli com get devices --sort added-by   Sort by who added the device
-    pcli com get devices --fields name,serial,added,added-by --sort added
-    pcli com get devices --raw             Raw JSON
+    pcli com list devices                   All devices in workspace
+    pcli com list devices --type COMPUTE    Filter by type (COMPUTE, NETWORK, STORAGE)
+    pcli com list devices --fields name,serial,service
+    pcli com list devices --fields name,serial,added,added-by
+    pcli com list devices --fields name,ilo-name,serial,location
+    pcli com list devices --sort added      Sort by date added
+    pcli com list devices --sort added-by   Sort by who added the device
+    pcli com list devices --fields name,serial,added,added-by --sort added
+    pcli com list devices --raw             Raw JSON
 
-    pcli com get bundles                   Active SPP firmware bundles in COM
-    pcli com get bundles --all             Include inactive/superseded bundles
-    pcli com get bundles --gen 12          Gen12 bundles only
-    pcli com get bundles --gen 11          Gen11 bundles only
-    pcli com get bundles --type patch      PATCH bundles only (base/patch/hotfix)
-    pcli com get bundles --raw             Raw JSON
+    pcli com list bundles                   Active SPP firmware bundles in COM
+    pcli com list bundles --all             Include inactive/superseded bundles
+    pcli com list bundles --gen 12          Gen12 bundles only
+    pcli com list bundles --gen 11          Gen11 bundles only
+    pcli com list bundles --type patch      PATCH bundles only (base/patch/hotfix)
+    pcli com list bundles --raw             Raw JSON
 
-    pcli com get workspaces                All workspaces (active one marked with *)
-    pcli com get workspaces --raw          Raw JSON
+    pcli com list workspaces                All workspaces (active one marked with *)
+    pcli com list workspaces --raw          Raw JSON
 
     pcli com use workspace <name-or-id>    Switch active workspace
 
@@ -226,7 +226,7 @@ def _cmd_logout(_args: argparse.Namespace) -> None:
 # Device field definitions
 # ---------------------------------------------------------------------------
 
-# All available columns for "pcli com get devices".
+# All available columns for "pcli com list devices".
 # Each entry: field_key → (header, rich_style, add_column_kwargs, value_getter)
 # value_getter receives (device, user_cache) where user_cache maps uid → email.
 _DEVICE_FIELDS: dict = {
@@ -620,27 +620,27 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Remove cached credentials and token",
     )
 
-    # ── get ───────────────────────────────────────────────────────────────
-    get_p = subparsers.add_parser("get", help="Get resources")
+    # ── list ──────────────────────────────────────────────────────────────
+    get_p = subparsers.add_parser("list", help="List resources")
     get_sub = get_p.add_subparsers(dest="what", metavar="WHAT")
     get_sub.required = True
 
-    # pcli com get devices
+    # pcli com list devices
     dev_p = get_sub.add_parser(
         "devices",
         help="List all devices in workspace",
         description=(
             "List all devices registered in the GreenLake workspace.\n\n"
             "Examples:\n"
-            "  pcli com get devices\n"
-            "  pcli com get devices --type COMPUTE\n"
-            "  pcli com get devices --fields name,serial,service\n"
-            "  pcli com get devices --fields name,serial,added,added-by\n"
-            "  pcli com get devices --fields name,ilo-name,serial,location\n"
-            "  pcli com get devices --sort added\n"
-            "  pcli com get devices --sort added-by\n"
-            "  pcli com get devices --fields name,serial,added,added-by --sort added\n"
-            "  pcli com get devices --fields name,type,model,serial,part,service,sub-key,location,added,updated,added-by\n"
+            "  pcli com list devices\n"
+            "  pcli com list devices --type COMPUTE\n"
+            "  pcli com list devices --fields name,serial,service\n"
+            "  pcli com list devices --fields name,serial,added,added-by\n"
+            "  pcli com list devices --fields name,ilo-name,serial,location\n"
+            "  pcli com list devices --sort added\n"
+            "  pcli com list devices --sort added-by\n"
+            "  pcli com list devices --fields name,serial,added,added-by --sort added\n"
+            "  pcli com list devices --fields name,type,model,serial,part,service,sub-key,location,added,updated,added-by\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -663,11 +663,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help=f"Sort by field (case-insensitive). Available: {', '.join(DEVICE_FIELD_NAMES)}. Default: name",
     )
 
-    # pcli com get workspaces
+    # pcli com list workspaces
     ws_p = get_sub.add_parser("workspaces", help="List all workspaces (* = active)")
     ws_p.add_argument("--raw", action="store_true", help="Print raw JSON")
 
-    # pcli com get bundles
+    # pcli com list bundles
     bun_p = get_sub.add_parser(
         "bundles",
         help="List SPP firmware bundles available in COM",
@@ -676,13 +676,13 @@ def _build_parser() -> argparse.ArgumentParser:
             "By default shows only active (current) bundles. Bundles are organised\n"
             "by server generation (Gen10/11/12) and type (BASE, PATCH, HOTFIX).\n\n"
             "Examples:\n"
-            "  pcli com get bundles                   Active bundles (all gens)\n"
-            "  pcli com get bundles --all             Include superseded bundles\n"
-            "  pcli com get bundles --gen 12          Gen12 only\n"
-            "  pcli com get bundles --gen 11          Gen11 only\n"
-            "  pcli com get bundles --type base       BASE bundles only\n"
-            "  pcli com get bundles --type patch      PATCH bundles only\n"
-            "  pcli com get bundles --gen 12 --type base   Latest Gen12 BASE SPPs\n"
+            "  pcli com list bundles                   Active bundles (all gens)\n"
+            "  pcli com list bundles --all             Include superseded bundles\n"
+            "  pcli com list bundles --gen 12          Gen12 only\n"
+            "  pcli com list bundles --gen 11          Gen11 only\n"
+            "  pcli com list bundles --type base       BASE bundles only\n"
+            "  pcli com list bundles --type patch      PATCH bundles only\n"
+            "  pcli com list bundles --gen 12 --type base   Latest Gen12 BASE SPPs\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -742,7 +742,7 @@ def main(argv: Optional[list[str]] = None) -> None:
         run(_cmd_login(args))
     elif args.command == "logout":
         _cmd_logout(args)
-    elif args.command == "get":
+    elif args.command == "list":
         if args.what == "devices":
             run(_cmd_show_devices(args))
         elif args.what == "workspaces":

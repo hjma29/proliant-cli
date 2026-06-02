@@ -6,18 +6,18 @@ and table printing.
 
 Usage::
 
-    pcli ilo get firmwares                          All servers, all firmware columns
-    pcli ilo get firmwares --host dl325-gen12       Single server
-    pcli ilo get firmwares --fields bios,ilo        BIOS and iLO columns only
-    pcli ilo get firmwares --fields model,bios,ilo  Model + BIOS + iLO
-    pcli ilo get firmwares --fields nic-fw,storage-fw
-    pcli ilo get ilo                                iLO firmware version
-    pcli ilo get network                            NIC firmware versions
-    pcli ilo get storage                            Storage firmware versions
-    pcli ilo get serial                             Server model + serial (for COM onboarding)
-    pcli ilo get full                               Full firmware inventory
-    pcli ilo get update-method                      All firmware with BMC/UEFI/OS update method
-    pcli ilo get update-method --host dl345-gen12   Single server update method view
+    pcli ilo list firmwares                          All servers, all firmware columns
+    pcli ilo list firmwares --host dl325-gen12       Single server
+    pcli ilo list firmwares --fields bios,ilo        BIOS and iLO columns only
+    pcli ilo list firmwares --fields model,bios,ilo  Model + BIOS + iLO
+    pcli ilo list firmwares --fields nic-fw,storage-fw
+    pcli ilo list ilo                                iLO firmware version
+    pcli ilo list network                            NIC firmware versions
+    pcli ilo list storage                            Storage firmware versions
+    pcli ilo list serial                             Server model + serial (for COM onboarding)
+    pcli ilo list full                               Full firmware inventory
+    pcli ilo list update-method                      All firmware with BMC/UEFI/OS update method
+    pcli ilo list update-method --host dl345-gen12   Single server update method view
     pcli ilo upgrade --host <name>                  Auto-upgrade outdated firmware
 
 Available --fields for 'get firmwares' (case-insensitive):
@@ -350,8 +350,8 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers.required = True
 
     get_p = subparsers.add_parser(
-        "get",
-        help="Get hardware/firmware inventory",
+        "list",
+        help="List hardware/firmware inventory",
         description="Query iLO and display hardware or firmware information.",
     )
     get_sub = get_p.add_subparsers(dest="what", metavar="WHAT")
@@ -380,11 +380,11 @@ def _build_parser() -> argparse.ArgumentParser:
                 description=(
                     "Show firmware summary for all servers (one row per server).\n\n"
                     "Examples:\n"
-                    "  pcli ilo get firmwares                         All servers, all columns\n"
-                    "  pcli ilo get firmwares --host dl325-gen12      Single server\n"
-                    "  pcli ilo get firmwares --fields bios,ilo       BIOS and iLO only\n"
-                    "  pcli ilo get firmwares --fields model,bios     Model and BIOS only\n"
-                    "  pcli ilo get firmwares --fields nic-fw,storage-fw  NIC and Storage only\n"
+                    "  pcli ilo list firmwares                         All servers, all columns\n"
+                    "  pcli ilo list firmwares --host dl325-gen12      Single server\n"
+                    "  pcli ilo list firmwares --fields bios,ilo       BIOS and iLO only\n"
+                    "  pcli ilo list firmwares --fields model,bios     Model and BIOS only\n"
+                    "  pcli ilo list firmwares --fields nic-fw,storage-fw  NIC and Storage only\n"
                     f"\nAvailable --fields (case-insensitive): {', '.join(FLEET_KEYS)}"
                 ),
                 formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -411,9 +411,9 @@ def _build_parser() -> argparse.ArgumentParser:
                     "  UEFI — UEFI processes it on next server reboot (no OS required)\n"
                     "  OS   — Requires a running OS + iSUT/SUM RuntimeAgent\n\n"
                     "Examples:\n"
-                    "  pcli ilo get update-method                        All servers\n"
-                    "  pcli ilo get update-method --host dl345-gen12     Single server\n"
-                    "  pcli ilo get update-method --host dl380-gen11     Show Gen11 server\n"
+                    "  pcli ilo list update-method                        All servers\n"
+                    "  pcli ilo list update-method --host dl345-gen12     Single server\n"
+                    "  pcli ilo list update-method --host dl380-gen11     Show Gen11 server\n"
                 ),
                 formatter_class=argparse.RawDescriptionHelpFormatter,
             )
@@ -489,7 +489,7 @@ def main(argv: list[str] | None = None) -> None:
 
 
 async def _async_main(args: argparse.Namespace) -> None:
-    if args.command == "get":
+    if args.command == "list":
         await _run_get(args)
     elif args.command == "upgrade":
         await _run_upgrade(args)
@@ -543,7 +543,7 @@ def _run_init() -> None:
     )
     print(f"Created: {dest}")
     print("Edit it to fill in your server addresses and credentials.")
-    print("\nThen try:  pcli ilo get firmwares")
+    print("\nThen try:  pcli ilo list firmwares")
 
 
 async def _run_get(args: argparse.Namespace) -> None:

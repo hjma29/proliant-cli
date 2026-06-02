@@ -33,6 +33,8 @@
 - [6. PLDM — How Gen12 Firmware Updates Work](#6-pldm--how-gen12-firmware-updates-work)
   - [SUM Remote / iLO-Connected Mode](#sum-remote--ilo-connected-mode)
   - [SUM CLI + SPP ISO on Jumpbox](#sum-cli--spp-iso-on-jumpbox)
+  - [Windows Driver Batch Updates at Scale](#windows-driver-batch-updates-at-scale)
+  - [iSUT vs AMS — Roles and vNIC Architecture](#isut-vs-ams--roles-and-vnic-architecture)
 - [7. Recommended Firmware Upgrade Order](#7-recommended-firmware-upgrade-order)
 - [8. Which Firmware Can (and Cannot) Be Upgraded via iLO](#8-which-firmware-can-and-cannot-be-upgraded-via-ilo)
   - [HPE SDR — Software Delivery Repository](#hpe-sdr--software-delivery-repository)

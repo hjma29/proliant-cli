@@ -183,8 +183,11 @@
       "bases:Create new base": false
     }
   },
-  "active": "6c919976c148836a",
+  "active": "727093c4cfd7a0ba",
   "lastOpenFiles": [
+    "src/pcli/oneview/client.py",
+    "src/pcli/oneview/__init__.py",
+    "src/pcli/oneview",
     "README.md"
   ]
 }

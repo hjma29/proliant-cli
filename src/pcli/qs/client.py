@@ -275,7 +275,10 @@ def _fetch_from_psnow_pdf(doc_id: str) -> tuple[str, list[str]]:
     m = _PSNOW_DOWNLOAD_RE.search(wrapper_html)
     if not m:
         raise RuntimeError(f"Could not find PDF download link for doc {doc_id!r}")
-    pdf_url = m.group(1)
+    # URL-encode the path portion (the filename can contain spaces)
+    raw_url = m.group(1)
+    parsed = urllib.parse.urlparse(raw_url)
+    pdf_url = parsed._replace(path=urllib.parse.quote(parsed.path)).geturl()
 
     # Download PDF to a temp file
     pdf_req = urllib.request.Request(

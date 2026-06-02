@@ -596,19 +596,15 @@ async def _cmd_report_gpu(args: argparse.Namespace) -> None:
         show_header=True,
         header_style="bold cyan",
     )
-    table.add_column("GPU Model",    min_width=28)
-    table.add_column("Manufacturer", min_width=10, no_wrap=True)
-    table.add_column("Part Number",  min_width=18, no_wrap=True)
-    table.add_column("Count",        justify="right", no_wrap=True, style="bold")
-    table.add_column("Servers",      justify="right", no_wrap=True, style="dim")
+    table.add_column("GPU Model", min_width=28)
+    table.add_column("Count",     justify="right", no_wrap=True, style="bold")
+    table.add_column("Servers",   min_width=20)
 
     for r in rows:
         table.add_row(
             r["gpu"],
-            r["manufacturer"],
-            r["part_number"],
             str(r["count"]),
-            str(len(r["servers"])),
+            ", ".join(sorted(r["servers"])),
         )
 
     console.print(table)

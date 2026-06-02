@@ -23,6 +23,7 @@ namespaces:
   ilo          Direct iLO Redfish management (firmware, inventory, power)
   com          HPE GreenLake / Compute Ops Management (devices, workspaces)
   spp          HPE Service Pack for ProLiant catalog analysis
+  oneview      HPE OneView (Synergy & ProLiant fleet management)
 
 commands:
   update       Download and install the latest pcli release
@@ -37,6 +38,8 @@ examples:
   pcli spp list                                List available gen12 SPP versions
   pcli spp inspect gen12 2026.03.00.00         Analyse a gen12 SPP catalog
   pcli spp diff gen12 2025.09.01.00 2026.03.00.00  What changed between SPPs?
+  pcli oneview servers list                    List all OneView-managed servers
+  pcli oneview firmware list                   Fleet firmware inventory via OneView
   pcli update                                  Upgrade pcli to the latest release
 """
 
@@ -48,11 +51,12 @@ Register-ArgumentCompleter -Native -CommandName pcli -ScriptBlock {
     $pos = if ($wordToComplete -eq '') { $t.Count } else { $t.Count - 1 }
     $candidates = @()
     if ($pos -eq 1) {
-        $candidates = @('ilo', 'com', 'spp', 'update')
+        $candidates = @('ilo', 'com', 'spp', 'oneview', 'update')
     } elseif ($pos -eq 2) {
         if ($t[1] -eq 'ilo') { $candidates = @('get', 'upgrade', 'init') }
         elseif ($t[1] -eq 'com') { $candidates = @('login', 'logout', 'get', 'use', 'add') }
         elseif ($t[1] -eq 'spp') { $candidates = @('list', 'inspect', 'diff') }
+        elseif ($t[1] -eq 'oneview') { $candidates = @('servers', 'firmware') }
     } elseif ($pos -eq 3) {
         if ($t[1] -eq 'ilo') {
             if ($t[2] -eq 'get') { $candidates = @('firmwares','ilo','network','nic','storage','cpu','memory','com','full','disk-map','serial','update-method') }
@@ -61,6 +65,9 @@ Register-ArgumentCompleter -Native -CommandName pcli -ScriptBlock {
             if ($t[2] -eq 'get') { $candidates = @('devices','workspaces','bundles') }
             elseif ($t[2] -eq 'use') { $candidates = @('workspace') }
             elseif ($t[2] -eq 'add') { $candidates = @('device') }
+        } elseif ($t[1] -eq 'oneview') {
+            if ($t[2] -eq 'servers') { $candidates = @('list') }
+            elseif ($t[2] -eq 'firmware') { $candidates = @('list') }
         }
     }
     $candidates | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
@@ -341,6 +348,19 @@ def _dispatch_com(args: list[str]) -> None:
     com_main()
 
 
+def _dispatch_oneview(args: list[str]) -> None:
+    try:
+        from pcli.oneview.cli import main as oneview_main
+    except ImportError as exc:
+        print(
+            f"pcli oneview: missing dependencies — install with: pip install pcli\n({exc})",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    sys.argv = ["pcli oneview"] + args
+    oneview_main()
+
+
 def main(argv: list[str] | None = None) -> None:
     _windows_first_run_check()
 
@@ -368,16 +388,22 @@ def main(argv: list[str] | None = None) -> None:
             _dispatch_spp(parts[2:])
             return
 
-        # Top-level: use argparse so argcomplete can offer 'ilo', 'com', 'spp'
+        if len(parts) >= 2 and parts[1] == "oneview":
+            os.environ["_ARGCOMPLETE"] = "2"
+            _dispatch_oneview(parts[2:])
+            return
+
+        # Top-level: use argparse so argcomplete can offer 'ilo', 'com', 'spp', 'oneview'
         import argparse
         import argcomplete
         parser = argparse.ArgumentParser(prog="pcli", add_help=False)
         parser.add_argument("-V", "--version", action="store_true")
         sub = parser.add_subparsers(dest="namespace")
-        sub.add_parser("ilo",    help="Direct iLO Redfish management")
-        sub.add_parser("com",    help="HPE GreenLake / Compute Ops Management")
-        sub.add_parser("spp",    help="HPE Service Pack for ProLiant analysis")
-        sub.add_parser("update", help="Upgrade pcli to the latest release")
+        sub.add_parser("ilo",     help="Direct iLO Redfish management")
+        sub.add_parser("com",     help="HPE GreenLake / Compute Ops Management")
+        sub.add_parser("spp",     help="HPE Service Pack for ProLiant analysis")
+        sub.add_parser("oneview", help="HPE OneView fleet management")
+        sub.add_parser("update",  help="Upgrade pcli to the latest release")
         argcomplete.autocomplete(parser)
         return  # autocomplete() exits; reaching here means no completion needed
 

@@ -185,6 +185,7 @@
   },
   "active": "727093c4cfd7a0ba",
   "lastOpenFiles": [
+    "src/pcli/com/inventory.py",
     "src/pcli/oneview/profiles.py",
     "src/pcli/oneview/network.py",
     "src/pcli/oneview/cli.py",

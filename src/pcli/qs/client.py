@@ -28,6 +28,12 @@ _COVEO_ENDPOINT = (
 )
 _VARIANTS_URL = "https://www.hpe.com/services/hpe/psnow/variants?assetId={asset_id}"
 _COLLATERAL_URL = "https://www.hpe.com/us/en/collaterals/collateral.{docid}.html"
+# Old-style PSNow pages serve QuickSpecs only as PDF; the download link is embedded in
+# the page HTML as: https://www.hpe.com/psnow/downloadDoc/<title>-<docid>.pdf?id=<docid>.pdf
+_PSNOW_WRAPPER_URL = "https://www.hpe.com/psnow/doc/{docid}.pdf"
+_PSNOW_DOWNLOAD_RE = re.compile(
+    r'href="(https://www\.hpe\.com/psnow/downloadDoc/[^"]+\.pdf\?id=[^"]+)"'
+)
 
 # Cached token — fetched once per process lifetime
 _coveo_token_cache: Optional[str] = None
@@ -243,11 +249,86 @@ def _parse_long_date(date_str: str) -> str:
     return date_str
 
 
+def _fetch_from_psnow_pdf(doc_id: str) -> tuple[str, list[str]]:
+    """
+    Fallback for old-style PSNow pages: download the PDF and convert to markdown.
+    Extracts sections by scanning for known QuickSpec section title strings.
+    """
+    try:
+        from markitdown import MarkItDown
+    except ImportError as exc:
+        raise RuntimeError(
+            f"Missing dependency: {exc}\n"
+            "Install with: pip install markitdown[pdf]"
+        ) from exc
+
+    # Fetch the wrapper page to extract the real PDF download link
+    wrapper_url = _PSNOW_WRAPPER_URL.format(docid=doc_id)
+    req = urllib.request.Request(
+        wrapper_url,
+        headers={"User-Agent": "Mozilla/5.0 (pcli-qs/1.0)"},
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        wrapper_html = resp.read().decode("utf-8", errors="replace")
+
+    m = _PSNOW_DOWNLOAD_RE.search(wrapper_html)
+    if not m:
+        raise RuntimeError(f"Could not find PDF download link for doc {doc_id!r}")
+    pdf_url = m.group(1)
+
+    # Download PDF to a temp file
+    pdf_req = urllib.request.Request(
+        pdf_url,
+        headers={"User-Agent": "Mozilla/5.0 (pcli-qs/1.0)"},
+    )
+    with urllib.request.urlopen(pdf_req, timeout=60) as resp:
+        pdf_bytes = resp.read()
+
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+        f.write(pdf_bytes)
+        tmpfile = f.name
+
+    try:
+        md = MarkItDown()
+        result = md.convert(tmpfile)
+    finally:
+        os.unlink(tmpfile)
+
+    text = result.text_content
+
+    # Extract section names: lines that are all-caps or title-case standalone headings
+    # QuickSpec PDFs use bold section titles in consistent positions
+    _KNOWN_SECTIONS = [
+        "Summary of Changes",
+        "Overview",
+        "Standard Features",
+        "Configuration Information",
+        "Core Options",
+        "Additional Options",
+        "Service and Support",
+    ]
+    sections = [s for s in _KNOWN_SECTIONS if s.lower() in text.lower()]
+
+    # Normalize PDF text: insert ### headings before each known section so that
+    # filter_section() works the same way as with HTML-converted markdown
+    for sec in sections:
+        # Find the line that contains exactly (or primarily) this section title
+        pattern = re.compile(
+            r"^(" + re.escape(sec) + r")\s*$",
+            re.IGNORECASE | re.MULTILINE,
+        )
+        text = pattern.sub(r"### \1", text)
+
+    return text, sections
+
+
 def fetch_quickspec_markdown(doc_id: str) -> tuple[str, list[str]]:
     """
     Fetch the HPE collateral HTML for *doc_id* and return:
       (markdown_text, list_of_section_names)
 
+    For newer HPE collateral pages the content is parsed from HTML.
+    For older PSNow-style pages the QuickSpec PDF is downloaded and converted.
     Only the QuickSpec body is returned (nav, footer, "Recommended for you"
     are stripped).
     """
@@ -264,7 +345,8 @@ def fetch_quickspec_markdown(doc_id: str) -> tuple[str, list[str]]:
     soup = BeautifulSoup(html, "html.parser")
     main = soup.find("main")
     if not main:
-        raise RuntimeError(f"Could not find <main> in page for doc {doc_id!r}")
+        # Old-style PSNow download-wrapper page — fall back to PDF
+        return _fetch_from_psnow_pdf(doc_id)
 
     # The content is inside <hpe-left-rail-container>
     container = main.find("hpe-left-rail-container")

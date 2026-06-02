@@ -469,6 +469,8 @@ def main(argv: list[str] | None = None) -> None:
         _dispatch_oneview(list(args[1:]))
     elif namespace == "qs":
         _dispatch_qs(list(args[1:]))
+    elif namespace == "config":
+        _dispatch_config(list(args[1:]))
     elif namespace == "update":
         _run_update()
     else:

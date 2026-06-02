@@ -329,8 +329,6 @@ def _section_map(markdown: str, sections: list[str]) -> dict[str, str]:
 
 
 def _cmd_diff(args: argparse.Namespace) -> None:
-    from rich.table import Table
-    from rich import box as rich_box
     import difflib
 
     console.print(f"[dim]Looking up QuickSpec for: {args.model}…[/dim]")
@@ -414,52 +412,40 @@ def _cmd_diff(args: argparse.Namespace) -> None:
                 console.print(f"[dim]{line}[/dim]")
         return
 
-    # ── Summary: which sections changed ───────────────────────────────────────
-    added, removed, changed, unchanged = [], [], [], []
+    # ── Full diff: all changed sections ──────────────────────────────────────
+    any_change = False
     for sec in all_sections:
-        old_text = sec_map_old.get(sec)
-        new_text = sec_map_new.get(sec)
-        if old_text is None:
-            added.append(sec)
-        elif new_text is None:
-            removed.append(sec)
-        elif old_text.strip() != new_text.strip():
-            diff = list(difflib.unified_diff(
-                old_text.splitlines(), new_text.splitlines(), lineterm="", n=0
-            ))
-            adds = sum(1 for l in diff if l.startswith("+") and not l.startswith("+++"))
-            dels = sum(1 for l in diff if l.startswith("-") and not l.startswith("---"))
-            changed.append((sec, adds, dels))
+        old_text = sec_map_old.get(sec, "")
+        new_text = sec_map_new.get(sec, "")
+        if old_text.strip() == new_text.strip():
+            continue
+
+        diff = list(difflib.unified_diff(
+            old_text.splitlines(), new_text.splitlines(), lineterm="", n=2
+        ))
+        if not diff:
+            continue
+
+        any_change = True
+        if not old_text:
+            console.print(Rule(f"[bold green]{sec}[/bold green]  [green](new section)[/green]"))
+        elif not new_text:
+            console.print(Rule(f"[bold red]{sec}[/bold red]  [red](removed)[/red]"))
         else:
-            unchanged.append(sec)
+            console.print(Rule(f"[bold]{sec}[/bold]"))
 
-    if not changed and not added and not removed:
+        for line in diff[2:]:  # skip --- +++ header lines
+            if line.startswith("+"):
+                console.print(f"[green]{line}[/green]")
+            elif line.startswith("-"):
+                console.print(f"[red]{line}[/red]")
+            elif line.startswith("@@"):
+                console.print(f"[dim]{line}[/dim]")
+            else:
+                console.print(f"[dim]{line}[/dim]")
+
+    if not any_change:
         console.print("[green]No differences found between these two versions.[/green]")
-        return
-
-    table = Table(
-        title=f"QuickSpec Diff  v{v_old.version_num} ({v_old.date}) → v{v_new.version_num} ({v_new.date})",
-        box=rich_box.ROUNDED,
-        show_header=True,
-        header_style="bold cyan",
-    )
-    table.add_column("Section",  min_width=30)
-    table.add_column("Change",   no_wrap=True)
-    table.add_column("+lines",   justify="right", no_wrap=True, style="green")
-    table.add_column("-lines",   justify="right", no_wrap=True, style="red")
-
-    for sec, adds, dels in changed:
-        table.add_row(sec, "[yellow]modified[/yellow]", f"+{adds}", f"-{dels}")
-    for sec in added:
-        table.add_row(sec, "[green]added[/green]", "—", "—")
-    for sec in removed:
-        table.add_row(sec, "[red]removed[/red]", "—", "—")
-
-    console.print(table)
-    console.print(
-        f"[dim]{len(unchanged)} section(s) unchanged. "
-        f"Use --section <name> for line-level diff.[/dim]"
-    )
 
 
 # ── Argument parser ────────────────────────────────────────────────────────────

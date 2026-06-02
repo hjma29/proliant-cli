@@ -263,9 +263,10 @@ def _parse_long_date(date_str: str) -> str:
     return date_str
 
 
-def _fetch_from_psnow_pdf(doc_id: str) -> tuple[str, list[str]]:
+def _fetch_from_psnow_pdf(doc_id: str, ver: str = "") -> tuple[str, list[str]]:
     """
-    Fallback for old-style PSNow pages: download the PDF and convert to markdown.
+    Download the QuickSpec PDF and convert to markdown.
+    If *ver* is given, scrapes the versioned psnow page to get the right download URL.
     Extracts sections by scanning for known QuickSpec section title strings.
     """
     try:
@@ -276,19 +277,34 @@ def _fetch_from_psnow_pdf(doc_id: str) -> tuple[str, list[str]]:
             "Install with: pip install markitdown[pdf]"
         ) from exc
 
-    # Fetch the wrapper page to extract the real PDF download link
-    wrapper_url = _PSNOW_WRAPPER_URL.format(docid=doc_id)
-    req = urllib.request.Request(
-        wrapper_url,
-        headers={"User-Agent": "Mozilla/5.0 (pcli-qs/1.0)"},
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        wrapper_html = resp.read().decode("utf-8", errors="replace")
+    if ver:
+        # Fetch the versioned psnow page to extract the versioned PDF download link
+        wrapper_url = f"https://www.hpe.com/psnow/doc/{doc_id}?ver={ver}"
+        req = urllib.request.Request(
+            wrapper_url,
+            headers={"User-Agent": "Mozilla/5.0 (pcli-qs/1.0)"},
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            wrapper_html = resp.read().decode("utf-8", errors="replace")
+        # Extract the downloadDoc URL for this specific version
+        ver_pattern = re.compile(
+            r'href="(https://www\.hpe\.com/psnow/downloadDoc/[^"]+?ver='
+            + re.escape(ver) + r'[^"]+)"'
+        )
+        m = ver_pattern.search(wrapper_html)
+    else:
+        # Fetch the wrapper page to extract the real PDF download link
+        wrapper_url = _PSNOW_WRAPPER_URL.format(docid=doc_id)
+        req = urllib.request.Request(
+            wrapper_url,
+            headers={"User-Agent": "Mozilla/5.0 (pcli-qs/1.0)"},
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            wrapper_html = resp.read().decode("utf-8", errors="replace")
+        m = _PSNOW_DOWNLOAD_RE.search(wrapper_html)
 
-    m = _PSNOW_DOWNLOAD_RE.search(wrapper_html)
     if not m:
-        raise RuntimeError(f"Could not find PDF download link for doc {doc_id!r}")
-    # URL-encode the path portion (the filename can contain spaces)
+        raise RuntimeError(f"Could not find PDF download link for doc {doc_id!r} ver={ver!r}")
     raw_url = m.group(1)
     parsed = urllib.parse.urlparse(raw_url)
     pdf_url = parsed._replace(path=urllib.parse.quote(parsed.path)).geturl()

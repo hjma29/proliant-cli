@@ -209,13 +209,19 @@ def _run_update() -> None:
     import subprocess
 
     print("Checking for updates...")
+    token = os.environ.get("GITHUB_TOKEN", "")
+    headers = {"User-Agent": "pcli-updater"}
+    if token:
+        headers["Authorization"] = f"token {token}"
     try:
         url = f"https://api.github.com/repos/{_GITHUB_REPO}/releases/latest"
-        req = urllib.request.Request(url, headers={"User-Agent": "pcli-updater"})
+        req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=15) as resp:
             release = json.loads(resp.read())
     except Exception as e:
         print(f"ERROR: Could not reach GitHub: {e}", file=sys.stderr)
+        if not token:
+            print("  Tip: set GITHUB_TOKEN env var if the repo is private.", file=sys.stderr)
         sys.exit(1)
 
     latest_tag = release.get("tag_name", "")
@@ -237,19 +243,22 @@ def _run_update() -> None:
     else:
         asset_name = "proliant-cli-linux"
 
-    asset_url = next(
-        (a["browser_download_url"] for a in release.get("assets", []) if a["name"] == asset_name),
+    asset = next(
+        (a for a in release.get("assets", []) if a["name"] == asset_name),
         None,
     )
-    if not asset_url:
+    if not asset:
         print(f"ERROR: No asset '{asset_name}' found in release {latest_tag}.", file=sys.stderr)
         sys.exit(1)
 
     print(f"  Downloading {asset_name}...")
+    # Use the API assets endpoint with Accept: application/octet-stream for private repos
+    asset_api_url = asset["url"]
+    dl_headers = {**headers, "Accept": "application/octet-stream"}
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = os.path.join(tmpdir, asset_name)
         try:
-            req = urllib.request.Request(asset_url, headers={"User-Agent": "pcli-updater"})
+            req = urllib.request.Request(asset_api_url, headers=dl_headers)
             with urllib.request.urlopen(req, timeout=120) as resp, open(tmp_path, "wb") as f:
                 shutil.copyfileobj(resp, f)
         except Exception as e:

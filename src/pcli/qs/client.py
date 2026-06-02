@@ -400,7 +400,10 @@ def _fetch_from_psnow_pdf(doc_id: str, ver: str = "") -> tuple[str, list[str]]:
         text = pattern.sub(r"### \1", text)
 
     _qs_cache_write(doc_id, ver, text, sections)
-    return text, sections(doc_id: str, ver: str = "") -> tuple[str, list[str]]:
+    return text, sections
+
+
+def fetch_quickspec_markdown(doc_id: str, ver: str = "") -> tuple[str, list[str]]:
     """
     Fetch the HPE collateral HTML for *doc_id* and return:
       (markdown_text, list_of_section_names)
@@ -410,7 +413,13 @@ def _fetch_from_psnow_pdf(doc_id: str, ver: str = "") -> tuple[str, list[str]]:
     For older PSNow-style pages the QuickSpec PDF is downloaded and converted.
     Only the QuickSpec body is returned (nav, footer, "Recommended for you"
     are stripped).
+    Results are cached to disk (~/.cache/pcli/qs/).
     """
+    # Check disk cache first — versioned PDFs are cached forever, latest for 7 days
+    cached = _qs_cache_read(doc_id, ver)
+    if cached is not None:
+        return cached
+
     try:
         from bs4 import BeautifulSoup
         from markitdown import MarkItDown
@@ -424,7 +433,7 @@ def _fetch_from_psnow_pdf(doc_id: str, ver: str = "") -> tuple[str, list[str]]:
     soup = BeautifulSoup(html, "html.parser")
     main = soup.find("main")
     if not main:
-        # Old-style PSNow download-wrapper page — fall back to PDF
+        # Old-style PSNow download-wrapper page — fall back to PDF (has its own cache)
         return _fetch_from_psnow_pdf(doc_id, ver=ver)
 
     # The content is inside <hpe-left-rail-container>
@@ -433,7 +442,7 @@ def _fetch_from_psnow_pdf(doc_id: str, ver: str = "") -> tuple[str, list[str]]:
         raise RuntimeError(f"Could not find content container in page for doc {doc_id!r}")
 
     # For versioned requests the collateral HTML always returns the latest content;
-    # fall back to the versioned PDF instead.
+    # fall back to the versioned PDF instead (has its own cache).
     if ver:
         return _fetch_from_psnow_pdf(doc_id, ver=ver)
 
@@ -458,7 +467,9 @@ def _fetch_from_psnow_pdf(doc_id: str, ver: str = "") -> tuple[str, list[str]]:
     finally:
         os.unlink(tmpfile)
 
-    return result.text_content, sections
+    markdown = result.text_content
+    _qs_cache_write(doc_id, ver, markdown, sections)
+    return markdown, sections
 
 
 def filter_section(markdown: str, section: str) -> str:

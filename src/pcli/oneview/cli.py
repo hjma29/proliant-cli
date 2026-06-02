@@ -555,7 +555,7 @@ examples:
     s_list = p_list.add_subparsers(dest="what", metavar="WHAT")
     s_list.required = True
 
-    p_srv = s_list.add_parser("servers", help="List all managed servers")
+    p_srv = s_list.add_parser("servers", aliases=["server"], help="List all managed servers")
     p_srv.add_argument("--fields", metavar="FIELDS",
         help="Comma-separated columns: name,model,serial,ilo,ilo_ip,power,state,profile")
     p_srv.set_defaults(func=_cmd_servers_list)
@@ -565,16 +565,16 @@ examples:
         help='Server name (e.g. "Enc1, bay 1"). Omit for all servers.')
     p_fw.set_defaults(func=_cmd_firmware_list)
 
-    p_net = s_list.add_parser("networks", help="List all ethernet networks")
+    p_net = s_list.add_parser("networks", aliases=["network"], help="List all ethernet networks")
     p_net.set_defaults(func=_cmd_networks_list)
 
-    p_ns = s_list.add_parser("networksets", help="List all network sets")
+    p_ns = s_list.add_parser("networksets", aliases=["networkset"], help="List all network sets")
     p_ns.set_defaults(func=_cmd_networksets_list)
 
-    p_ul = s_list.add_parser("uplinksets", help="List all uplink sets")
+    p_ul = s_list.add_parser("uplinksets", aliases=["uplinkset"], help="List all uplink sets")
     p_ul.set_defaults(func=_cmd_uplinksets_list)
 
-    p_sp = s_list.add_parser("server-profiles", help="List all server profiles")
+    p_sp = s_list.add_parser("server-profiles", aliases=["server-profile"], help="List all server profiles")
     p_sp.set_defaults(func=_cmd_profiles_list)
 
     # ── describe ──────────────────────────────────────────────────────────
@@ -582,10 +582,14 @@ examples:
     s_desc = p_desc.add_subparsers(dest="resource", metavar="RESOURCE")
     s_desc.required = True
 
-    for res in ("uplinkset", "networkset", "server-profile"):
-        rp = s_desc.add_parser(res, help=f"Describe a {res}")
+    for res, aliases in (
+        ("uplinkset",      ["uplinksets"]),
+        ("networkset",     ["networksets"]),
+        ("server-profile", ["server-profiles"]),
+    ):
+        rp = s_desc.add_parser(res, aliases=aliases, help=f"Describe a {res}")
         rp.add_argument("name", metavar="NAME", help=f"Name of the {res}")
-        rp.set_defaults(func=_cmd_describe)
+        rp.set_defaults(func=_cmd_describe, resource=res)
 
     return parser
 

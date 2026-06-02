@@ -166,6 +166,21 @@ ilo7_1.20.00.json                   ← sidecar, NOT part of the signed ZIP
 - Gen11 `payload.json` uses **lowercase snake_case keys** (`package`, `installation`, `reboot_required`, description entries use `{lang, x_late}` not `{Lang, Value}`). Gen12 sidecar uses CamelCase.
 - `sdr.py::_fetch_software_ids()` fetches sibling `.json` URL for device matching — already correct.
 
+### SPP Catalog Composition
+
+Stats for gen12 SPP `2026.03.00.00` (source: `metadata.json`):
+
+| Type | Count | Avg size | Largest file | Max size | Total |
+|------|------:|----------|--------------|----------|------:|
+| `.fwpkg` | 134 | 9.0 MB | U69_1.62_02_06_2026.fwpkg (DL380 Gen12 BIOS) | 64 MB | ~1.2 GB |
+| `.exe` | 44 | 10.3 MB | cp071210.exe | 226 MB | ~455 MB |
+| `.rpm` | 94 | 2.4 MB | MRStorageAdministrator-008.016.013.000-00.x86_64.rpm | 31 MB | ~224 MB |
+| `.zip` | 27 | 5.3 MB | cp070370.zip | 25 MB | ~144 MB |
+| `.deb` | 8 | 7.0 MB | sut-6.6.0-9_amd64.deb | 19 MB | ~56 MB |
+| **Total** | **307** | | | | **~2.1 GB** |
+
+For firmware-only work, only the 134 `.fwpkg` files + their sidecar `.json` files matter (~1.2 GB). The `.rpm`/`.exe`/`.zip`/`.deb` files are OS-level drivers and tools that require SUM/OS-agent to install. A future `pcli spp download --firmware-only` flag could skip those.
+
 ### pcli ilo get update-method
 
 ```bash

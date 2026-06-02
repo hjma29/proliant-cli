@@ -768,6 +768,7 @@ async def _run_report_cpu(args: argparse.Namespace) -> None:
 
 
 async def _run_report_gpu(args: argparse.Namespace) -> None:
+    from collections import defaultdict
     from rich.console import Console
     from rich.table import Table
     from rich import box as rich_box
@@ -778,39 +779,44 @@ async def _run_report_gpu(args: argparse.Namespace) -> None:
     with console.status("[dim]Fetching GPU inventory across fleet…[/dim]"):
         results = await _run_parallel_async(hosts, inventory.fetch_gpu_report_data)
 
+    # Aggregate: gpu_name → {count, servers}
+    groups: dict[str, dict] = {}
+    for server_name, error, gpus in results:
+        if error or not gpus:
+            continue
+        for gpu in gpus:
+            key = gpu["name"]
+            if key not in groups:
+                groups[key] = {"count": 0, "servers": set()}
+            groups[key]["count"] += 1
+            groups[key]["servers"].add(server_name)
+
+    if not groups:
+        console.print("[yellow]No GPUs found across fleet.[/yellow]")
+        return
+
+    rows = sorted(groups.items(), key=lambda x: x[1]["count"], reverse=True)
+    total = sum(v["count"] for _, v in rows)
+    server_count = len({s for _, v in rows for s in v["servers"]})
+
     table = Table(
-        title="GPU Inventory",
+        title=f"GPU Inventory  ({total} GPUs across {server_count} servers)",
         box=rich_box.ROUNDED,
         show_header=True,
         header_style="bold cyan",
     )
-    table.add_column("Server",     min_width=16, no_wrap=True)
-    table.add_column("GPU",        min_width=30)
-    table.add_column("Part/Model", min_width=20)
+    table.add_column("GPU Model", min_width=28)
+    table.add_column("Count",     justify="right", no_wrap=True, style="bold")
+    table.add_column("Servers",   min_width=20)
 
-    has_gpu = False
-    errors = []
-    for server_name, error, gpus in results:
-        if error:
-            errors.append(server_name)
-            continue
-        if not gpus:
-            continue
-        has_gpu = True
-        for i, gpu in enumerate(gpus):
-            table.add_row(
-                server_name if i == 0 else "",
-                gpu["name"],
-                gpu["model"],
-            )
-
-    if not has_gpu:
-        console.print("[yellow]No GPUs found across fleet.[/yellow]")
-        return
+    for gpu_name, v in rows:
+        table.add_row(
+            gpu_name,
+            str(v["count"]),
+            ", ".join(sorted(v["servers"])),
+        )
 
     console.print(table)
-    if errors:
-        console.print(f"[dim]Skipped (unreachable/unsupported): {', '.join(errors)}[/dim]")
 
 
 async def _run_get(args: argparse.Namespace) -> None:

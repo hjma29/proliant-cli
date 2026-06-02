@@ -13,6 +13,7 @@
 - [3. Firmware Update Methods — BMC / UEFI / OS](#3-firmware-update-methods--bmc--uefi--os)
   - [How the Classification Works](#how-the-classification-works)
   - [payload.json Inside fwpkg — The Source of Truth](#payloadjson-inside-fwpkg--the-source-of-truth)
+  - [SPP Catalog Composition](#spp-catalog-composition)
   - [pcli ilo get update-method](#pcli-ilo-get-update-method)
 - [4. COM Firmware Update Mechanism](#4-com-firmware-update-mechanism)
   - [COM Does NOT Download the Entire SPP ISO](#com-does-not-download-the-entire-spp-iso)

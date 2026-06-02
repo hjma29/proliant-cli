@@ -1,8 +1,8 @@
 .markdown-source-view.mod-cm6 .cm-contentContainer,
 .markdown-reading-view .markdown-preview-sizer {
-  max-width: 90% !important;
+  max-width: 100% !important;
 }
 
 body {
-  --file-line-width: 90% !important;
+  --file-line-width: 100% !important;
 }

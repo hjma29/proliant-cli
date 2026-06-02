@@ -669,11 +669,16 @@ async def _run_set_dhcp(args: argparse.Namespace) -> None:
                     }
                 }
                 result = await client.patch("/redfish/v1/Managers/1/EthernetInterfaces/1", payload)
-                if "error" in result:
-                    msg = result["error"].get("message", str(result["error"]))
-                    print(f"[{name}] ERROR from iLO: {msg}", file=sys.stderr)
-                else:
+                # iLO wraps success in an "error" envelope with MessageId containing "Success"
+                ext = result.get("error", {})
+                msgs = ext.get("@Message.ExtendedInfo", [])
+                is_success = not ext or any("Success" in m.get("MessageId", "") for m in msgs)
+                if is_success:
                     print(f"[{name}] ✓ DHCP enabled. iLO will obtain a new IP shortly.")
+                else:
+                    msg = ext.get("message", str(result))
+                    details = "; ".join(m.get("MessageId", "") for m in msgs)
+                    print(f"[{name}] ERROR from iLO: {msg} ({details})", file=sys.stderr)
         except Exception as exc:
             print(f"[{name}] ERROR: {exc}", file=sys.stderr)
 

@@ -88,3 +88,45 @@ async def get_server(client: "OneViewClient", name: str) -> dict:
         known = ", ".join(s["name"] for s in servers)
         raise ValueError(f"Server '{name}' not found. Known servers: {known}")
     return matched[0]
+
+
+_SKIP_STATUSES = {"NotPresent", "Unknown", ""}
+
+
+async def get_fleet_memory(client: "OneViewClient") -> list[dict]:
+    """Return all populated DIMMs across all OneView-managed servers."""
+    import asyncio
+
+    servers = await client.get_all("/rest/server-hardware")
+
+    async def _get_server_memory(s: dict) -> list[dict]:
+        name = s.get("serverName") or s.get("name", "")
+        try:
+            mem_data = await client.get(s["uri"] + "/memory")
+        except Exception:
+            return []
+        result = []
+        for dimm in mem_data.get("data", []):
+            cap_mib = dimm.get("CapacityMiB") or 0
+            if not cap_mib:
+                continue
+            oem = dimm.get("Oem", {}).get("Hpe", {})
+            status = oem.get("DIMMStatus", "")
+            if status in _SKIP_STATUSES:
+                continue
+            hpe_pn = (oem.get("PartNumber") or dimm.get("PartNumber") or "Unknown").strip() or "Unknown"
+            result.append({
+                "server":      name,
+                "hpe_pn":      hpe_pn,
+                "vendor":      oem.get("VendorName") or dimm.get("Manufacturer", ""),
+                "capacity_gb": cap_mib // 1024,
+                "type":        dimm.get("BaseModuleType", ""),
+                "speed_mts":   oem.get("MaxOperatingSpeedMTs", 0) or 0,
+            })
+        return result
+
+    results = await asyncio.gather(*[_get_server_memory(s) for s in servers])
+    dimms: list[dict] = []
+    for batch in results:
+        dimms.extend(batch)
+    return dimms

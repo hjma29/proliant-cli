@@ -108,3 +108,96 @@ async def list_uplink_sets(client: "OneViewClient") -> list[dict]:
         [parse_uplink_set(u, li_map) for u in raw_uplinks],
         key=lambda u: u["name"],
     )
+
+
+# ── describe helpers ──────────────────────────────────────────────────────────
+
+async def describe_uplink_set(client: "OneViewClient", name: str) -> dict:
+    """Return full detail for a single uplink set, with resolved names."""
+    raw_uplinks, raw_nets, raw_lis = await asyncio.gather(
+        client.get_all("/rest/uplink-sets"),
+        client.get_all("/rest/ethernet-networks"),
+        client.get_all("/rest/logical-interconnects"),
+    )
+    matched = [u for u in raw_uplinks if u.get("name", "").lower() == name.lower()]
+    if not matched:
+        known = ", ".join(u.get("name", "") for u in raw_uplinks)
+        raise ValueError(f"Uplink set '{name}' not found. Known: {known}")
+    u = matched[0]
+
+    net_map = {n["uri"]: n for n in raw_nets}
+    li_map  = {li["uri"]: li.get("name", "") for li in raw_lis}
+
+    # Resolve ports
+    ports = []
+    for p in u.get("portConfigInfos", []):
+        entries = p.get("location", {}).get("locationEntries", [])
+        bay  = next((e["value"] for e in entries if e["type"] == "Bay"), "")
+        port = next((e["value"] for e in entries if e["type"] == "Port"), "")
+        ports.append({
+            "bay":   bay,
+            "port":  port,
+            "speed": p.get("desiredSpeed", ""),
+            "fec":   p.get("desiredFecMode", ""),
+        })
+
+    # Resolve member networks
+    networks = []
+    for uri in u.get("networkUris", []):
+        n = net_map.get(uri, {})
+        networks.append({
+            "name":   n.get("name", uri.rsplit("/", 1)[-1]),
+            "vlan":   n.get("vlanId", 0),
+            "type":   n.get("ethernetNetworkType", ""),
+            "status": n.get("status", ""),
+        })
+
+    return {
+        "name":         u.get("name", ""),
+        "li_name":      li_map.get(u.get("logicalInterconnectUri", ""), ""),
+        "network_type": u.get("networkType", ""),
+        "conn_mode":    u.get("connectionMode", ""),
+        "reachability": u.get("reachability", ""),
+        "status":       u.get("status", ""),
+        "state":        u.get("state", ""),
+        "ports":        ports,
+        "networks":     networks,
+    }
+
+
+async def describe_network_set(client: "OneViewClient", name: str) -> dict:
+    """Return full detail for a single network set, with resolved network info."""
+    raw_sets, raw_nets = await asyncio.gather(
+        client.get_all("/rest/network-sets"),
+        client.get_all("/rest/ethernet-networks"),
+    )
+    matched = [s for s in raw_sets if s.get("name", "").lower() == name.lower()]
+    if not matched:
+        known = ", ".join(s.get("name", "") for s in raw_sets)
+        raise ValueError(f"Network set '{name}' not found. Known: {known}")
+    s = matched[0]
+
+    net_map = {n["uri"]: n for n in raw_nets}
+    native_uri = s.get("nativeNetworkUri") or ""
+
+    networks = []
+    for uri in s.get("networkUris", []):
+        n = net_map.get(uri, {})
+        networks.append({
+            "name":    n.get("name", uri.rsplit("/", 1)[-1]),
+            "vlan":    n.get("vlanId", 0),
+            "type":    n.get("ethernetNetworkType", ""),
+            "purpose": n.get("purpose", ""),
+            "status":  n.get("status", ""),
+            "native":  uri == native_uri,
+        })
+    networks.sort(key=lambda n: n["name"])
+
+    return {
+        "name":           s.get("name", ""),
+        "type":           s.get("networkSetType", ""),
+        "status":         s.get("status", ""),
+        "state":          s.get("state", ""),
+        "native_network": net_map.get(native_uri, {}).get("name", "") if native_uri else "",
+        "networks":       networks,
+    }

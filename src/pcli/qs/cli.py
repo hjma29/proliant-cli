@@ -93,14 +93,32 @@ def _render_section_body(body: str) -> None:
             console.print(Markdown(text_block))
 
 
-def _fmt_date(raw: str) -> str:
-    """Convert '05/13/2026 00:00:00.000' → '2026-05-13'."""
-    if not raw:
-        return ""
-    parts = raw.split(" ")[0].split("/")
-    if len(parts) == 3:
-        return f"{parts[2]}-{parts[0]}-{parts[1]}"
-    return raw
+def _parse_change_rows(body: str) -> list[list[str]]:
+    """Parse Summary of Changes markdown table into [date, version, action, description] rows."""
+    lines = body.splitlines()
+    table_lines = [ln for ln in lines if ln.startswith("|") and not _SEP_RE.match(ln)]
+    if len(table_lines) < 2:
+        return []
+    rows = []
+    for ln in table_lines[1:]:  # skip header row
+        cells = _parse_md_row(ln)
+        padded = (cells + [""] * 4)[:4]
+        rows.append(padded)
+    return rows
+
+
+def _take_n_versions(rows: list[list[str]], n: int) -> list[list[str]]:
+    """Return only rows belonging to the first *n* version groups (date not empty)."""
+    groups = 0
+    result = []
+    for row in rows:
+        if row[0]:  # non-empty date marks the start of a new version group
+            groups += 1
+            if groups > n:
+                break
+        if groups > 0:
+            result.append(row)
+    return result
 
 
 # ── Commands ───────────────────────────────────────────────────────────────────
@@ -119,7 +137,7 @@ def _cmd_list(args: argparse.Namespace) -> None:
         console.print("[yellow]No results found.[/yellow]")
         return
 
-    # Deduplicate by doc_id — Coveo indexes the same doc multiple times
+    # Deduplicate by doc_id — Coveo can index the same document multiple times
     seen: set[str] = set()
     unique: list[QSEntry] = []
     for e in entries:
@@ -127,33 +145,49 @@ def _cmd_list(args: argparse.Namespace) -> None:
             seen.add(e.doc_id)
             unique.append(e)
 
-    # Fetch real version history from the HPE variants API for each doc
+    top = unique[0]
+    console.print(f"[dim]Fetching QuickSpec {top.doc_id}…[/dim]")
+    try:
+        markdown, sections = fetch_quickspec_markdown(top.doc_id)
+    except Exception as exc:
+        console.print(f"[red]Error:[/red] {exc}", highlight=False)
+        sys.exit(1)
+
+    # Header
+    console.print()
+    console.print(Rule(f"[bold]{top.title}[/bold]  [dim]{top.doc_id}[/dim]"))
+
+    # Find and render Summary of Changes
+    matched = next((s for s in sections if "summary of changes" in s.lower()), None)
+    if not matched:
+        console.print("[yellow]No 'Summary of Changes' section found in this QuickSpec.[/yellow]")
+        console.print(f"[dim]Use 'pcli qs describe {top.doc_id}' to browse all sections.[/dim]")
+        return
+
+    text = filter_section(markdown, matched)
+    lines = text.splitlines()
+    body = "\n".join(lines[1:]).lstrip("\n")
+
+    rows = _parse_change_rows(body)
+    rows = _take_n_versions(rows, args.count)
+
     t = Table(
         box=box.SIMPLE_HEAD,
         show_header=True,
-        header_style="bold cyan",
+        header_style="bold",
         padding=(0, 1),
     )
-    t.add_column("Doc ID", style="green", no_wrap=True)
-    t.add_column("Version", justify="right", no_wrap=True)
-    t.add_column("Date", no_wrap=True)
-    t.add_column("Title")
+    t.add_column("Date", no_wrap=True, style="cyan")
+    t.add_column("Version", no_wrap=True, style="green")
+    t.add_column("Action", no_wrap=True)
+    t.add_column("Description of Change")
 
-    for e in unique:
-        try:
-            vers = fetch_quickspec_versions(e.doc_id, title=e.title, n=args.count)
-        except Exception:
-            vers = []
-        if vers:
-            for v in vers:
-                t.add_row(v.doc_id, v.version_num, v.date, v.title)
-        else:
-            # Fallback: show what Coveo gave us
-            t.add_row(e.doc_id, "", _fmt_date(e.last_modified), e.title)
+    for row in rows:
+        t.add_row(*row)
 
     console.print(t)
     console.print(
-        "[dim]Use 'pcli qs describe <docid>' to read the full QuickSpec.[/dim]"
+        f"[dim]Use 'pcli qs describe {top.doc_id}' to read the full QuickSpec.[/dim]"
     )
 
 

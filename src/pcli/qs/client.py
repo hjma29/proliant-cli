@@ -52,7 +52,11 @@ _CACHE_TTL_LATEST = 7 * 24 * 3600   # 7 days for "latest" content (may change)
 
 
 def _cache_dir() -> Path:
-    base = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    import sys
+    if sys.platform == "win32":
+        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+    else:
+        base = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
     d = base / "pcli" / "qs"
     d.mkdir(parents=True, exist_ok=True)
     return d

@@ -54,7 +54,7 @@ from rich.table import Table
 from rich import box
 
 from pcli.com.auth import COMSession, CredentialsError, AuthError
-from pcli.com.client import run
+from pcli.com.client import COMClient, run
 from pcli.com import devices as _devices
 from pcli.com import workspaces as _workspaces
 from pcli.com import firmware as _firmware
@@ -564,6 +564,61 @@ async def _cmd_add_device(args: argparse.Namespace) -> None:
         sys.exit(exit_code)
 
 
+# ── pcli com report memory ────────────────────────────────────────────────────
+
+async def _cmd_report_memory(args: argparse.Namespace) -> None:
+    from pcli.com.inventory import get_fleet_memory, aggregate_by_part_number
+    from rich.table import Table
+    from rich import box as rich_box
+
+    session = await _ensure_session(args)
+    base_url = session.base_url
+
+    async with COMClient(session) as client:
+        with console.status("[dim]Fetching memory inventory across fleet…[/dim]"):
+            dimms = await get_fleet_memory(client, base_url)
+
+    if not dimms:
+        console.print("[yellow]No memory inventory data returned.[/yellow]")
+        return
+
+    if getattr(args, "raw", False):
+        import json
+        console.print(json.dumps(dimms, indent=2))
+        return
+
+    rows = aggregate_by_part_number(dimms)
+    total_dimms = sum(r["count"] for r in rows)
+    total_tb = sum(r["count"] * r["capacity_gb"] for r in rows) / 1024
+
+    table = Table(
+        title=f"Memory Part-Number Breakdown  ({total_dimms} DIMMs  /  {total_tb:.1f} TB total)",
+        box=rich_box.ROUNDED,
+        show_header=True,
+        header_style="bold cyan",
+    )
+    table.add_column("HPE Part Number",  min_width=14, no_wrap=True)
+    table.add_column("Vendor",           min_width=12, no_wrap=True)
+    table.add_column("Capacity",         justify="right", no_wrap=True)
+    table.add_column("Type",             no_wrap=True)
+    table.add_column("Speed",            justify="right", no_wrap=True)
+    table.add_column("Count",            justify="right", no_wrap=True, style="bold")
+    table.add_column("Total",            justify="right", no_wrap=True)
+    table.add_column("Servers",          justify="right", no_wrap=True, style="dim")
+
+    for r in rows:
+        cap = f"{r['capacity_gb']} GB" if r["capacity_gb"] else "—"
+        speed = f"{r['speed_mts']} MT/s" if r["speed_mts"] else "—"
+        total_cap_gb = r["count"] * r["capacity_gb"]
+        total_cap = f"{total_cap_gb} GB" if total_cap_gb < 1024 else f"{total_cap_gb/1024:.1f} TB"
+        table.add_row(
+            r["hpe_pn"], r["vendor"], cap, r["type"], speed,
+            str(r["count"]), total_cap, str(len(r["servers"])),
+        )
+
+    console.print(table)
+
+
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -763,3 +818,6 @@ def main(argv: Optional[list[str]] = None) -> None:
     elif args.command == "add":
         if args.what == "device":
             run(_cmd_add_device(args))
+    elif args.command == "report":
+        if args.what == "memory":
+            run(_cmd_report_memory(args))

@@ -79,6 +79,9 @@ def search_quickspecs(model: str, count: int = 10) -> list[QSEntry]:
     # Normalise: dl380gen12 → DL380 Gen12, dl380-gen12 → DL380 Gen12
     q = re.sub(r"(?i)(gen)(\d+)", r" Gen\2", model.replace("-", " "))
     q = q.upper().replace("GEN", "Gen").strip()
+    # Prefix "HPE ProLiant" for better Coveo relevance ranking
+    if not q.upper().startswith("HPE"):
+        q = "HPE ProLiant " + q
     # Append "QuickSpecs" so the search stays focused
     query = f"{q} QuickSpecs"
 
@@ -101,10 +104,11 @@ def search_quickspecs(model: str, count: int = 10) -> list[QSEntry]:
         data = json.loads(resp.read())
 
     entries: list[QSEntry] = []
+    seen_ids: set[str] = set()
     for item in data.get("results", []):
         raw = item.get("raw", {})
         doc_id = raw.get("kmdocid", "")
-        if not doc_id:
+        if not doc_id or doc_id in seen_ids:
             continue
         # Skip doc IDs that reference sub-sections (contain ||)
         if "||" in doc_id:
@@ -113,6 +117,7 @@ def search_quickspecs(model: str, count: int = 10) -> list[QSEntry]:
         # Only keep actual QuickSpec documents
         if "quickspec" not in title.lower():
             continue
+        seen_ids.add(doc_id)
         entries.append(QSEntry(
             doc_id=doc_id,
             title=title,

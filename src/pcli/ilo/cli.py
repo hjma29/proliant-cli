@@ -627,40 +627,71 @@ def _load_hosts_or_exit(name: str | None) -> list[dict]:
         sys.exit(1)
 
 
+_HOSTS_INI_TEMPLATE = (
+    "# pcli iLO inventory\n"
+    "# Place this file in the same directory as pcli (or pcli.exe on Windows).\n"
+    "#\n"
+    "# [defaults]  — shared credentials for all servers (can be overridden per server)\n"
+    "# [section]   — one section per iLO server; section name = display name\n"
+    "#               'host' is the only required field (IP or hostname, no https://)\n"
+    "\n"
+    "[defaults]\n"
+    "username = Administrator\n"
+    "password = yourpassword\n"
+    "\n"
+    "[my-server-1]\n"
+    "host = 10.0.0.1\n"
+    "\n"
+    "[my-server-2]\n"
+    "host = 10.0.0.2\n"
+    "\n"
+    "# Example: server with different credentials\n"
+    "# [lab-server]\n"
+    "# host = myilo.example.com\n"
+    "# username = localadmin\n"
+    "# password = differentpass\n"
+)
+
+
+def _write_hosts_ini(dest: "Path") -> None:
+    dest.write_text(_HOSTS_INI_TEMPLATE)
+
+
+def _open_in_editor(path: "Path") -> None:
+    import subprocess
+    import os
+    import platform
+    try:
+        if platform.system() == "Windows":
+            os.startfile(str(path))
+        elif platform.system() == "Darwin":
+            subprocess.run(["open", str(path)], check=False)
+        else:
+            editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "xdg-open"
+            subprocess.run([editor, str(path)], check=False)
+    except Exception:
+        pass
+
+
 def _run_init() -> None:
     from pathlib import Path
+    from rich.console import Console
+    from rich.prompt import Confirm
+
+    console = Console()
     dest = Path.cwd() / "hosts-ilo.ini"
     if dest.exists():
-        print(f"Already exists: {dest}")
-        print("Edit it to add or update your servers.")
+        console.print(f"[green]Already exists:[/green] [bold]{dest}[/bold]")
+        console.print("  Edit it to add or update your servers.")
+        if Confirm.ask("\n[green]Open it in your default editor?[/green]", default=True):
+            _open_in_editor(dest)
         return
-    dest.write_text(
-        "# pcli iLO inventory\n"
-        "# Place this file in the same directory as pcli (or pcli.exe on Windows).\n"
-        "#\n"
-        "# [defaults]  — shared credentials for all servers (can be overridden per server)\n"
-        "# [section]   — one section per iLO server; section name = display name\n"
-        "#               'host' is the only required field (IP or hostname, no https://)\n"
-        "\n"
-        "[defaults]\n"
-        "username = Administrator\n"
-        "password = yourpassword\n"
-        "\n"
-        "[my-server-1]\n"
-        "host = 10.0.0.1\n"
-        "\n"
-        "[my-server-2]\n"
-        "host = 10.0.0.2\n"
-        "\n"
-        "# Example: server with different credentials\n"
-        "# [lab-server]\n"
-        "# host = myilo.example.com\n"
-        "# username = localadmin\n"
-        "# password = differentpass\n"
-    )
-    print(f"Created: {dest}")
-    print("Edit it to fill in your server addresses and credentials.")
-    print("\nThen try:  pcli ilo list firmwares")
+    _write_hosts_ini(dest)
+    console.print(f"\n[green]✓[/green] Created: [bold]{dest}[/bold]")
+    console.print("  Fill in your server addresses and credentials.\n")
+    console.print("  Then try: [bold]pcli ilo list firmwares[/bold]\n")
+    if Confirm.ask("[green]Open it in your default editor now?[/green]", default=True):
+        _open_in_editor(dest)
 
 
 async def _run_set_dhcp(args: argparse.Namespace) -> None:

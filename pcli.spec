@@ -1,9 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import copy_metadata, collect_data_files
+from PyInstaller.utils.hooks import copy_metadata, collect_data_files, collect_submodules
 
 datas = []
 datas += copy_metadata('pcli')
 datas += collect_data_files('magika')  # magika ML model files required at runtime
+
+# markitdown PDF converter uses pdfminer and pdfplumber — PyInstaller won't
+# auto-detect these because they are imported lazily inside the converter class.
+hidden_imports = (
+    collect_submodules('pdfminer') +
+    collect_submodules('pdfplumber')
+)
 
 
 a = Analysis(
@@ -11,7 +18,7 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=datas,
-    hiddenimports=['yaml'],
+    hiddenimports=['yaml'] + hidden_imports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

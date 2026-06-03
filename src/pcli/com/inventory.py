@@ -5,8 +5,6 @@ Hardware inventory reports from HPE COM.
 
 Uses the /compute-ops-mgmt/{COM_API_VERSION}/servers/{id}/inventory endpoint,
 which is a cached Redfish mirror collected by COM from each iLO.
-Server list is sourced from the GreenLake platform device API (same as
-'pcli com list devices') to avoid a separate compute-ops-mgmt list call.
 """
 
 from __future__ import annotations
@@ -17,7 +15,6 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from pcli.com.client import COMClient
-    from pcli.com.auth import COMSession
 
 
 _SKIP_STATUSES = {"NotPresent", "Unknown", ""}
@@ -52,20 +49,15 @@ async def _get_memory_inventory(client: "COMClient", server: dict) -> list[dict]
         return []
 
 
-async def _get_compute_servers(session: "COMSession") -> list[dict]:
-    """Return list of {id, name} dicts for all COMPUTE devices.
-
-    Uses the GreenLake platform device API (same source as 'pcli com list devices')
-    so no separate compute-ops-mgmt server-list call is needed.
-    """
-    from pcli.com.devices import fetch_compute_devices
-    devices = await fetch_compute_devices(session)
-    return [{"id": d.id, "name": d.display_name} for d in devices]
+async def _get_com_servers(client: "COMClient") -> list[dict]:
+    """Return list of {id, name} dicts from the COM servers endpoint."""
+    r = await client.get(client.session.com_url("/servers"), params={"limit": 1000})
+    return [{"id": s["id"], "name": s.get("name", s["id"])} for s in r.get("items", [])]
 
 
 async def get_fleet_memory(client: "COMClient") -> list[dict]:
     """Return all populated DIMMs across the whole fleet, concurrently."""
-    servers = await _get_compute_servers(client.session)
+    servers = await _get_com_servers(client)
 
     tasks = [_get_memory_inventory(client, s) for s in servers]
     results = await asyncio.gather(*tasks)
@@ -107,7 +99,7 @@ async def _get_gpu_inventory(client: "COMClient", server: dict) -> list[dict]:
 
 async def get_fleet_gpus(client: "COMClient") -> list[dict]:
     """Return all discrete GPUs across the whole fleet, concurrently."""
-    servers = await _get_compute_servers(client.session)
+    servers = await _get_com_servers(client)
 
     tasks = [_get_gpu_inventory(client, s) for s in servers]
     results = await asyncio.gather(*tasks)

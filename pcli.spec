@@ -1,8 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import copy_metadata
+from PyInstaller.utils.hooks import copy_metadata, collect_data_files
 
 datas = []
 datas += copy_metadata('pcli')
+datas += collect_data_files('magika')  # magika ML model files required at runtime
 
 
 a = Analysis(

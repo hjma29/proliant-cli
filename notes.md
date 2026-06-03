@@ -351,7 +351,7 @@ Result: Power Management `1.0.0 → 1.1.2`, UBM6 `1.00 → 1.06` updated. BCM sk
 
 ---
 
-## 13. COM Auth Architecture
+## 10. COM Auth Overview
 
 ### Two Login Modes
 
@@ -360,68 +360,11 @@ Result: Power Management `1.0.0 → 1.1.2`, UBM6 `1.00 → 1.06` updated. BCM sk
 | **User (Okta)** | `pcli com login` | `aquila-user-api.common.cloud.hpe.com` (ui-doorway) |
 | **API client** | `pcli com login --api-client` | Regional API `us-west.api.greenlake.hpe.com` |
 
-### Okta IDX Flow (HPE accounts)
-
-1. `GET sso.common.cloud.hpe.com/as/authorization.oauth2` → stateToken
-2. `POST auth.hpe.com/idp/idx/introspect` → stateHandle
-3. `POST .../idx/identify` → `redirect-idp` (employees skip password → SAML chain)
-4. Okta Verify push → `correctAnswer` number → user taps → poll → `success.href`
-5. Multiple redirects → auth code → token exchange → `access_token`, `refresh_token`, `id_token`
-
-### Token Details
-
-| Token | Expires | Used for |
-|-------|---------|---------|
-| `access_token` | ~2h | Bearer auth on all API calls |
-| `refresh_token` | Days/weeks | Silent refresh 30 min before access_token expires |
-| `id_token` | ~5 min | Only to get `ccs_session` at login — ephemeral |
-| `ccs_session` | Independent | Cookie for ui-doorway requests; dies independently of access_token |
-
-**`ccs_session` is NOT the same as access_token.** After ccs-session expires, only a full `pcli com login` restores it — refresh doesn't help.
+`ccs-session` expires independently of `access_token` — both are required for ui-doorway calls. After `ccs_session` expires, only a full `pcli com login` restores it. See `notes-agents.md` for the full Okta IDX auth flow and token lifetime table.
 
 ---
 
-## 14. COM API Endpoints
-
-### Three Base URLs
-
-| Tier | URL | Auth |
-|------|-----|------|
-| **ui-doorway** | `aquila-user-api.common.cloud.hpe.com` | Bearer + ccs-session cookie |
-| **COM regional** | `us-west.api.greenlake.hpe.com` | Bearer only |
-| **GLP global** | `global.api.greenlake.hpe.com` | GLP Bearer (client credentials) |
-
-### Key Paths
-
-```
-# COM API (regional) — NOTE: /compute-ops/ deprecated April 2025, migrate to /compute-ops-mgmt/
-GET  /compute-ops/v1beta2/firmware-bundles        ← bundles list (old path, still works)
-GET  /compute-ops-mgmt/v1beta2/servers            ← server list with firmwareInventory
-POST /compute-ops-mgmt/v1/jobs                    ← create firmware update job
-GET  /compute-ops-mgmt/v1beta1/activation-keys    ← iLO CloudConnect key
-
-# GLP global — device registration
-POST https://global.api.greenlake.hpe.com/devices/v1/devices
-     {"compute": [{"serialNumber": "X", "partNumber": "Y"}], "network": [], "storage": []}
-
-# ui-doorway — devices, workspaces
-GET  /ui-doorway/ui/v1/devices
-POST /authn/v1/session                            ← get ccs-session from id_token
-```
-
-### Response Envelope Inconsistencies
-
-```
-ui-doorway /devices   → {"devices": [...], "pagination": {...}}    # snake_case
-COM API /servers      → {"items": [...], "nextPageUri": "..."}      # camelCase
-GLP /devices          → {"items": [...]}
-```
-
-`client.get_all()` handles all envelope keys.
-
----
-
-## 15. COM Device Onboarding
+## 11. COM Device Onboarding
 
 ### Working Path (Gen12 servers)
 
@@ -448,7 +391,7 @@ Get key: `GET https://us-west.api.greenlake.hpe.com/compute-ops-mgmt/v1beta1/act
 
 ---
 
-## 16. Quick Reference — Redfish Endpoints
+## 12. Quick Reference — Redfish Endpoints
 
 ```
 # Service root

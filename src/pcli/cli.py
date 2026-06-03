@@ -285,8 +285,15 @@ def _run_update() -> None:
     # Use the API assets endpoint with Accept: application/octet-stream for private repos
     asset_api_url = asset["url"]
     dl_headers = {**headers, "Accept": "application/octet-stream"}
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmp_path = os.path.join(tmpdir, asset_name)
+
+    if sys.platform == "win32":
+        # Extract to a persistent staging dir (not a TemporaryDirectory — the bat script
+        # runs after this process exits, so temp dirs would already be deleted by then)
+        staging_dir = os.path.join(os.environ.get("TEMP", "C:\\Temp"), "pcli_update_staging")
+        if os.path.exists(staging_dir):
+            shutil.rmtree(staging_dir)
+        os.makedirs(staging_dir)
+        tmp_path = os.path.join(staging_dir, asset_name)
         try:
             req = urllib.request.Request(asset_api_url, headers=dl_headers)
             with urllib.request.urlopen(req, timeout=120) as resp, open(tmp_path, "wb") as f:
@@ -294,38 +301,42 @@ def _run_update() -> None:
         except Exception as e:
             print(f"ERROR: Download failed: {e}", file=sys.stderr)
             sys.exit(1)
-
-        if sys.platform == "win32":
-            # Extract everything from the zip
-            with zipfile.ZipFile(tmp_path) as zf:
-                zf.extractall(tmpdir)
-            new_exe = os.path.join(tmpdir, "pcli.exe")
-            new_internal = os.path.join(tmpdir, "_internal")
-            current_exe = sys.executable
-            current_dir = os.path.dirname(current_exe)
-            current_internal = os.path.join(current_dir, "_internal")
-            # Can't overwrite running exe on Windows — use a detached helper script
-            persistent_bat = os.path.join(os.environ.get("TEMP", "C:\\Temp"), "pcli_update.bat")
-            with open(persistent_bat, "w") as f:
-                f.write(
-                    f'@echo off\n'
-                    f'ping -n 3 127.0.0.1 >nul\n'
-                    f'xcopy /e /i /y "{new_internal}" "{current_internal}"\n'
-                    f'copy /y "{new_exe}" "{current_exe}"\n'
-                    f'echo pcli updated to {latest_ver}\n'
-                )
-            subprocess.Popen(
-                ["cmd.exe", "/c", persistent_bat],
-                creationflags=subprocess.CREATE_NEW_CONSOLE,
+        with zipfile.ZipFile(tmp_path) as zf:
+            zf.extractall(staging_dir)
+        new_exe = os.path.join(staging_dir, "pcli.exe")
+        new_internal = os.path.join(staging_dir, "_internal")
+        current_exe = sys.executable
+        current_dir = os.path.dirname(current_exe)
+        current_internal = os.path.join(current_dir, "_internal")
+        persistent_bat = os.path.join(os.environ.get("TEMP", "C:\\Temp"), "pcli_update.bat")
+        with open(persistent_bat, "w") as f:
+            f.write(
+                f'@echo off\n'
+                f'ping -n 3 127.0.0.1 >nul\n'
+                f'xcopy /e /i /y "{new_internal}" "{current_internal}"\n'
+                f'copy /y "{new_exe}" "{current_exe}"\n'
+                f'rmdir /s /q "{staging_dir}"\n'
+                f'echo pcli updated to {latest_ver}\n'
+                f'pause\n'
             )
-            print(f"✓ Update to {latest_ver} in progress — a new window will confirm when done.")
-        else:
-            # Unix: can replace running binary in-place
+        subprocess.Popen(
+            ["cmd.exe", "/c", persistent_bat],
+            creationflags=subprocess.CREATE_NEW_CONSOLE,
+        )
+        print(f"✓ Update to {latest_ver} in progress — a new window will confirm when done.")
+    else:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = os.path.join(tmpdir, asset_name)
+            try:
+                req = urllib.request.Request(asset_api_url, headers=dl_headers)
+                with urllib.request.urlopen(req, timeout=120) as resp, open(tmp_path, "wb") as f:
+                    shutil.copyfileobj(resp, f)
+            except Exception as e:
+                print(f"ERROR: Download failed: {e}", file=sys.stderr)
+                sys.exit(1)
             os.chmod(tmp_path, 0o755)
             current_exe = sys.executable
-            # Atomic replace
             os.replace(tmp_path, current_exe)
-            # Prevent tmpdir cleanup from failing on missing file
             open(tmp_path, "w").close()
             print(f"✓ Updated to {latest_ver}. Run 'pcli --version' to confirm.")
 

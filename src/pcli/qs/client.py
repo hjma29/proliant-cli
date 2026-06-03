@@ -246,7 +246,8 @@ def _fetch_collateral_html(doc_id: str, ver: str = "") -> str:
     if ver:
         url = f"{url}?ver={ver}"
     r = _get_client().get(url)
-    r.raise_for_status()
+    if r.status_code >= 400:
+        raise RuntimeError(f"HTTP {r.status_code} fetching {url}")
     html = r.text
     _html_cache[cache_key] = html
     return html

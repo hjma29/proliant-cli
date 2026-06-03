@@ -722,6 +722,71 @@ iLO 6 `HttpPushUri` multipart upload (`/cgi-bin/uploadFile`) often fails with em
 
 ---
 
+## QuickSpecs Fetch — Old vs New Approach
+
+### Old Approach (broken from home)
+
+```
+pcli qs list
+    │
+    ▼
+[1] urllib.request → GET www.hpe.com/resource-library.html     ← BLOCKED by Akamai
+    │                  (full HTML page, ~200KB)                   (TLS fingerprint)
+    │                  60s timeout → ❌ Error
+    │
+    ▼ (if on corporate network only)
+[2] Parse HTML → extract Coveo API token (buried in JS)
+    │
+    ▼
+[3] POST coveo.com/search → JSON results
+    │
+    ▼
+[4] Filter titles client-side
+
+3 HTTP round-trips, fragile (token format can change), ~3-5s on good day
+```
+
+### New Approach — v0.3.14 (works from home ✅)
+
+```
+pcli qs list
+    │
+    ▼
+[1] curl_cffi (Chrome TLS) → GET www.hpe.com/…/medialibrary.model.json
+    │                          ?restype=quickspecs&search=DL380+Gen12
+    │                          (~5KB JSON, server-side filtered)       ✅ passes Akamai
+    │
+    ▼
+Results
+
+1 HTTP round-trip, stable public API, ~0.5-1s
+```
+
+### Comparison
+
+|                    | Old         | New      |
+|--------------------|-------------|----------|
+| Round-trips        | 3           | 1        |
+| Response size      | ~200KB      | ~5KB     |
+| From home network  | ❌ timeout  | ✅ works |
+| Token required     | yes         | no       |
+| Fragility          | high        | low      |
+| Speed              | 3-5s        | ~1s      |
+
+### Why www.hpe.com was blocked from home
+
+- `www.hpe.com` is behind **Akamai Bot Manager** (block mode on resource library)
+- Akamai uses **TLS fingerprinting (JA3)** to detect non-browser clients
+- Windows `curl`/`urllib` → schannel/OpenSSL → Python JA3 → **blocked**
+- **`curl_cffi`** bundles Chrome's **BoringSSL** and replays Chrome's exact TLS handshake → Akamai sees a real browser → **allowed**
+
+### Why lab WSL worked
+
+1. Linux curl uses OpenSSL → TLS 1.3 + HTTP/2 (different JA3 than Windows schannel)
+2. **Main reason**: WSL traffic exits via HPE corporate gateway (`10.x.x.x` hops) → Akamai likely whitelists HPE's corporate egress IPs entirely
+
+---
+
 ## 12. BCM957414 NIC Firmware — Stepping Chain & SUM CLI Lessons (dl325-gen12)
 
 ### The Problem

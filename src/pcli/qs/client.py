@@ -202,11 +202,6 @@ def search_quickspecs(model: str, count: int = 10) -> list[QSEntry]:
             "  Check your network — try connecting to HPE network (VPN/ZPA) and retry."
         ) from e
 
-    if os.environ.get("PCLI_DEBUG"):
-        print(f"[debug] search URL: {_JSON_SEARCH_URL}?{urllib.parse.urlencode(params)}")
-        print(f"[debug] stat: {data.get('stat')}")
-        print(f"[debug] items[0]: {data.get('items', [None])[0]}")
-
     entries: list[QSEntry] = []
     seen_doc_ids: set[str] = set()
     for item in data.get("items", []):

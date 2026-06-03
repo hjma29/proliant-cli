@@ -48,7 +48,9 @@ async def _get_memory_inventory(client: "COMClient", server: dict) -> list[dict]
                 "locator":    d.get("DeviceLocator", ""),
             })
         return result
-    except Exception:
+    except Exception as e:
+        import sys
+        print(f"  [debug] {name}: {e}", file=sys.stderr)
         return []
 
 

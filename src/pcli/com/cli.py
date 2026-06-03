@@ -763,7 +763,7 @@ async def _cmd_describe_server(args: argparse.Namespace) -> None:
     h_table.add_column(style="dim", no_wrap=True)
     h_table.add_column()
     skip = {"summary", "healthLED", "airFilter", "smartStorage"}
-    for k, v in health.items():
+    for k, v in (health or {}).items():
         if k not in skip:
             h_table.add_row(k.replace("_", " ").title(), _h(v))
     console.print(h_table)

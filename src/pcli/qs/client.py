@@ -139,7 +139,7 @@ def fetch_coveo_token() -> str:
         _RESOURCE_LIBRARY_URL,
         headers={"User-Agent": "Mozilla/5.0 (pcli-qs/1.0)"},
     )
-    with urllib.request.urlopen(req, timeout=20) as resp:
+    with urllib.request.urlopen(req, timeout=60) as resp:
         html = resp.read().decode("utf-8", errors="replace")
 
     m = re.search(r"(xx[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", html)

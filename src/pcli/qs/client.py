@@ -428,7 +428,13 @@ def fetch_quickspec_markdown(doc_id: str, ver: str = "") -> tuple[str, list[str]
             "Install with: pip install beautifulsoup4 markitdown"
         ) from exc
 
-    html = _fetch_collateral_html(doc_id, ver=ver)
+    try:
+        html = _fetch_collateral_html(doc_id, ver=ver)
+    except Exception as e:
+        # No collateral HTML page (404 or other error) — try PDF directly
+        if "404" in str(e) or "Not Found" in str(e):
+            return _fetch_from_psnow_pdf(doc_id, ver=ver)
+        raise
     soup = BeautifulSoup(html, "html.parser")
     main = soup.find("main")
     if not main:

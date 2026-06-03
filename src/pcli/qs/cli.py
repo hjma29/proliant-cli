@@ -335,7 +335,24 @@ _QS_SECTIONS: dict[str, str] = {
 }
 
 
+_PAGE_RE = re.compile(r"^\s*Page\s+\d+\s*$", re.IGNORECASE)
+
+
+def _real_changes(diff_lines: list[str]) -> list[str]:
+    """Return only +/- lines that are not page-number noise."""
+    return [
+        l for l in diff_lines
+        if (l.startswith("+") or l.startswith("-"))
+        and not l.startswith("+++") and not l.startswith("---")
+        and not _PAGE_RE.match(l[1:])
+    ]
+
+
 def _section_map(markdown: str, sections: list[str]) -> dict[str, str]:
+    """Return {section_name: body_text} for all sections."""
+    return {s: filter_section(markdown, s) for s in sections}
+
+
     """Return {section_name: body_text} for all sections."""
     return {s: filter_section(markdown, s) for s in sections}
 
@@ -412,17 +429,16 @@ def _cmd_diff(args: argparse.Namespace) -> None:
         new_lines = sec_map_new.get(matched, "").splitlines()
 
         console.print(Rule(f"[bold]{matched}[/bold]  v{v_old.version_num} → v{v_new.version_num}"))
-        diff = list(difflib.unified_diff(old_lines, new_lines, lineterm="", n=2))
-        if not diff:
+        diff = list(difflib.unified_diff(old_lines, new_lines, lineterm="", n=0))
+        real = _real_changes(diff)
+        if not real:
             console.print("[green]No changes in this section.[/green]")
             return
-        for line in diff[2:]:  # skip --- +++ header lines
+        for line in real:
             if line.startswith("+"):
-                console.print(f"[green]{line}[/green]")
-            elif line.startswith("-"):
-                console.print(f"[red]{line}[/red]")
+                console.print(f"[green]{line[1:]}[/green]")
             else:
-                console.print(f"[dim]{line}[/dim]")
+                console.print(f"[red]{line[1:]}[/red]")
         return
 
     # ── Full diff: all changed sections ──────────────────────────────────────
@@ -430,13 +446,15 @@ def _cmd_diff(args: argparse.Namespace) -> None:
     for sec in all_sections:
         old_text = sec_map_old.get(sec, "")
         new_text = sec_map_new.get(sec, "")
-        if old_text.strip() == new_text.strip():
-            continue
 
         diff = list(difflib.unified_diff(
-            old_text.splitlines(), new_text.splitlines(), lineterm="", n=2
+            old_text.splitlines(), new_text.splitlines(), lineterm="", n=0
         ))
-        if not diff:
+        real = _real_changes(diff)
+        if not real and old_text and new_text:
+            continue  # only noise (e.g. page numbers) — skip
+
+        if old_text.strip() == new_text.strip():
             continue
 
         any_change = True
@@ -447,15 +465,11 @@ def _cmd_diff(args: argparse.Namespace) -> None:
         else:
             console.print(Rule(f"[bold]{sec}[/bold]"))
 
-        for line in diff[2:]:  # skip --- +++ header lines
+        for line in real:
             if line.startswith("+"):
-                console.print(f"[green]{line}[/green]")
-            elif line.startswith("-"):
-                console.print(f"[red]{line}[/red]")
-            elif line.startswith("@@"):
-                console.print(f"[dim]{line}[/dim]")
+                console.print(f"[green]{line[1:]}[/green]")
             else:
-                console.print(f"[dim]{line}[/dim]")
+                console.print(f"[red]{line[1:]}[/red]")
 
     if not any_change:
         console.print("[green]No differences found between these two versions.[/green]")

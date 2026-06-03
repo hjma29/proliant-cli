@@ -39,7 +39,7 @@ jobs:
         shell: bash
         run: |
           VERSION=${GITHUB_REF_NAME#v}
-          sed -i "s/^version = .*/version = \"$VERSION\"/" pyproject.toml
+          perl -i -pe "s/^version = .*/version = \"$VERSION\"/" pyproject.toml
 
       - name: Stamp version from git tag (Windows)
         if: runner.os == 'Windows' && startsWith(github.ref, 'refs/tags/')

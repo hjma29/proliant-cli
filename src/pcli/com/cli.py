@@ -703,17 +703,27 @@ async def _cmd_describe_server(args: argparse.Namespace) -> None:
         hw = s.get("hardware", {})
         sn       = (hw.get("serialNumber") or "").upper()
         name     = (s.get("name") or "").upper()
-        ilo_host = (hw.get("bmc", {}).get("hostname") or "").upper()
+        ilo_host = ((hw.get("bmc") or {}).get("hostname") or "").upper()
         if target == sn or target == name or target == ilo_host:
             server = s
             break
+
+    # Fallback: substring match — handles iLO FQDNs like iTWA25345G1208.domain.local
+    if not server:
+        for s in items:
+            hw = s.get("hardware", {})
+            sn   = (hw.get("serialNumber") or "").upper()
+            name = (s.get("name") or "").upper()
+            if (sn and sn in target) or (name and name in target):
+                server = s
+                break
 
     if not server:
         console.print(f"[red]Server '{args.server}' not found.[/red]")
         sys.exit(1)
 
     hw    = server.get("hardware", {})
-    bmc   = hw.get("bmc", {})
+    bmc   = hw.get("bmc") or {}
     state = server.get("state", {})
     health = hw.get("health", {})
 

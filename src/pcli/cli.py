@@ -229,6 +229,16 @@ def _run_update() -> None:
 
     print("Checking for updates...")
     token = os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        # Auto-read from gh CLI if available (works for private repos without manual setup)
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["gh", "auth", "token"], capture_output=True, text=True, timeout=5
+            )
+            token = result.stdout.strip()
+        except Exception:
+            pass
     headers = {"User-Agent": "pcli-updater"}
     if token:
         headers["Authorization"] = f"token {token}"
@@ -240,7 +250,8 @@ def _run_update() -> None:
     except Exception as e:
         print(f"ERROR: Could not reach GitHub: {e}", file=sys.stderr)
         if not token:
-            print("  Tip: set GITHUB_TOKEN env var if the repo is private.", file=sys.stderr)
+            print("  Tip: install gh CLI (github.com/cli/gh) and run 'gh auth login'.", file=sys.stderr)
+            print("       Or set GITHUB_TOKEN env var.", file=sys.stderr)
         sys.exit(1)
 
     latest_tag = release.get("tag_name", "")

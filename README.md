@@ -2,6 +2,10 @@
 
 **pcli** is a unified CLI for HPE ProLiant environments. It lets you retrieve and inspect server inventory and details across **iLO**, **HPE GreenLake COM**, and **HPE OneView** — and includes a built-in tool to fetch and read HPE ProLiant **QuickSpec** documents directly from the terminal.
 
+Whether you manage a handful of bare-metal servers or a large fleet across multiple management platforms, `pcli` gives you a single consistent interface. Query firmware versions across hundreds of iLO nodes in seconds, browse your GreenLake device inventory, inspect servers managed by HPE OneView, or pull up the latest QuickSpec for any ProLiant model — all without opening a browser or logging into a GUI.
+
+![pcli demo](docs/demo.svg)
+
 ## Installation
 
 ### Windows (no Python required)

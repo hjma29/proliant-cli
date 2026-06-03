@@ -3,9 +3,13 @@ argcomplete>=3.0
 
 [all]
 httpx[http2]>=0.27
+beautifulsoup4>=4.12
+markitdown>=0.1
+pyyaml>=6.0
 
 [com]
 httpx[http2]>=0.27
+pyyaml>=6.0
 
 [dev]
 httpx[http2]>=0.27
@@ -16,3 +20,7 @@ pytest-cov>=4.0
 
 [ilo]
 httpx[http2]>=0.27
+
+[qs]
+beautifulsoup4>=4.12
+markitdown>=0.1

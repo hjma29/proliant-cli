@@ -575,7 +575,11 @@ async def _cmd_report_gpu(args: argparse.Namespace) -> None:
 
     async with COMClient(session) as client:
         with console.status("[dim]Fetching GPU inventory across fleet…[/dim]"):
-            gpus = await get_fleet_gpus(client)
+            try:
+                gpus = await get_fleet_gpus(client)
+            except RuntimeError as e:
+                console.print(f"[red]Error:[/red] {e}")
+                return
 
     if not gpus:
         console.print("[yellow]No discrete GPUs found across fleet.[/yellow]")

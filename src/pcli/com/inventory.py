@@ -13,11 +13,19 @@ import asyncio
 from collections import defaultdict
 from typing import TYPE_CHECKING
 
+import httpx
+
 if TYPE_CHECKING:
     from pcli.com.client import COMClient
 
 
 _SKIP_STATUSES = {"NotPresent", "Unknown", ""}
+
+_COM_NOT_PROVISIONED = (
+    "The Compute Ops Management inventory API is not available for this workspace "
+    "(HTTP 404). Make sure the Compute Ops Management service is provisioned in "
+    "your HPE GreenLake workspace."
+)
 
 
 async def _get_memory_inventory(client: "COMClient", server: dict) -> list[dict]:
@@ -51,7 +59,12 @@ async def _get_memory_inventory(client: "COMClient", server: dict) -> list[dict]
 
 async def get_fleet_memory(client: "COMClient") -> list[dict]:
     """Return all populated DIMMs across the whole fleet, concurrently."""
-    r = await client.get(client.session.com_url("/servers"), params={"limit": 1000})
+    try:
+        r = await client.get(client.session.com_url("/servers"), params={"limit": 1000})
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            raise RuntimeError(_COM_NOT_PROVISIONED) from None
+        raise
     servers = r.get("items", [])
 
     tasks = [_get_memory_inventory(client, s) for s in servers]
@@ -94,7 +107,12 @@ async def _get_gpu_inventory(client: "COMClient", server: dict) -> list[dict]:
 
 async def get_fleet_gpus(client: "COMClient") -> list[dict]:
     """Return all discrete GPUs across the whole fleet, concurrently."""
-    r = await client.get(client.session.com_url("/servers"), params={"limit": 1000})
+    try:
+        r = await client.get(client.session.com_url("/servers"), params={"limit": 1000})
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            raise RuntimeError(_COM_NOT_PROVISIONED) from None
+        raise
     servers = r.get("items", [])
 
     tasks = [_get_gpu_inventory(client, s) for s in servers]

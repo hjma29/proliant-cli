@@ -1073,3 +1073,26 @@ POST /redfish/v1/Systems/1/Actions/ComputerSystem.Reset/
 26. **SUM `ONFAILEDDEPENDENCY = FORCE` does NOT bypass hard error dependencies** — use `OmitComponent`.
 27. **COM `/compute-ops/` prefix deprecated April 2025** — migrate to `/compute-ops-mgmt/` paths.
 28. **Pagination URL bug**: `get_all()` must check `if next_page.startswith("http")` before prepending base_url — ui-doorway sometimes returns absolute `nextPageUri`.
+
+---
+
+## QuickSpecs Page Types (HPE collateral)
+
+HPE serves QuickSpecs via three different page structures — pcli qs handles all three:
+
+`
+Type 1 — Collateral HTML page exists (e.g. DL380 Gen12 a00073551enw)
+    GET collateral.{docid}.html → 200, has <main> tag
+    → Parse HTML with BeautifulSoup → convert to markdown
+
+Type 2 — Collateral HTML exists but old-style (e.g. DL360 Gen12 a50006984enw)
+    GET collateral.{docid}.html → 200, no <main> tag (PSNow wrapper)
+    → Fall back to PDF download → convert with markitdown[pdf]
+
+Type 3 — No collateral HTML page (e.g. EL140 Gen12 a50009256enw)
+    GET collateral.{docid}.html → 404
+    → Fall back to PDF download → convert with markitdown[pdf]
+`
+
+Type 1 is fast (~1-2s, HTML). Types 2 and 3 are slower (~5-10s, PDF download).
+Results are cached to ~/.cache/pcli/qs/ so subsequent calls are instant.

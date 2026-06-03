@@ -58,7 +58,7 @@ Register-ArgumentCompleter -Native -CommandName pcli -ScriptBlock {
     if ($pos -eq 1) {
         $candidates = @('ilo', 'com', 'spp', 'oneview', 'qs', 'config', 'update')
     } elseif ($pos -eq 2) {
-        if ($t[1] -eq 'ilo') { $candidates = @('list', 'upgrade', 'init', 'report', 'set') }
+        if ($t[1] -eq 'ilo') { $candidates = @('list', 'upgrade', 'init', 'report', 'set', 'describe') }
         elseif ($t[1] -eq 'com') { $candidates = @('login', 'logout', 'list', 'use', 'add', 'report') }
         elseif ($t[1] -eq 'spp') { $candidates = @('list', 'inspect', 'diff') }
         elseif ($t[1] -eq 'oneview') { $candidates = @('list', 'describe', 'report') }

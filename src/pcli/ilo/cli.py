@@ -563,6 +563,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Reset iLO after enabling DHCP so the change takes effect immediately (current IP will be lost)",
     )
 
+    desc_p = subparsers.add_parser(
+        "describe",
+        help="Show full details for a single server (identity, iLO, CPU, GPU, memory, firmware)",
+    )
+    _add_host(desc_p, required=True)
+
     return parser
 
 
@@ -587,6 +593,8 @@ async def _async_main(args: argparse.Namespace) -> None:
             await _run_report_cpu(args)
         elif args.what == "gpu":
             await _run_report_gpu(args)
+    elif args.command == "describe":
+        await _cmd_describe(args)
     elif args.command == "set":
         if args.set_action == "dhcp":
             await _run_set_dhcp(args)
@@ -1131,6 +1139,153 @@ def _print_fw_queue(host_name: str, queue: list[dict]) -> None:
         result = task.get("Result", {})
         result_str = result.get("MessageId", "—") if isinstance(result, dict) else str(result)
         print(f"{name[:name_w]:<{name_w}}   {state:<{state_w}}   {result_str[:result_w]}")
+
+
+async def _cmd_describe(args: argparse.Namespace) -> None:
+    from rich.console import Console
+    from rich.table import Table
+    from rich.panel import Panel
+    from rich import box as rich_box
+
+    console = Console()
+    hosts = _load_hosts_or_exit(args.host)
+    if not hosts:
+        console.print("[red]No host found.[/red]")
+        sys.exit(1)
+    host = hosts[0]
+
+    async with ILOClient(host["url"], host["username"], host["password"]) as c:
+        with console.status("[dim]Fetching server details…[/dim]"):
+            sys_uri, mgr_uri = await asyncio.gather(
+                c.get_system_uri(), c.get_manager_uri()
+            )
+            system, manager, fw_list, cpus, gpus, dimms = await asyncio.gather(
+                c.get(sys_uri),
+                c.get(mgr_uri),
+                inventory.fetch_firmware_inventory_full(c),
+                inventory.fetch_cpu_report_data(c),
+                inventory.fetch_gpu_report_data(c),
+                inventory.fetch_memory_population(c),
+            )
+
+    model      = system.get("Model", "—")
+    serial     = system.get("SerialNumber", "—")
+    sku        = system.get("SKU", "—")
+    bios_ver   = system.get("BiosVersion", "—")
+    power      = system.get("PowerState", "—")
+    health_obj = (system.get("Status") or {})
+    health_str = health_obj.get("Health", "—")
+    uuid       = system.get("UUID", "—")
+
+    mgr_model  = manager.get("Model", "—")
+    mgr_fw     = manager.get("FirmwareVersion", "—") or "—"
+    mgr_host   = manager.get("HostName", "—") or "—"
+    ilo_status = (manager.get("Status") or {}).get("Health", "—")
+
+    ilo_eth_uri = (
+        manager.get("EthernetInterfaces", {}).get("@odata.id")
+    )
+
+    _HS = {"OK": "green", "Warning": "yellow", "Critical": "red"}
+
+    def _h(v):
+        s = _HS.get(v or "", "")
+        return f"[{s}]{v}[/{s}]" if s else (v or "—")
+
+    # ── Header ────────────────────────────────────────────────────────────────
+    console.print(Panel(
+        f"[bold]{host['name']}[/bold]   [dim]{model}[/dim]",
+        expand=False,
+    ))
+
+    # ── Identity ──────────────────────────────────────────────────────────────
+    id_t = Table(box=rich_box.SIMPLE, show_header=False, padding=(0, 2))
+    id_t.add_column(style="dim", no_wrap=True)
+    id_t.add_column()
+    id_t.add_row("Serial",     serial)
+    id_t.add_row("Product ID", sku)
+    id_t.add_row("UUID",       uuid)
+    id_t.add_row("BIOS",       bios_ver)
+    id_t.add_row("Power",      _h(power))
+    id_t.add_row("Health",     _h(health_str))
+    console.print(id_t)
+
+    # ── iLO ───────────────────────────────────────────────────────────────────
+    console.print("[bold]iLO[/bold]")
+    ilo_t = Table(box=rich_box.SIMPLE, show_header=False, padding=(0, 2))
+    ilo_t.add_column(style="dim", no_wrap=True)
+    ilo_t.add_column()
+    ilo_t.add_row("Model",    mgr_model)
+    ilo_t.add_row("Firmware", mgr_fw)
+    ilo_t.add_row("Hostname", mgr_host)
+    ilo_t.add_row("Health",   _h(ilo_status))
+    console.print(ilo_t)
+
+    # ── CPU ───────────────────────────────────────────────────────────────────
+    if cpus:
+        console.print("[bold]CPU[/bold]")
+        cpu_t = Table(box=rich_box.SIMPLE, show_header=True, header_style="bold cyan", padding=(0, 2))
+        cpu_t.add_column("Socket", no_wrap=True)
+        cpu_t.add_column("Model")
+        cpu_t.add_column("Cores", justify="right")
+        cpu_t.add_column("Threads", justify="right")
+        cpu_t.add_column("Max MHz", justify="right", style="dim")
+        for cpu in cpus:
+            cpu_t.add_row(
+                cpu.get("socket", "—"),
+                cpu.get("model", "—"),
+                str(cpu.get("cores", "—")),
+                str(cpu.get("threads", "—")),
+                str(cpu.get("speed_mhz", "—")),
+            )
+        console.print(cpu_t)
+
+    # ── GPU ───────────────────────────────────────────────────────────────────
+    if gpus:
+        console.print("[bold]GPU[/bold]")
+        gpu_t = Table(box=rich_box.SIMPLE, show_header=True, header_style="bold cyan", padding=(0, 2))
+        gpu_t.add_column("Name")
+        gpu_t.add_column("Model")
+        for gpu in gpus:
+            gpu_t.add_row(gpu.get("name", "—"), gpu.get("model", "—"))
+        console.print(gpu_t)
+
+    # ── Memory population map ─────────────────────────────────────────────────
+    if dimms:
+        populated  = [d for d in dimms if d["present"]]
+        empty_cnt  = sum(1 for d in dimms if not d["present"])
+        total_gb   = sum(d["cap_gb"] for d in populated)
+        console.print("[bold]Memory[/bold]")
+        mem_t = Table(box=rich_box.SIMPLE, show_header=True, header_style="bold cyan", padding=(0, 2))
+        mem_t.add_column("Slot",     no_wrap=True)
+        mem_t.add_column("Capacity", justify="right")
+        mem_t.add_column("Type",     no_wrap=True)
+        mem_t.add_column("Speed",    justify="right")
+        mem_t.add_column("Part Number", style="dim")
+        for d in dimms:
+            if d["present"]:
+                speed_s = f"{d['speed']} MT/s" if d["speed"] else "—"
+                cap_s   = f"{d['cap_gb']} GB"
+                mem_t.add_row(d["slot"], cap_s, d["type"] or "—", speed_s, d["part"] or "—")
+            else:
+                mem_t.add_row(f"[dim]{d['slot']}[/dim]", "[dim]empty[/dim]", "", "", "")
+        console.print(mem_t)
+        console.print(
+            f"  [dim]{len(populated)} DIMMs populated, {empty_cnt} empty"
+            f" — {total_gb} GB total[/dim]"
+        )
+
+    # ── Firmware ──────────────────────────────────────────────────────────────
+    if fw_list:
+        console.print("[bold]Firmware[/bold]")
+        fw_t = Table(box=rich_box.SIMPLE, show_header=True, header_style="bold cyan", padding=(0, 2))
+        fw_t.add_column("Component", no_wrap=True)
+        fw_t.add_column("Version")
+        fw_t.add_column("Location", style="dim")
+        for fw in fw_list:
+            loc = (fw.get("Oem") or {}).get("Hpe", {}).get("DeviceContext", "")
+            fw_t.add_row(fw.get("Name", ""), fw.get("Version", ""), loc)
+        console.print(fw_t)
 
 
 if __name__ == "__main__":

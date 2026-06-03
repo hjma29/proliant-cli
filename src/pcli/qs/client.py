@@ -1,10 +1,11 @@
 """
 pcli.qs.client
 ~~~~~~~~~~~~~~
-HPE QuickSpecs data access via the HPE Resource Library (Coveo search) and
+HPE QuickSpecs data access via the HPE Resource Library JSON API and
 the public collateral HTML endpoint.
 
 No authentication required — all endpoints are public.
+Uses httpx with HTTP/2 to pass Akamai bot detection on www.hpe.com.
 """
 from __future__ import annotations
 
@@ -15,13 +16,14 @@ import tempfile
 import time
 import os
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-# HPE endpoints (hpe.com, coveo.com) return both A and AAAA records, but IPv6
-# is not routed on most lab/corp machines — force IPv4 to avoid connection hangs.
+import httpx
+
+# HPE endpoints return both A and AAAA records, but IPv6 is not routed on
+# most lab/corp machines — force IPv4 to avoid connection hangs.
 _orig_getaddrinfo = socket.getaddrinfo
 
 def _getaddrinfo_ipv4_only(host, port, family=0, type=0, proto=0, flags=0):
@@ -33,12 +35,10 @@ socket.getaddrinfo = _getaddrinfo_ipv4_only
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-_RESOURCE_LIBRARY_URL = (
-    "https://www.hpe.com/us/en/resource-library.html"
-    "/restype/quickspecs/status/active/sort/date"
-)
-_COVEO_ENDPOINT = (
-    "https://hewlettpackardproductioniwmg9b9w.org.coveo.com/rest/search/v2"
+# JSON search API — no token required, returns clean JSON
+_JSON_SEARCH_URL = (
+    "https://www.hpe.com/us/en/resource-library"
+    "/_jcr_content/polaris-body-zone/medialibrary.model.json"
 )
 _VARIANTS_URL = "https://www.hpe.com/services/hpe/psnow/variants?assetId={asset_id}"
 _COLLATERAL_URL = "https://www.hpe.com/us/en/collaterals/collateral.{docid}.html"
@@ -49,12 +49,35 @@ _PSNOW_DOWNLOAD_RE = re.compile(
     r'href="(https://www\.hpe\.com/psnow/downloadDoc/[^"]+\.pdf\?id=[^"]+)"'
 )
 
-# Cached token — fetched once per process lifetime
-_coveo_token_cache: Optional[str] = None
+# Browser-like headers — httpx with HTTP/2 + these headers pass Akamai bot detection
+_BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+}
+
+# Lazy httpx client — HTTP/2 + browser headers, created on first use
+_client: Optional[httpx.Client] = None
 
 # Raw HTML cache keyed by doc_id — shared between fetch_quickspec_versions and
 # fetch_quickspec_markdown so a list → describe workflow only downloads once
 _html_cache: dict[str, str] = {}
+
+
+def _get_client() -> httpx.Client:
+    global _client
+    if _client is None:
+        _client = httpx.Client(
+            http2=True,
+            follow_redirects=True,
+            headers=_BROWSER_HEADERS,
+            timeout=30.0,
+        )
+    return _client
 
 # ── Disk cache ────────────────────────────────────────────────────────────────
 
@@ -127,119 +150,77 @@ class QSVersion:
     link: str = ""     # full psnow URL with ?ver=N
 
 
-# ── Token ─────────────────────────────────────────────────────────────────────
-
-def fetch_coveo_token() -> str:
-    """Extract the Coveo search token embedded in the HPE Resource Library page."""
-    global _coveo_token_cache
-    if _coveo_token_cache:
-        return _coveo_token_cache
-
-    req = urllib.request.Request(
-        _RESOURCE_LIBRARY_URL,
-        headers={"User-Agent": "Mozilla/5.0 (pcli-qs/1.0)"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            html = resp.read().decode("utf-8", errors="replace")
-    except Exception as e:
-        raise RuntimeError(
-            f"Cannot reach www.hpe.com ({e}).\n"
-            "  Check your network — hpe.com may be blocked or unreachable from this machine."
-        ) from e
-
-    m = re.search(r"(xx[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})", html)
-    if not m:
-        raise RuntimeError(
-            "Could not find Coveo token in HPE Resource Library page. "
-            "The page structure may have changed."
-        )
-    _coveo_token_cache = m.group(1)
-    return _coveo_token_cache
-
-
 # ── Search ─────────────────────────────────────────────────────────────────────
 
 def search_quickspecs(model: str, count: int = 10) -> list[QSEntry]:
     """
-    Search for QuickSpecs matching *model* using the Coveo search API.
+    Search for QuickSpecs matching *model* using the HPE Resource Library JSON API.
 
     *model* is a free-text query, e.g. 'DL380 Gen12', 'dl380gen12', 'DL360'.
-    Returns a list of QSEntry sorted by last-modified descending.
+    Results are returned newest-first (API returns sorted by date).
     """
     # Normalise: dl380gen12 → DL380 Gen12, dl380a-gen12 → DL380A Gen12
-    # Also handles dl380gen12a → DL380A Gen12 (HPE variant letter belongs on model)
     q = re.sub(r"(?i)(gen)(\d+)([a-z]?)", lambda m: m.group(3).upper() + " Gen" + m.group(2), model.replace("-", " "))
     q = q.upper().replace("GEN", "Gen").strip()
-    # Prefix "HPE ProLiant" for better Coveo relevance ranking
-    if not q.upper().startswith("HPE"):
-        q = "HPE ProLiant " + q
-    # Append "QuickSpecs" so the search stays focused
-    query = f"{q} QuickSpecs"
 
     # Extract generation token (e.g. "Gen12") for strict title filtering
     gen_filter = re.search(r"Gen\d+", q)
-    gen_token = gen_filter.group(0).lower() if gen_filter else None  # "gen12"
+    gen_token = gen_filter.group(0).lower() if gen_filter else None
 
     # Extract model prefix for strict title filtering (e.g. "DL110", "DL380A")
-    # q is like "HPE ProLiant DL110 Gen12" → model_token = "dl110"
     model_token_m = re.search(r"\b(DL|ML|SY|XL|BL|CL)\d+[A-Z]?\b", q)
-    model_token = model_token_m.group(0).lower() if model_token_m else None  # "dl110"
+    model_token = model_token_m.group(0).lower() if model_token_m else None
 
-    token = fetch_coveo_token()
-    payload = json.dumps({
-        "q": query,
-        "numberOfResults": count * 5,  # fetch more to account for filtering + multi-version
-    }).encode()
-    req = urllib.request.Request(
-        _COVEO_ENDPOINT,
-        data=payload,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "User-Agent": "Mozilla/5.0 (pcli-qs/1.0)",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        data = json.loads(resp.read())
+    params = {
+        "restype": "quickspecs",
+        "status": "active",
+        "sort": "date",
+        "search": q,
+        "limit": str(count * 3),  # fetch more to account for title filtering
+    }
+
+    try:
+        r = _get_client().get(_JSON_SEARCH_URL, params=params)
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        raise RuntimeError(
+            f"Cannot reach HPE Resource Library ({e}).\n"
+            "  Check your network — try connecting to HPE network (VPN/ZPA) and retry."
+        ) from e
 
     entries: list[QSEntry] = []
-    seen_keys: set[tuple[str, str]] = set()  # (doc_id, version) — allow multiple versions
-    for item in data.get("results", []):
-        raw = item.get("raw", {})
-        doc_id = raw.get("kmdocid", "")
-        version = str(raw.get("kmdocversion", ""))
-        if not doc_id or (doc_id, version) in seen_keys:
+    seen_doc_ids: set[str] = set()
+    for item in data.get("items", []):
+        title = item.get("title", "").strip()
+        if not title or "quickspec" not in title.lower():
             continue
-        # Skip doc IDs that reference sub-sections (contain ||)
-        if "||" in doc_id:
-            continue
-        title = item.get("title", raw.get("kmdocfulltitle", "")).strip()
-        # Only keep actual QuickSpec documents
-        if "quickspec" not in title.lower():
-            continue
-        # Strict generation filter: skip if title mentions a different generation
         if gen_token and gen_token not in title.lower():
             continue
-        # Strict model filter: skip if title doesn't contain the model number
         if model_token and model_token not in title.lower():
             continue
-        seen_keys.add((doc_id, version))
+
+        link = item.get("cta", {}).get("link", "")
+        doc_id_m = re.search(r"/psnow/doc/([a-z0-9]+)$", link)
+        if not doc_id_m:
+            continue
+        doc_id = doc_id_m.group(1)
+        if doc_id in seen_doc_ids:
+            continue
+        seen_doc_ids.add(doc_id)
+
+        # JSON API returns items newest-first; no re-sort needed
+        last_modified = item.get("lastModified", item.get("date", ""))
         entries.append(QSEntry(
             doc_id=doc_id,
             title=title,
-            version=version,
-            last_modified=raw.get("kmdoclastmod", ""),
+            version="",
+            last_modified=last_modified,
         ))
+        if len(entries) >= count:
+            break
 
-    # Sort by last_modified descending
-    def _sort_key(e: QSEntry) -> str:
-        # Date format: "MM/DD/YYYY ..." → reformat for lexicographic sort
-        m = re.match(r"(\d{2})/(\d{2})/(\d{4})", e.last_modified)
-        return f"{m.group(3)}{m.group(1)}{m.group(2)}" if m else ""
-
-    entries.sort(key=_sort_key, reverse=True)
-    return entries[:count]
+    return entries
 
 
 # ── Content fetch ──────────────────────────────────────────────────────────────
@@ -252,9 +233,9 @@ def _fetch_collateral_html(doc_id: str, ver: str = "") -> str:
     url = _COLLATERAL_URL.format(docid=doc_id)
     if ver:
         url = f"{url}?ver={ver}"
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (pcli-qs/1.0)"})
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        html = resp.read().decode("utf-8", errors="replace")
+    r = _get_client().get(url)
+    r.raise_for_status()
+    html = r.text
     _html_cache[cache_key] = html
     return html
 
@@ -280,15 +261,9 @@ def fetch_quickspec_versions(doc_id: str, title: str = "", n: int = 3) -> list[Q
     # doc_id like "a00073551enw" → asset_id "a00073551:enw" (colon before last 3 chars)
     asset_id = doc_id[:-3] + ":" + doc_id[-3:]
     url = _VARIANTS_URL.format(asset_id=asset_id)
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": "Mozilla/5.0 (pcli-qs/1.0)",
-            "Referer": _COLLATERAL_URL.format(docid=doc_id),
-        },
-    )
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        data = json.loads(resp.read())
+    r = _get_client().get(url, headers={"Referer": _COLLATERAL_URL.format(docid=doc_id)})
+    r.raise_for_status()
+    data = r.json()
 
     versions: list[QSVersion] = []
     for v in data.get("versions", []):

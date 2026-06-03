@@ -219,7 +219,7 @@ def search_quickspecs(model: str, count: int = 10) -> list[QSEntry]:
             continue
 
         link = item.get("cta", {}).get("link", "")
-        doc_id_m = re.search(r"/psnow/doc/([a-z0-9]+)$", link)
+        doc_id_m = re.search(r"/psnow/doc/([a-z0-9]+)", link)  # ignore any ?query params
         if not doc_id_m:
             continue
         doc_id = doc_id_m.group(1)
@@ -227,8 +227,7 @@ def search_quickspecs(model: str, count: int = 10) -> list[QSEntry]:
             continue
         seen_doc_ids.add(doc_id)
 
-        # JSON API returns items newest-first; no re-sort needed
-        last_modified = item.get("lastModified", item.get("date", ""))
+        last_modified = item.get("lastUpdated", "")
         entries.append(QSEntry(
             doc_id=doc_id,
             title=title,

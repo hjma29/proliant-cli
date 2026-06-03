@@ -20,10 +20,12 @@ Requires-Dist: httpx[http2]>=0.27; extra == "com"
 Requires-Dist: pyyaml>=6.0; extra == "com"
 Provides-Extra: qs
 Requires-Dist: httpx[http2]>=0.27; extra == "qs"
+Requires-Dist: curl-cffi>=0.7; extra == "qs"
 Requires-Dist: beautifulsoup4>=4.12; extra == "qs"
 Requires-Dist: markitdown>=0.1; extra == "qs"
 Provides-Extra: all
 Requires-Dist: httpx[http2]>=0.27; extra == "all"
+Requires-Dist: curl-cffi>=0.7; extra == "all"
 Requires-Dist: beautifulsoup4>=4.12; extra == "all"
 Requires-Dist: markitdown>=0.1; extra == "all"
 Requires-Dist: pyyaml>=6.0; extra == "all"

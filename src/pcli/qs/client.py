@@ -22,6 +22,14 @@ from typing import Optional
 
 import httpx
 
+# curl_cffi uses Chrome's TLS fingerprint (BoringSSL) to pass Akamai bot detection.
+# Falls back to httpx with HTTP/2 if curl_cffi is unavailable (e.g. dev install).
+try:
+    from curl_cffi.requests import Session as _CurlSession
+    _CURL_CFFI_AVAILABLE = True
+except ImportError:
+    _CURL_CFFI_AVAILABLE = False
+
 # HPE endpoints return both A and AAAA records, but IPv6 is not routed on
 # most lab/corp machines — force IPv4 to avoid connection hangs.
 _orig_getaddrinfo = socket.getaddrinfo
@@ -60,23 +68,28 @@ _BROWSER_HEADERS = {
     "Accept-Language": "en-US,en;q=0.5",
 }
 
-# Lazy httpx client — HTTP/2 + browser headers, created on first use
-_client: Optional[httpx.Client] = None
+# Lazy HTTP client — curl_cffi (Chrome TLS) or httpx fallback, created on first use
+_client = None
 
 # Raw HTML cache keyed by doc_id — shared between fetch_quickspec_versions and
 # fetch_quickspec_markdown so a list → describe workflow only downloads once
 _html_cache: dict[str, str] = {}
 
 
-def _get_client() -> httpx.Client:
+def _get_client():
     global _client
     if _client is None:
-        _client = httpx.Client(
-            http2=True,
-            follow_redirects=True,
-            headers=_BROWSER_HEADERS,
-            timeout=30.0,
-        )
+        if _CURL_CFFI_AVAILABLE:
+            # Chrome TLS fingerprint bypasses Akamai bot detection on www.hpe.com
+            _client = _CurlSession(impersonate="chrome")
+        else:
+            # Dev fallback — httpx with HTTP/2 and browser-like headers
+            _client = httpx.Client(
+                http2=True,
+                follow_redirects=True,
+                headers=_BROWSER_HEADERS,
+                timeout=30.0,
+            )
     return _client
 
 # ── Disk cache ────────────────────────────────────────────────────────────────

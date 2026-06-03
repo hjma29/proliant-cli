@@ -3,6 +3,7 @@ argcomplete>=3.0
 
 [all]
 httpx[http2]>=0.27
+curl-cffi>=0.7
 beautifulsoup4>=4.12
 markitdown>=0.1
 pyyaml>=6.0
@@ -23,5 +24,6 @@ httpx[http2]>=0.27
 
 [qs]
 httpx[http2]>=0.27
+curl-cffi>=0.7
 beautifulsoup4>=4.12
 markitdown>=0.1

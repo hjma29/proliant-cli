@@ -976,7 +976,7 @@ Get key: `GET https://us-west.api.greenlake.hpe.com/compute-ops-mgmt/v1beta1/act
 ### dl380-gen11 (CNX242032D) — Permanently Blocked
 
 - **Root cause:** `SKU=NA`, `PartNumber=N/A`, `ProductID=NA` — internal HPE test unit
-- GreenLake requires supply chain record — CNX242032D has none
+- Compute Ops Management requires supply chain record — CNX242032D has none
 - Cannot be fixed by firmware upgrade — blocked at GLP database level
 - Requires HPE internal process to register in GLP supply chain
 
@@ -1057,7 +1057,7 @@ POST /redfish/v1/Systems/1/Actions/ComputerSystem.Reset/
 13. **Autocomplete: set `_ARGCOMPLETE=2` before dispatching sub-CLIs** — `=1` strips only one level, `=2` strips two.
 14. **iLO 7 ComponentRepository/UpdateTaskQueue return stub Members** — must expand each `{"@odata.id": "..."}` via individual GET.
 
-### COM / GreenLake
+### COM / Compute Ops Management
 
 15. **COM downloads individual `.fwpkg` files, NOT the full SPP ISO** — only applicable components are pulled.
 16. **No SUM inside iLO** — two native agents: BMC (immediate) and UEFI (POST reboot).

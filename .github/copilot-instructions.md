@@ -11,7 +11,7 @@
 
 `pcli` — Unified Python CLI for HPE ProLiant server management combining:
 - **`pcli ilo`** — Direct iLO Redfish management (firmware inventory, upgrade via HPE SDR)
-- **`pcli com`** — HPE GreenLake Compute Ops Management (COM) cloud API
+- **`pcli com`** — HPE Compute Ops Management (COM) cloud API
 
 Replaces two separate tools: `hpeilo` (iLO Redfish) and `hpecom` (COM API).
 

@@ -22,5 +22,6 @@ pytest-cov>=4.0
 httpx[http2]>=0.27
 
 [qs]
+httpx[http2]>=0.27
 beautifulsoup4>=4.12
 markitdown>=0.1

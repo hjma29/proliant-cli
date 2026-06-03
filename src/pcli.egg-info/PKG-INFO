@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: pcli
-Version: 0.3.13
+Version: 0.3.14
 Summary: HPE ProLiant unified CLI — iLO Redfish and Compute Ops Management
 Author: hjma29
 License: MIT
@@ -19,6 +19,7 @@ Provides-Extra: com
 Requires-Dist: httpx[http2]>=0.27; extra == "com"
 Requires-Dist: pyyaml>=6.0; extra == "com"
 Provides-Extra: qs
+Requires-Dist: httpx[http2]>=0.27; extra == "qs"
 Requires-Dist: beautifulsoup4>=4.12; extra == "qs"
 Requires-Dist: markitdown>=0.1; extra == "qs"
 Provides-Extra: all

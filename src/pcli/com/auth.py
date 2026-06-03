@@ -37,7 +37,7 @@ REGION_MAP: dict[str, str] = {
     "ap-southeast": "https://ap-northeast.api.greenlake.hpe.com",
 }
 
-COM_API_VERSION = "v1beta1"   # official; v1beta2 was a preview path
+COM_API_VERSION = "v1beta2"
 _CREDS_FILE = Path.home() / ".config" / "hpecom" / "credentials.yml"
 _REFRESH_BUFFER = 60  # refresh 60 s before expiry (tokens can be as short as 15 min)
 
@@ -154,6 +154,9 @@ class COMSession:
             sess._token_expiry = time.monotonic() + (glp_exp - time.time())
             sess._workspace_id = data.get("workspace_id", "")
             sess._workspace_name = data.get("workspace_name", "")
+            # Preserve ccs_session so compute-ops-mgmt workspace-scoped endpoints
+            # still work even though _user_token is False (GLP token flow).
+            sess._ccs_session = data.get("ccs_session", "")
             # _user_token stays False (default) → fetch_devices uses GLP global API
             return sess
 

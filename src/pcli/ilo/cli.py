@@ -1160,14 +1160,14 @@ async def _cmd_describe(args: argparse.Namespace) -> None:
                 sys_uri, mgr_uri = await asyncio.gather(
                     c.get_system_uri(), c.get_manager_uri()
                 )
-                system, manager, fw_list, cpus, gpus, dimms = await asyncio.gather(
-                    c.get(sys_uri),
-                    c.get(mgr_uri),
-                    inventory.fetch_firmware_inventory_full(c),
-                    inventory.fetch_cpu_report_data(c),
-                    inventory.fetch_gpu_report_data(c),
-                    inventory.fetch_memory_population(c),
+                system, manager = await asyncio.gather(
+                    c.get(sys_uri), c.get(mgr_uri)
                 )
+                # Fetch detailed resources sequentially to avoid overwhelming iLO
+                fw_list = await inventory.fetch_firmware_inventory_full(c)
+                cpus    = await inventory.fetch_cpu_report_data(c)
+                gpus    = await inventory.fetch_gpu_report_data(c)
+                dimms   = await inventory.fetch_memory_population(c)
         except ServerDownOrUnreachableError:
             console.print(f"[red]Cannot connect to iLO at {host['url']}[/red]")
             sys.exit(1)

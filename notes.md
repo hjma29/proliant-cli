@@ -787,6 +787,44 @@ Results
 
 ---
 
+## urllib vs curl_cffi
+
+### TLS Stack Comparison
+
+```
+urllib              curl_cffi (chrome)
+   │                      │
+   ▼                      ▼
+OpenSSL               BoringSSL
+TLS 1.2/1.3           TLS 1.3
+HTTP/1.1              HTTP/2
+Python JA3            Chrome JA3
+   │                      │
+   ▼                      ▼
+❌ Akamai blocks       ✅ Akamai allows
+```
+
+### Key Differences
+
+|                     | `urllib`             | `curl_cffi`            |
+|---------------------|----------------------|------------------------|
+| Built-in            | ✅ yes (zero deps)   | ❌ ~10MB dependency    |
+| TLS library         | OpenSSL              | Chrome BoringSSL       |
+| HTTP/2              | ❌ no                | ✅ yes                 |
+| TLS fingerprint     | Python JA3           | Chrome JA3             |
+| Akamai/Cloudflare   | ❌ blocked           | ✅ passes              |
+
+### When to use which
+
+| Scenario                                  | Use          |
+|-------------------------------------------|--------------|
+| Internal APIs, no bot protection          | `urllib` (zero deps) |
+| Public websites with Akamai/Cloudflare    | `curl_cffi`  |
+| Need HTTP/2 but no fingerprint spoofing   | `httpx[http2]` |
+| Scraping any bot-protected site           | `curl_cffi` always |
+
+---
+
 ## 12. BCM957414 NIC Firmware — Stepping Chain & SUM CLI Lessons (dl325-gen12)
 
 ### The Problem

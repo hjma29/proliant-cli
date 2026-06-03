@@ -296,29 +296,27 @@ def _run_update() -> None:
             sys.exit(1)
 
         if sys.platform == "win32":
-            # Extract pcli.exe from the zip
+            # Extract everything from the zip
             with zipfile.ZipFile(tmp_path) as zf:
-                names = zf.namelist()
-                exe_name = next((n for n in names if n.lower() == "pcli.exe"), names[0])
-                zf.extract(exe_name, tmpdir)
-            new_exe = os.path.join(tmpdir, exe_name)
+                zf.extractall(tmpdir)
+            new_exe = os.path.join(tmpdir, "pcli.exe")
+            new_internal = os.path.join(tmpdir, "_internal")
             current_exe = sys.executable
-            # Can't overwrite running exe on Windows — use a helper script
-            bat = os.path.join(tmpdir, "pcli_update.bat")
-            with open(bat, "w") as f:
+            current_dir = os.path.dirname(current_exe)
+            current_internal = os.path.join(current_dir, "_internal")
+            # Can't overwrite running exe on Windows — use a detached helper script
+            persistent_bat = os.path.join(os.environ.get("TEMP", "C:\\Temp"), "pcli_update.bat")
+            with open(persistent_bat, "w") as f:
                 f.write(
                     f'@echo off\n'
-                    f'ping -n 3 127.0.0.1 >nul\n'  # wait ~2 seconds
+                    f'ping -n 3 127.0.0.1 >nul\n'
+                    f'xcopy /e /i /y "{new_internal}" "{current_internal}"\n'
                     f'copy /y "{new_exe}" "{current_exe}"\n'
                     f'echo pcli updated to {latest_ver}\n'
                 )
-            # Copy the bat out of the temp dir so it survives after tmpdir is deleted
-            persistent_bat = os.path.join(os.environ.get("TEMP", "C:\\Temp"), "pcli_update.bat")
-            shutil.copy(bat, persistent_bat)
             subprocess.Popen(
                 ["cmd.exe", "/c", persistent_bat],
-                creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.DETACHED_PROCESS,
-                close_fds=True,
+                creationflags=subprocess.CREATE_NEW_CONSOLE,
             )
             print(f"✓ Update to {latest_ver} in progress — a new window will confirm when done.")
         else:

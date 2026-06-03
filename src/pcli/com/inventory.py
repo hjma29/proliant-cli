@@ -15,8 +15,6 @@ import asyncio
 from collections import defaultdict
 from typing import TYPE_CHECKING
 
-import httpx
-
 if TYPE_CHECKING:
     from pcli.com.client import COMClient
     from pcli.com.auth import COMSession
@@ -109,13 +107,7 @@ async def _get_gpu_inventory(client: "COMClient", server: dict) -> list[dict]:
 
 async def get_fleet_gpus(client: "COMClient") -> list[dict]:
     """Return all discrete GPUs across the whole fleet, concurrently."""
-    try:
-        r = await client.get(client.session.com_url("/servers"), params={"limit": 1000})
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 404:
-            raise RuntimeError(_COM_NOT_PROVISIONED) from None
-        raise
-    servers = r.get("items", [])
+    servers = await _get_compute_servers(client.session)
 
     tasks = [_get_gpu_inventory(client, s) for s in servers]
     results = await asyncio.gather(*tasks)

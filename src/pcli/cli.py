@@ -313,6 +313,7 @@ def _run_update() -> None:
             f.write(
                 f'@echo off\n'
                 f'ping -n 3 127.0.0.1 >nul\n'
+                f'if exist "{current_internal}" rmdir /s /q "{current_internal}"\n'
                 f'xcopy /e /i /y "{new_internal}" "{current_internal}"\n'
                 f'copy /y "{new_exe}" "{current_exe}"\n'
                 f'rmdir /s /q "{staging_dir}"\n'

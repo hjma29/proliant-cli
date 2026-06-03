@@ -46,238 +46,42 @@ HPE components can be updated by three different agents:
 | **UEFI** | UEFI reads queue during POST | Next server reboot | ✅ Yes |
 | **OS** | SUM/iSUT running in the OS | While OS is running | Usually yes |
 
-### How the Classification Works
-
-The authoritative data is in `payload.json` inside each `.fwpkg` file (see below). For iLO Redfish FirmwareInventory — which lacks this field — `pcli` infers the method from component name patterns.
-
-Rules in `ilo/inventory.py::classify_update_method()`:
-
-| Component pattern                                                      | Method   | Logic                            |
-| ---------------------------------------------------------------------- | -------- | -------------------------------- |
-| `ilo`, `integrated lights-out`, `ilo management controller`            | **BMC**  | Always iLO self-update           |
-| `system rom`, `system bios`, `bios`                                    | **UEFI** | UEFI applies at POST             |
-| `smart array`, `mr4`, `ns204`, `boot controller`, `storage controller` | **UEFI** | PLDM via UEFI agent              |
-| `power management`, `power supply`, `cpld`, `upb`, `ubm`               | **UEFI** | Low-level, UEFI or BMC secondary |
-| `bcm`, `broadcom`, `mellanox`, `connectx`, `nvidia` + OCP context      | **OS**   | OCP3 NICs: no PLDM OOB           |
-| `bcm`, `broadcom`, `mellanox`, `connectx`, `nvidia` + PCIe context     | **UEFI** | PCIe NICs: PLDM OOB capable      |
-| `intel `, `intel(r)` (trailing space, NOT `intelligent`)               | **OS**   | RuntimeAgent only                |
-| Fallback                                                               | **UEFI** | Conservative default             |
-
-**Known gotcha:** The string `"intel"` matches inside `"intelligent power"`. Always use `"intel "` (trailing space) and `"intel(r)"` for Intel NIC patterns.
-
-### payload.json Inside fwpkg — The Source of Truth
-
-Every `.fwpkg` ZIP contains a `payload.json`. Key flags:
-
-```json
-{
-  "UefiFlashable": false,
-  "ResetRequired": false,
-  "PLDMImage": true
-}
-```
-
-| Flags | Method |
-|---|---|
-| `UefiFlashable: false`, `ResetRequired: false` | **BMC** — iLO self-flashes (iLO firmware) |
-| `UefiFlashable: true` OR `ResetRequired: true` | **UEFI** — applied during POST |
-| `PLDMImage: true` | **UEFI** via PLDM sideband (NIC, storage, backplane) |
-| Only `.exe`/`.rpm` installers, `UpdatableBy: RuntimeAgent` | **OS** — SUM/iSUT in OS |
-
-Confirmed examples:
-- `ilo7_xxx.fwpkg`: `UefiFlashable: false, ResetRequired: false` → **BMC**
-- `A66_xxx.fwpkg` (BIOS): `UefiFlashable: true, ResetRequired: true` → **UEFI**
-- `BCM235.1.164.14_BCM957414A4142HC.fwpkg`: `PLDMImage: true` → **UEFI** (PLDM)
-
-**Gen12+ fwpkg structure — sidecar JSON design:**
-
-HPE changed the package structure for **BIOS and iLO 7** to separate the firmware binary from its metadata. **This does NOT apply to all packages** — in the Gen12 SPP 2026.03.00.00, only 10 of 134 `.fwpkg` files use the sidecar pattern; the other 124 still use the Gen11 embedded style.
-
-| Style | Count in Gen12 SPP | Which packages |
-|---|---|---|
-| **Gen12 sidecar** (1 file inside, `{stem}.json` separate) | 10 | Gen12 BIOS (`A66`, `U66`–`U77`) + iLO 7 |
-| **Gen11 embedded** (3–4 files inside, `payload.json` bundled) | 124 | NICs (BCM), drives, storage controllers, iLO 6, etc. |
-
-```
-# Gen11 style (everything bundled in one ZIP — still dominant even in Gen12 SPP):
-ilo6_174.fwpkg (ZIP, signed)
-  ├── ilo6_174.bin        ← firmware binary
-  ├── payload.json        ← install metadata (embedded)
-  ├── ilo6_174.xml        ← component descriptor
-  └── readme.txt
-
-# Gen12 sidecar style (BIOS + iLO 7 only):
-ilo7_1.20.00.fwpkg (ZIP, signed)   ← contains ONLY the firmware binary (.bin)
-  └── ilo7_1.20.00.bin
-
-A66_1.40_01_09_2026.fwpkg (ZIP, signed)   ← BIOS uses .signed.flash inside
-  └── A66_1.40_01_09_2026.signed.flash
-
-ilo7_1.20.00.json / A66_1.40_01_09_2026.json   ← sidecar, NOT part of the signed ZIP
-  (description, install notes, supported models, revision history,
-   device targets, UpdatableBy, FileList, SHA256, UpgradeRequirements…)
-```
-
-**Why (for BIOS/iLO 7):** The `.fwpkg` is signed as a whole ZIP blob. In Gen11, any update to `payload.json` (e.g. adding a new supported model, fixing install instructions) required re-signing and re-releasing the entire package — including the unchanged binary. In Gen12, HPE seals only the firmware binary inside the `.fwpkg`. The sidecar `.json` can be updated at any time (new server qualifications, corrected metadata) without touching the signed binary.
-
-**Consequences for pcli:**
-- `pcli spp download` attempts to fetch `{stem}.json` alongside every `.fwpkg` — best-effort (404 is silently ignored for Gen11-style packages that have no sidecar).
-- SHA256 in the SPP catalog covers only the `.fwpkg` — sidecar JSON has no checksum.
-- `pcli spp inspect <file.fwpkg>` looks for `{stem}.json` as a sibling file first (Gen12 sidecar); falls back to embedded `payload.json` inside the ZIP (Gen11).
-- Gen11 `payload.json` uses **lowercase snake_case keys** (`package`, `installation`, `reboot_required`, description entries use `{lang, x_late}` not `{Lang, Value}`). Gen12 sidecar uses CamelCase.
-- `sdr.py::_fetch_software_ids()` fetches sibling `.json` URL for device matching — already correct.
-
-### pcli spp inspect — Output Sections
-
-`pcli spp inspect <file.fwpkg>` shows the following sections in order. Sources marked **(sidecar)** come from `{stem}.json`; **(zip)** means read directly from inside the fwpkg ZIP; **(catalog)** means passed in from `metadata.json` during `pcli spp inspect gen12 <version> <file>`.
-
-#### Header line
-Source: sidecar `Package.Files[0]` + sidecar `Package.UpgradeRequirements` + sidecar `Package.Installation.RebootRequired`
-
-```
-ilo7_1.20.00.fwpkg  64.0 MB  ✓ SHA256 verified
-  Recommended  No reboot
-  This component provides updated iLO firmware…  (first 300 chars of Description)
-```
-
-| Field | JSON key |
-|---|---|
-| Filename + size | filesystem stat |
-| SHA256 badge | catalog `SHA256Sum` vs file hash |
-| Recommended / Critical / Optional | `Package.UpgradeRequirements` |
-| Reboot required / No reboot | `Package.Installation.RebootRequired` |
-| Description excerpt | `Package.Description[lang=en]` |
-
-#### Files inside package
-Source: sidecar `Package.Files[0].FileList[]` (preferred); falls back to ZIP directory listing.
-
-Shows every file inside the fwpkg ZIP with size and type label. For Gen12 sidecar-style packages this will be just one entry (`.bin` or `.signed.flash`). For Gen11 embedded-style it will show all 3–4 files including `payload.json`, `.xml`, `readme.txt`.
-
-#### Flash Properties
-Source: sidecar (or embedded) `Devices.Device[]` + `FirmwareImages[0]` + top-level `UpdatableBy`.
-
-| Column | JSON key |
-|---|---|
-| Target Device | `Device.DeviceName` |
-| Duration | `FirmwareImages[0].InstallDurationSec` |
-| Reboot | `FirmwareImages[0].ResetRequired` |
-| Direct Flash | `FirmwareImages[0].DirectFlashOK` |
-| PLDM | `FirmwareImages[0].PLDMImage` |
-| Update Via | top-level `UpdatableBy[]` → mapped to "iLO (BMC)" / "UEFI" / "OS Agent" |
-
-One row per unique `DeviceName` (iLO 7 has 6 device entries, deduplicated to 1).
-
-#### Release Notes
-Source: sidecar `Package.RevisionHistory[0].Enhancements` + `.BugFixes` (HTML, stripped).
-
-Shows the most recent version's enhancements and bug fix notes. Skipped if empty.
-
-#### Installation Notes
-Source: sidecar `Package.InstallationNotes[lang=en]` (HTML, stripped).
-
-For iLO 7: iLOrest `flashfwpkg` command examples (remote + localhost). For BIOS: iLOrest command. Only shown for Gen12 sidecar packages; Gen11 packages use Readme instead.
-
-#### Readme
-Source: `readme.txt` embedded in the fwpkg ZIP (Gen11 only).
-
-Only shown when there are no `InstallationNotes` from sidecar (i.e., Gen11 packages). Truncated to first 60 lines.
-
-### SPP Catalog Composition
-
-**Local cache layout** (`spp/` directory, gitignored):
-
-```
-spp/
-└── gen12/
-    ├── 2025.09.01.00/
-    │   └── metadata.json             ← catalog only, no packages downloaded
-    └── 2026.03.00.00/
-        ├── metadata.json             ← full SPP catalog (281 components, 307 files)
-        └── packages/
-            ├── ilo7_1.20.00.fwpkg
-            ├── ilo7_1.20.00.json     ← Gen12 sidecar
-            ├── ilo6_174.fwpkg        ← Gen11 style (embedded payload.json)
-            ├── A66_1.40_01_09_2026.fwpkg
-            └── A66_1.40_01_09_2026.json
-```
-
-**Catalog stats for gen12 SPP `2026.03.00.00`** (source: `metadata.json`):
-
-| Type | Count | Avg size | Largest file | Max size | Total |
-|------|------:|----------|--------------|----------|------:|
-| `.fwpkg` | 134 | 9.0 MB | U69_1.62_02_06_2026.fwpkg (DL380 Gen12 BIOS) | 64 MB | ~1.2 GB |
-| `.exe` | 44 | 10.3 MB | cp071210.exe | 226 MB | ~455 MB |
-| `.rpm` | 94 | 2.4 MB | MRStorageAdministrator-008.016.013.000-00.x86_64.rpm | 31 MB | ~224 MB |
-| `.zip` | 27 | 5.3 MB | cp070370.zip | 25 MB | ~144 MB |
-| `.deb` | 8 | 7.0 MB | sut-6.6.0-9_amd64.deb | 19 MB | ~56 MB |
-| **Total** | **307** | | | | **~2.1 GB** |
-
-For firmware-only work, only the 134 `.fwpkg` files + their sidecar `.json` files matter (~1.2 GB). The `.rpm`/`.exe`/`.zip`/`.deb` files are OS-level drivers and tools that require SUM/OS-agent to install. A future `pcli spp download --firmware-only` flag could skip those.
-
-### pcli ilo get update-method
-
-```bash
-pcli ilo get update-method [--host NAME] [--raw]
-```
-
-Output: Rich table with columns `Component | Version | Method | Reboot | Context`. `Method` column color-coded: BMC=green, UEFI=yellow, OS=red.
+`pcli ilo list firmwares` shows the `Method` column (BMC / UEFI / OS) for each component. See `notes-agents.md` for how pcli infers the method from component name patterns.
 
 ---
 
-## 4. COM Firmware Update Mechanism
+## 3. COM Firmware Update Mechanism
 
-### COM Does NOT Download the Entire SPP ISO
+**COM does NOT download the entire SPP ISO.** This is the most common misconception.
 
-This is the most common misconception. COM uses **iLO Repository + UEFI Installation Queue**:
+COM uses the **iLO Repository + UEFI Installation Queue**:
 
 ```
-COM Cloud  ─► POST /compute-ops-mgmt/v1/jobs  {bundle_id, server_id}
-           ─► iLO ServerFirmwareDownload job:
-                  Analyze server FirmwareInventory vs bundle contents
-                  Pull only applicable .fwpkg components from HPE CDN
-                  (NOT the full 8+ GB SPP ISO)
-           ─► Components staged to iLO flash repository
-           ─► POST UpdateTaskQueue per component
-           ─► COM (or admin) triggers server reboot
-           ─► UEFI reads Installation Queue during POST → flashes components
+COM Cloud → triggers iLO ServerFirmwareDownload job
+          → iLO compares server FirmwareInventory vs bundle
+          → iLO downloads only applicable .fwpkg files from HPE CDN
+          → Components staged to iLO repository
+          → UEFI flashes components during next server reboot
 ```
 
-iLO downloads individual `.fwpkg` files on demand from HPE CDN. The full SPP ISO is never downloaded to the server.
+iLO downloads individual `.fwpkg` files on demand. The full SPP ISO (~6-8 GB) is never downloaded to the server.
 
-### No SUM Inside iLO — Two Native Agents
+### SUM vs iLO Native Agents
+
+SUM is a **separate management tool** — there is no SUM inside iLO. iLO has two native firmware agents:
 
 | Agent | What it does | When it runs |
 |-------|-------------|--------------|
-| **BMC (iLO)** | iLO flashes itself and power management | Immediately — no reboot |
-| **UEFI** | UEFI reads queue during POST and flashes | Next reboot |
+| **BMC (iLO)** | iLO flashes itself and power management components | Immediately — no server reboot |
+| **UEFI** | UEFI reads the installation queue during POST and flashes everything else | Next server reboot |
 
-SUM is a **separate tool** that runs on a management host. There is no SUM inside iLO.
-
-### COM Job Templates
-
-Durable template IDs (permanent — do not change):
-
-| Job Type | Template ID |
-|----------|-------------|
-| `ServerFirmwareUpdate` | `fd54a96c-cabc-42e3-aee3-374a2d009dba` |
-| `ServerFirmwareDownload` | `0683ada8-1a89-49dd-bf04-6df715b708a6` |
-| `ServerIloFirmwareUpdate` | `94caa4ef-9ff8-4805-9e97-18a09e673b66` |
-| `GroupFirmwareUpdate` | `91159b5e-9eeb-11ec-a9da-00155dc0a0c0` |
-
-Key job parameters:
-- `bundle_id` — firmware bundle UUID from `/firmware-bundles`
-- `wait_for_power_off_or_reboot: false` — COM triggers reboot automatically
-- `install_sw_drivers: false` — downloads drivers to iLO repo but does NOT install to OS
-
-### Components Requiring OS (RuntimeAgent)
-
-These components **cannot** be updated via COM OOB (or via pure iLO Redfish):
+### Components Requiring OS (cannot be updated OOB)
 
 | Component | Reason |
 |-----------|--------|
-| Intel NICs | `UpdatableBy: RuntimeAgent` — no PLDM support |
-| BCM OCP3 adapters (e.g. P10113-001) | OCP3 slot lacks PLDM channel on iLO 6; `bnxtnvm` in-band required |
-| Linux/VMware NIC drivers (`.rpm`/`.zip` SCs) | OS-level software, not firmware |
+| Intel NICs | No PLDM support — needs SUM/OS agent |
+| BCM OCP3 adapters on Gen11 (e.g. P10113-001) | OCP3 slot has no PLDM channel on iLO 6 — needs `bnxtnvm` in-band |
+| Linux/VMware NIC drivers | OS-level software, not firmware |
 
 For Gen12 servers (iLO 7), broader PLDM coverage means fewer OS-required components. Gen12 PCIe NICs (Broadcom, Mellanox) with PLDM support are UEFI-updatable OOB.
 

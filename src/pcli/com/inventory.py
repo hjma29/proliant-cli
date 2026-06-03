@@ -3,7 +3,7 @@ pcli.com.inventory
 ~~~~~~~~~~~~~~~~~~~
 Hardware inventory reports from HPE COM.
 
-Uses the /compute-ops-mgmt/v1beta1/servers/{id}/inventory endpoint,
+Uses the /compute-ops-mgmt/{COM_API_VERSION}/servers/{id}/inventory endpoint,
 which is a cached Redfish mirror collected by COM from each iLO.
 """
 
@@ -20,12 +20,12 @@ if TYPE_CHECKING:
 _SKIP_STATUSES = {"NotPresent", "Unknown", ""}
 
 
-async def _get_memory_inventory(client: "COMClient", base_url: str, server: dict) -> list[dict]:
+async def _get_memory_inventory(client: "COMClient", server: dict) -> list[dict]:
     """Fetch DIMM list for one server. Returns [] on error."""
     rid = server["id"]
     name = server.get("name", rid)
     try:
-        inv = await client.get(f"{base_url}/compute-ops-mgmt/v1beta1/servers/{rid}/inventory")
+        inv = await client.get(client.session.com_url(f"/servers/{rid}/inventory"))
         dimms = inv.get("memory", {}).get("data", [])
         result = []
         for d in dimms:
@@ -49,12 +49,12 @@ async def _get_memory_inventory(client: "COMClient", base_url: str, server: dict
         return []
 
 
-async def get_fleet_memory(client: "COMClient", base_url: str) -> list[dict]:
+async def get_fleet_memory(client: "COMClient") -> list[dict]:
     """Return all populated DIMMs across the whole fleet, concurrently."""
-    r = await client.get(f"{base_url}/compute-ops-mgmt/v1beta1/servers", params={"limit": 1000})
+    r = await client.get(client.session.com_url("/servers"), params={"limit": 1000})
     servers = r.get("items", [])
 
-    tasks = [_get_memory_inventory(client, base_url, s) for s in servers]
+    tasks = [_get_memory_inventory(client, s) for s in servers]
     results = await asyncio.gather(*tasks)
 
     dimms = []
@@ -66,12 +66,12 @@ async def get_fleet_memory(client: "COMClient", base_url: str) -> list[dict]:
 _SKIP_GPU_MANUFACTURERS = {"", "intel"}
 
 
-async def _get_gpu_inventory(client: "COMClient", base_url: str, server: dict) -> list[dict]:
+async def _get_gpu_inventory(client: "COMClient", server: dict) -> list[dict]:
     """Fetch discrete GPU list for one server. Returns [] on error or no GPUs."""
     rid = server["id"]
     name = server.get("name", rid)
     try:
-        inv = await client.get(f"{base_url}/compute-ops-mgmt/v1beta1/servers/{rid}/inventory")
+        inv = await client.get(client.session.com_url(f"/servers/{rid}/inventory"))
         procs = inv.get("processor", {}).get("data", [])
         result = []
         for p in procs:
@@ -92,12 +92,12 @@ async def _get_gpu_inventory(client: "COMClient", base_url: str, server: dict) -
         return []
 
 
-async def get_fleet_gpus(client: "COMClient", base_url: str) -> list[dict]:
+async def get_fleet_gpus(client: "COMClient") -> list[dict]:
     """Return all discrete GPUs across the whole fleet, concurrently."""
-    r = await client.get(f"{base_url}/compute-ops-mgmt/v1beta1/servers", params={"limit": 1000})
+    r = await client.get(client.session.com_url("/servers"), params={"limit": 1000})
     servers = r.get("items", [])
 
-    tasks = [_get_gpu_inventory(client, base_url, s) for s in servers]
+    tasks = [_get_gpu_inventory(client, s) for s in servers]
     results = await asyncio.gather(*tasks)
 
     gpus: list[dict] = []

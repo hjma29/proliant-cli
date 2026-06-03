@@ -572,11 +572,10 @@ async def _cmd_report_gpu(args: argparse.Namespace) -> None:
     from rich import box as rich_box
 
     session = await _ensure_session(args)
-    base_url = session.base_url
 
     async with COMClient(session) as client:
         with console.status("[dim]Fetching GPU inventory across fleet…[/dim]"):
-            gpus = await get_fleet_gpus(client, base_url)
+            gpus = await get_fleet_gpus(client)
 
     if not gpus:
         console.print("[yellow]No discrete GPUs found across fleet.[/yellow]")
@@ -618,11 +617,10 @@ async def _cmd_report_memory(args: argparse.Namespace) -> None:
     from rich import box as rich_box
 
     session = await _ensure_session(args)
-    base_url = session.base_url
 
     async with COMClient(session) as client:
         with console.status("[dim]Fetching memory inventory across fleet…[/dim]"):
-            dimms = await get_fleet_memory(client, base_url)
+            dimms = await get_fleet_memory(client)
 
     if not dimms:
         console.print("[yellow]No memory inventory data returned.[/yellow]")
@@ -690,12 +688,11 @@ async def _cmd_describe_server(args: argparse.Namespace) -> None:
     from rich.panel import Panel
 
     session = await _ensure_session(args)
-    base = session.base_url
     target = args.server.upper()
 
     async with COMClient(session) as c:
         with console.status("[dim]Fetching server list…[/dim]"):
-            r = await c.get(f"{base}/compute-ops-mgmt/v1beta2/servers", params={"limit": 1000})
+            r = await c.get(session.com_url("/servers"), params={"limit": 1000})
     items = r.get("items", [])
 
     server = None

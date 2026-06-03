@@ -701,9 +701,10 @@ async def _cmd_describe_server(args: argparse.Namespace) -> None:
     server = None
     for s in items:
         hw = s.get("hardware", {})
-        sn = (hw.get("serialNumber") or "").upper()
-        name = (s.get("name") or "").upper()
-        if target == sn or target == name:
+        sn       = (hw.get("serialNumber") or "").upper()
+        name     = (s.get("name") or "").upper()
+        ilo_host = (hw.get("bmc", {}).get("hostname") or "").upper()
+        if target == sn or target == name or target == ilo_host:
             server = s
             break
 

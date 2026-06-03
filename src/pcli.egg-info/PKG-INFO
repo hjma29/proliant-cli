@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: pcli
-Version: 0.3.19
+Version: 0.3.20
 Summary: HPE ProLiant unified CLI — iLO Redfish and Compute Ops Management
 Author: hjma29
 License: MIT
@@ -38,35 +38,51 @@ Requires-Dist: pytest-cov>=4.0; extra == "dev"
 
 # pcli — HPE ProLiant unified CLI
 
-A unified command-line tool for managing HPE ProLiant servers across direct iLO access and the HPE GreenLake cloud.
+**pcli** is a unified CLI for HPE ProLiant environments. It lets you retrieve and inspect server inventory and details across **iLO**, **HPE GreenLake COM**, and **HPE OneView** — and includes a built-in tool to fetch and read HPE ProLiant **QuickSpec** documents directly from the terminal.
 
 ## Installation
 
+### Windows (no Python required)
+
+1. Download the latest `proliant-cli-windows.zip` from the [Releases](../../releases/latest) page
+2. Extract the zip to a folder (e.g. `C:\Tools\pcli\`)
+3. Open PowerShell, `cd` into that folder, and run:
+
+```powershell
+.\pcli --version
+```
+
+pcli will offer to add itself to your PATH so you can run `pcli` from anywhere.
+
+### From source (Linux / macOS / WSL)
+
 ```bash
 git clone <repo>
-cd pcli
+cd proliant-cli
 pip install -e ".[all]"
 ```
 
 ## Usage
 
 ```
-pcli ilo <command>    # Direct iLO Redfish management
-pcli com <command>    # HPE GreenLake / Compute Ops Management
+pcli ilo <command>       # Direct iLO Redfish management
+pcli com <command>       # HPE GreenLake / Compute Ops Management
+pcli oneview <command>   # HPE OneView management
+pcli qs <command>        # HPE ProLiant QuickSpec reader
 ```
 
 ### iLO commands
 
 ```bash
-pcli ilo init                              # Create starter hosts.yml config
-pcli ilo show fleet                        # Firmware summary across all hosts
-pcli ilo show ilo                          # iLO firmware versions
-pcli ilo show network                      # NIC firmware versions
-pcli ilo show storage                      # Storage controllers + drives
-pcli ilo show bios                         # BIOS/System ROM versions
-pcli ilo show cpu                          # CPU models + microcode
-pcli ilo show memory                       # DIMM details
-pcli ilo show full                         # Full firmware inventory
+pcli ilo init                              # Create starter hosts-ilo.ini config
+pcli ilo list firmwares                    # Firmware summary across all hosts
+pcli ilo list ilo                          # iLO firmware versions
+pcli ilo list network                      # NIC firmware versions
+pcli ilo list storage                      # Storage controllers + drives
+pcli ilo list bios                         # BIOS/System ROM versions
+pcli ilo list cpu                          # CPU models + microcode
+pcli ilo list memory                       # DIMM details
+pcli ilo list full                         # Full firmware inventory
 pcli ilo upgrade --host myilo              # Auto-upgrade all firmware from HPE SDR
 pcli ilo upgrade --host myilo --dry-run    # Preview without changes
 pcli ilo upgrade --host myilo --reboot     # Upgrade and reboot
@@ -83,8 +99,35 @@ pcli com get workspaces                    # List workspaces
 pcli com use workspace <name>              # Switch active workspace
 ```
 
+### OneView commands
+
+```bash
+pcli oneview list servers                  # List all managed servers
+pcli oneview list firmware                 # Show firmware inventory
+pcli oneview list networks                 # List ethernet networks
+pcli oneview list networksets              # List network sets
+pcli oneview list uplinksets               # List uplink sets
+pcli oneview list server-profiles          # List server profiles
+pcli oneview describe server <name>        # Detailed info for a server
+pcli oneview report memory                 # Memory DIMM part-number breakdown
+```
+
+### QuickSpec commands
+
+```bash
+pcli qs list --model dl380gen11            # Find QuickSpec revisions for a model
+pcli qs describe <doc-id>                  # Read a QuickSpec as formatted markdown
+pcli qs diff <doc-id1> <doc-id2>           # Compare two QuickSpec versions
+```
+
+## Updating
+
+```bash
+pcli update                                # Self-update to the latest release
+```
+
 ## Config files
 
-- iLO hosts: `~/.config/pcli/ilo/hosts.yml`
+- iLO hosts: `hosts-ilo.ini` (in current directory — run `pcli ilo init` to create)
 - COM credentials: `~/.config/pcli/com/credentials.yml`
 - COM token cache: `~/.config/pcli/com/token.json`

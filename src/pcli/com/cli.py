@@ -779,8 +779,95 @@ async def _cmd_describe_server(args: argparse.Namespace) -> None:
     sub_table.add_row("Expires", expires)
     console.print(sub_table)
 
-    # ── Firmware inventory ────────────────────────────────────────────────────
+    # ── GPU ───────────────────────────────────────────────────────────────────
+    _GPU_KEYWORDS = ("video controller", "gpu", "nvidia", "radeon", "gaudi",
+                     "accelerator", "xe graphics")
     fw_items = server.get("firmwareInventory") or []
+    gpu_items = [
+        fw for fw in fw_items
+        if any(kw in (fw.get("name") or "").lower() for kw in _GPU_KEYWORDS)
+    ]
+    if gpu_items:
+        console.print("[bold]GPU[/bold]")
+        gpu_table = Table(box=rich_box.SIMPLE, show_header=True, header_style="bold cyan",
+                          padding=(0, 2))
+        gpu_table.add_column("Model", no_wrap=True)
+        gpu_table.add_column("Driver/FW")
+        gpu_table.add_column("Slot", style="dim")
+        for fw in gpu_items:
+            gpu_table.add_row(fw.get("name", ""), fw.get("version", ""),
+                              fw.get("deviceContext", ""))
+        console.print(gpu_table)
+
+    # ── Memory population map (via iLO Redfish) ───────────────────────────────
+    ilo_ip = bmc.get("ip")
+    if ilo_ip:
+        try:
+            from pcli.ilo.config import load_hosts
+            from pcli.ilo.client import ILOClient
+            from pcli.ilo.inventory import fetch_memory_population
+
+            # Find matching host credentials by IP or hostname
+            ilo_creds = None
+            try:
+                for h in load_hosts():
+                    if ilo_ip in h.get("url", "") or (bmc.get("hostname") or "") in h.get("url", ""):
+                        ilo_creds = h
+                        break
+                if not ilo_creds:
+                    # Try matching by serial in host name
+                    sn = (hw.get("serialNumber") or "").lower()
+                    for h in load_hosts():
+                        if sn and sn in h.get("name", "").lower():
+                            ilo_creds = h
+                            break
+            except Exception:
+                pass
+
+            if ilo_creds:
+                async with ILOClient(ilo_creds["url"], ilo_creds["username"], ilo_creds["password"]) as ilo:
+                    dimms = await fetch_memory_population(ilo)
+
+                if dimms:
+                    console.print("[bold]Memory[/bold]")
+                    # Group by part number for summary
+                    from collections import Counter
+                    populated = [d for d in dimms if d["present"]]
+                    empty_count = sum(1 for d in dimms if not d["present"])
+
+                    mem_table = Table(box=rich_box.SIMPLE, show_header=True,
+                                      header_style="bold cyan", padding=(0, 2))
+                    mem_table.add_column("Slot", no_wrap=True)
+                    mem_table.add_column("Capacity")
+                    mem_table.add_column("Type")
+                    mem_table.add_column("Speed")
+                    mem_table.add_column("Part Number", style="dim")
+                    for d in dimms:
+                        if d["present"]:
+                            speed_str = f"{d['speed']} MT/s" if d["speed"] else "—"
+                            cap_str   = f"{d['cap_gb']} GB" if d["cap_gb"] else "—"
+                            mem_table.add_row(d["slot"], cap_str, d["type"] or "—",
+                                              speed_str, d["part"] or "—")
+                        else:
+                            mem_table.add_row(f"[dim]{d['slot']}[/dim]", "[dim]empty[/dim]",
+                                              "", "", "")
+                    console.print(mem_table)
+                    total_gb = sum(d["cap_gb"] for d in populated)
+                    console.print(f"  [dim]{len(populated)} DIMMs populated, "
+                                  f"{empty_count} empty — {total_gb} GB total[/dim]")
+        except Exception:
+            # iLO unreachable or no creds — show total from COM
+            mem_mb = hw.get("memoryMb")
+            if mem_mb:
+                console.print("[bold]Memory[/bold]")
+                console.print(f"  {mem_mb // 1024} GB total  [dim](slot detail requires iLO access)[/dim]")
+    else:
+        mem_mb = hw.get("memoryMb")
+        if mem_mb:
+            console.print("[bold]Memory[/bold]")
+            console.print(f"  {mem_mb // 1024} GB total  [dim](slot detail requires iLO access)[/dim]")
+
+    # ── Firmware inventory ────────────────────────────────────────────────────
     if fw_items:
         console.print("[bold]Firmware[/bold]")
         fw_table = Table(box=rich_box.SIMPLE, show_header=True, header_style="bold cyan",

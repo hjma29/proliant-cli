@@ -3,7 +3,7 @@ pcli.com.inventory
 ~~~~~~~~~~~~~~~~~~~
 Hardware inventory reports from HPE COM.
 
-Uses the /compute-ops-mgmt/v1beta2/servers/{id}/inventory endpoint,
+Uses the /compute-ops-mgmt/v1beta1/servers/{id}/inventory endpoint,
 which is a cached Redfish mirror collected by COM from each iLO.
 """
 
@@ -25,7 +25,7 @@ async def _get_memory_inventory(client: "COMClient", base_url: str, server: dict
     rid = server["id"]
     name = server.get("name", rid)
     try:
-        inv = await client.get(f"{base_url}/compute-ops-mgmt/v1beta2/servers/{rid}/inventory")
+        inv = await client.get(f"{base_url}/compute-ops-mgmt/v1beta1/servers/{rid}/inventory")
         dimms = inv.get("memory", {}).get("data", [])
         result = []
         for d in dimms:
@@ -51,7 +51,7 @@ async def _get_memory_inventory(client: "COMClient", base_url: str, server: dict
 
 async def get_fleet_memory(client: "COMClient", base_url: str) -> list[dict]:
     """Return all populated DIMMs across the whole fleet, concurrently."""
-    r = await client.get(f"{base_url}/compute-ops-mgmt/v1beta2/servers", params={"limit": 1000})
+    r = await client.get(f"{base_url}/compute-ops-mgmt/v1beta1/servers", params={"limit": 1000})
     servers = r.get("items", [])
 
     tasks = [_get_memory_inventory(client, base_url, s) for s in servers]
@@ -71,7 +71,7 @@ async def _get_gpu_inventory(client: "COMClient", base_url: str, server: dict) -
     rid = server["id"]
     name = server.get("name", rid)
     try:
-        inv = await client.get(f"{base_url}/compute-ops-mgmt/v1beta2/servers/{rid}/inventory")
+        inv = await client.get(f"{base_url}/compute-ops-mgmt/v1beta1/servers/{rid}/inventory")
         procs = inv.get("processor", {}).get("data", [])
         result = []
         for p in procs:
@@ -94,7 +94,7 @@ async def _get_gpu_inventory(client: "COMClient", base_url: str, server: dict) -
 
 async def get_fleet_gpus(client: "COMClient", base_url: str) -> list[dict]:
     """Return all discrete GPUs across the whole fleet, concurrently."""
-    r = await client.get(f"{base_url}/compute-ops-mgmt/v1beta2/servers", params={"limit": 1000})
+    r = await client.get(f"{base_url}/compute-ops-mgmt/v1beta1/servers", params={"limit": 1000})
     servers = r.get("items", [])
 
     tasks = [_get_gpu_inventory(client, base_url, s) for s in servers]
@@ -151,3 +151,4 @@ def aggregate_by_part_number(dimms: list[dict]) -> list[dict]:
     rows = list(groups.values())
     rows.sort(key=lambda r: r["count"], reverse=True)
     return rows
+

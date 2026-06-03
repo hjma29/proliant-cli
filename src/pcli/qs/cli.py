@@ -300,12 +300,13 @@ def _cmd_describe(args: argparse.Namespace) -> None:
         return
 
     if args.section:
-        # Find best match (case-insensitive substring)
-        target = args.section.lower()
+        # Resolve slug → real section name, then partial-match against doc sections
+        resolved = _QS_SECTIONS.get(args.section, args.section)
+        target = resolved.lower()
         matched = next((s for s in sections if target in s.lower()), None)
         if not matched:
             console.print(
-                f"[yellow]Section '{args.section}' not found.[/yellow]\n"
+                f"[yellow]Section '{resolved}' not found.[/yellow]\n"
                 f"Available sections: {', '.join(sections)}"
             )
             sys.exit(1)
@@ -323,15 +324,15 @@ def _cmd_describe(args: argparse.Namespace) -> None:
 
 # ── diff ──────────────────────────────────────────────────────────────────────
 
-_QS_SECTIONS = [
-    "Summary of Changes",
-    "Overview",
-    "Standard Features",
-    "Configuration Information",
-    "Core Options",
-    "Additional Options",
-    "Service and Support",
-]
+_QS_SECTIONS: dict[str, str] = {
+    "summary-of-changes":       "Summary of Changes",
+    "overview":                  "Overview",
+    "standard-features":         "Standard Features",
+    "configuration-information": "Configuration Information",
+    "core-options":              "Core Options",
+    "additional-options":        "Additional Options",
+    "service-and-support":       "Service and Support",
+}
 
 
 def _section_map(markdown: str, sections: list[str]) -> dict[str, str]:
@@ -399,10 +400,11 @@ def _cmd_diff(args: argparse.Namespace) -> None:
 
     # ── Detailed diff for a single section ────────────────────────────────────
     if args.section:
-        target = args.section.lower()
+        resolved = _QS_SECTIONS.get(args.section, args.section)
+        target = resolved.lower()
         matched = next((s for s in all_sections if target in s.lower()), None)
         if not matched:
-            console.print(f"[yellow]Section '{args.section}' not found.[/yellow]")
+            console.print(f"[yellow]Section '{resolved}' not found.[/yellow]")
             console.print(f"Available: {', '.join(all_sections)}")
             sys.exit(1)
 
@@ -508,8 +510,8 @@ examples:
     p_desc.add_argument(
         "--section", "-s",
         metavar="SECTION",
-        choices=_QS_SECTIONS,
-        help="Show only this section, e.g. 'Standard Features'",
+        choices=list(_QS_SECTIONS),
+        help="Show only this section, e.g. standard-features",
     )
     p_desc.add_argument(
         "--list-sections", "-l",
@@ -538,7 +540,7 @@ examples:
     p_diff.add_argument(
         "--section", "-s",
         metavar="SECTION",
-        choices=_QS_SECTIONS,
+        choices=list(_QS_SECTIONS),
         help="Show detailed line diff for this section only",
     )
 

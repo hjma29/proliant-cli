@@ -185,6 +185,8 @@
   },
   "active": "727093c4cfd7a0ba",
   "lastOpenFiles": [
+    "docs/demo.svg",
+    "docs",
     "proliant-cli-windows.zip",
     "src/pcli/config/cli.py",
     "src/pcli/config/__init__.py",
@@ -194,8 +196,6 @@
     "src/pcli/qs/__init__.py",
     "src/pcli/qs",
     "src/pcli/com/inventory.py",
-    "src/pcli/oneview/profiles.py",
-    "src/pcli/oneview/network.py",
     "README.md"
   ]
 }

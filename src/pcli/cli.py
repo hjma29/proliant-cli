@@ -90,16 +90,23 @@ Register-ArgumentCompleter -Native -CommandName pcli -ScriptBlock {
 
 
 def _windows_first_run_check() -> None:
-    """On Windows: if the exe dir isn't in PATH, offer a one-time quick setup."""
+    """On Windows: offer a one-time PATH setup the first time pcli is run."""
     if sys.platform != "win32":
         return
     if not getattr(sys, "frozen", False):
         return  # only for the packaged .exe
 
     exe_dir = os.path.dirname(sys.executable)
+
+    # Skip if already in PATH
     path_dirs = [p.lower().rstrip("\\") for p in os.environ.get("PATH", "").split(os.pathsep)]
     if exe_dir.lower().rstrip("\\") in path_dirs:
-        return  # already set up
+        return
+
+    # Skip if user already answered this prompt (yes or no)
+    sentinel = os.path.join(exe_dir, ".setup_done")
+    if os.path.exists(sentinel):
+        return
 
     print("Quick setup: add pcli to your PATH for easier access? [Y/n] ", end="", flush=True)
     try:
@@ -107,6 +114,12 @@ def _windows_first_run_check() -> None:
     except (EOFError, KeyboardInterrupt):
         print()
         return
+
+    # Remember the answer so we never ask again
+    try:
+        open(sentinel, "w").close()
+    except OSError:
+        pass
 
     if answer not in ("", "y", "yes"):
         return

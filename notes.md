@@ -12,15 +12,14 @@
 - [2. Firmware Update Methods — BMC / UEFI / OS](#2-firmware-update-methods--bmc--uefi--os)
 - [3. COM Firmware Update Mechanism](#3-com-firmware-update-mechanism)
 - [4. PLDM — How Gen12 Firmware Updates Work](#4-pldm--how-gen12-firmware-updates-work)
-- [5. Recommended Firmware Upgrade Order](#5-recommended-firmware-upgrade-order)
-- [6. Which Firmware Can (and Cannot) Be Upgraded via iLO](#6-which-firmware-can-and-cannot-be-upgraded-via-ilo)
-- [7. High-Level Upgrade Steps](#7-high-level-upgrade-steps)
-- [8. iLO 6 vs iLO 7 — Key Differences](#8-ilo-6-vs-ilo-7--key-differences)
-- [9. Observed Server-Specific Notes](#9-observed-server-specific-notes)
-- [10. BCM957414 NIC — Stepping Chain (dl325-gen12)](#10-bcm957414-nic--stepping-chain-dl325-gen12)
-- [11. COM Auth Overview](#11-com-auth-overview)
-- [12. COM Device Onboarding](#12-com-device-onboarding)
-- [13. Quick Reference — Redfish Endpoints](#13-quick-reference--redfish-endpoints)
+- [5. Which Firmware Can (and Cannot) Be Upgraded via iLO](#5-which-firmware-can-and-cannot-be-upgraded-via-ilo)
+- [6. High-Level Upgrade Steps](#6-high-level-upgrade-steps)
+- [7. iLO 6 vs iLO 7 — UpdateService Schema Differences](#7-ilo-6-vs-ilo-7--updateservice-schema-differences)
+- [8. Observed Server-Specific Notes](#8-observed-server-specific-notes)
+- [9. BCM957414 NIC — Stepping Chain (dl325-gen12)](#9-bcm957414-nic--stepping-chain-dl325-gen12)
+- [10. COM Auth Overview](#10-com-auth-overview)
+- [11. COM Device Onboarding](#11-com-device-onboarding)
+- [12. Quick Reference — Redfish Endpoints](#12-quick-reference--redfish-endpoints)
 
 ---
 
@@ -447,61 +446,3 @@ POST /redfish/v1/Systems/1/Actions/ComputerSystem.Reset/
 
 ---
 
-## 17. Lessons Learned (All)
-
-### iLO / Redfish
-
-1. **Gen11+: `StorageControllers[]` is always empty** — must use `Storage/{id}/Controllers/` sub-collection.
-2. **NIC firmware is NOT in FirmwareInventory on iLO 6** — read from `NetworkAdapters` endpoint.
-3. **BCM SDR filenames have inverted format: `BCM{version}_{chipmodel}.fwpkg`** — version first.
-4. **dl325-gen12: `Storage` has zero members** — always fall back to FirmwareInventory keyword scan.
-5. **Gen12 OEM actions path is different from Gen11** — `Oem.Hpe.Actions` vs `Actions.Oem.Hpe`. `_oem_actions()` handles both.
-6. **`UpdatableBy` in task queue must be `["Uefi"]` for non-iLO components** — `["Bmc"]` doesn't actually flash BIOS. `["Bmc","RuntimeAgent","Uefi"]` splits into two subtasks on iLO 7 and OS_task never fires.
-7. **iLO 7 never marks UEFI tasks Complete** — stale Pending is normal after POST flash. Always verify via FirmwareInventory.
-8. **iLO 6 HttpPushUri often returns empty 400** — use `AddFromUri` instead. iLO 7 is fine.
-9. **BCM957414 NIC stepping chain: can't jump from 214.x to 235.x directly** — `MinimumActiveVersion: 226.1.107.0`. Natural PLDM stepping ~1 step per SUM run + reboot.
-10. **BCM OCP3 NIC (P10113-001) does NOT appear in FirmwareInventory on iLO 6** — no PLDM channel. Requires in-band `bnxtnvm`.
-11. **Gen12+ `.json` sidecar is a SEPARATE file** from `.fwpkg` — confirmed HPE policy. `sdr.py` already handles this correctly.
-12. **`"intel"` matches inside `"intelligent power"`** — always use `"intel "` (trailing space) or `"intel(r)"` in pattern matching.
-13. **Autocomplete: set `_ARGCOMPLETE=2` before dispatching sub-CLIs** — `=1` strips only one level, `=2` strips two.
-14. **iLO 7 ComponentRepository/UpdateTaskQueue return stub Members** — must expand each `{"@odata.id": "..."}` via individual GET.
-
-### COM / Compute Ops Management
-
-15. **COM downloads individual `.fwpkg` files, NOT the full SPP ISO** — only applicable components are pulled.
-16. **No SUM inside iLO** — two native agents: BMC (immediate) and UEFI (POST reboot).
-17. **FirmwareInventory on COM server objects has no `UpdatableBy` field** — must infer from name patterns.
-18. **COM bundle API has no per-component sub-resource** — component-level data only in `payload.json`.
-19. **`ccs-session` expires independently of `access_token`** — both required for ui-doorway; only full re-login restores ccs-session.
-20. **`id_token` expires in ~5 min** — use immediately at login to set up workspace session.
-21. **GLP token vs user token** — `global.api.greenlake.hpe.com` requires GLP OAuth2 token (client_id/secret), not Okta user token.
-22. **`ActivationKey` not `workspace_id` for iLO 6 CloudConnect** — `EnableCloudConnect` needs activation key.
-23. **`ProductID=NA` test units cannot be onboarded** — no supply chain record in GLP database.
-24. **iLO 6 static network config cannot be PATCHed** — `Gateway` field is `PropertyNotWritableOrUnknown`. Must use `ilorest load --force_network_config`.
-25. **`NO_APP_ACCOUNT = YES` in SUM INI causes 30+ min inventory hang on iLO 7** — remove it.
-26. **SUM `ONFAILEDDEPENDENCY = FORCE` does NOT bypass hard error dependencies** — use `OmitComponent`.
-27. **COM `/compute-ops/` prefix deprecated April 2025** — migrate to `/compute-ops-mgmt/` paths.
-28. **Pagination URL bug**: `get_all()` must check `if next_page.startswith("http")` before prepending base_url — ui-doorway sometimes returns absolute `nextPageUri`.
-
----
-
-## QuickSpecs Page Types (HPE collateral)
-
-HPE serves QuickSpecs via three different page structures — pcli qs handles all three:
-
-`
-Type 1 — Collateral HTML page exists (e.g. DL380 Gen12 a00073551enw)
-    GET collateral.{docid}.html → 200, has <main> tag
-    → Parse HTML with BeautifulSoup → convert to markdown
-
-Type 2 — Collateral HTML exists but old-style (e.g. DL360 Gen12 a50006984enw)
-    GET collateral.{docid}.html → 200, no <main> tag (PSNow wrapper)
-    → Fall back to PDF download → convert with markitdown[pdf]
-
-Type 3 — No collateral HTML page (e.g. EL140 Gen12 a50009256enw)
-    GET collateral.{docid}.html → 404
-    → Fall back to PDF download → convert with markitdown[pdf]
-`
-
-Type 1 is fast (~1-2s, HTML). Types 2 and 3 are slower (~5-10s, PDF download).
-Results are cached to ~/.cache/pcli/qs/ so subsequent calls are instant.

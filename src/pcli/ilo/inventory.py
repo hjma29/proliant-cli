@@ -559,6 +559,30 @@ async def fetch_memory_report_data(client: ILOClient) -> list[dict]:
     return result
 
 
+async def fetch_memory_population(client: ILOClient) -> list[dict]:
+    """Return all DIMM slots (populated and empty) for a population map display."""
+    system = await client.get(await client.get_system_uri())
+    memory_uri = system.get("Memory", {}).get("@odata.id")
+    if not memory_uri:
+        return []
+    result = []
+    for dimm in await _member_resources(client, memory_uri):
+        oem = dimm.get("Oem", {}).get("Hpe", {})
+        status = oem.get("DIMMStatus", "NotPresent")
+        cap_mib = dimm.get("CapacityMiB") or 0
+        speed = oem.get("MaxOperatingSpeedMTs") or dimm.get("OperatingSpeedMhz") or 0
+        result.append({
+            "slot":    dimm.get("DeviceLocator") or dimm.get("Name", ""),
+            "present": status not in ("NotPresent", "Unknown", ""),
+            "cap_gb":  cap_mib // 1024,
+            "type":    dimm.get("BaseModuleType", ""),
+            "speed":   speed,
+            "part":    (oem.get("PartNumber") or dimm.get("PartNumber") or "").strip(),
+            "status":  status,
+        })
+    return result
+
+
 async def fetch_serial_info(client: ILOClient) -> list[tuple[str, str]]:
     system = await client.get(await client.get_system_uri())
     raw_model = system.get("Model", "N/A")

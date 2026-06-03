@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import socket
 import tempfile
 import time
 import os
@@ -18,6 +19,16 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+
+# HPE endpoints (hpe.com, coveo.com) return both A and AAAA records, but IPv6
+# is not routed on most lab/corp machines — force IPv4 to avoid connection hangs.
+_orig_getaddrinfo = socket.getaddrinfo
+
+def _getaddrinfo_ipv4_only(host, port, family=0, type=0, proto=0, flags=0):
+    results = _orig_getaddrinfo(host, port, family, type, proto, flags)
+    return [r for r in results if r[0] == socket.AF_INET]
+
+socket.getaddrinfo = _getaddrinfo_ipv4_only
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────

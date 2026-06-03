@@ -97,99 +97,7 @@ Bundle counts (as of May 2026): 85 total, 30 active — Gen12: 12, Gen11: 28, Ge
 
 ---
 
-## 5. Querying Components — Gen11 vs Gen12 Redfish Differences
-
-### Storage Controllers
-
-| Generation | Where controllers live | How to access |
-|---|---|---|
-| Gen10 and older | Inline `StorageControllers[]` inside `Storage/{id}` | Read directly |
-| **Gen11 and Gen12** | Sub-collection at `Storage/{id}/Controllers/` | Fetch sub-collection |
-
-On Gen11/Gen12, `storage.StorageControllers[]` is always empty — must use the sub-collection:
-
-```python
-ctrl_link = storage.get("Controllers", {}).get("@odata.id")
-for c in client.get(ctrl_link).obj.get("Members", []):
-    ctrl = client.get(c["@odata.id"]).obj
-```
-
-**dl325-gen12 special case:** `Storage` returns **zero Members** — NVMe/SATA controllers only appear in `FirmwareInventory`. Always fall back to FirmwareInventory keyword scan.
-
-### Full Firmware Inventory (`FirmwareInventory`)
-
-```
-GET /redfish/v1/UpdateService/FirmwareInventory
-→ Members[] (each needs individual GET)
-→ per item: Name, Version, Updateable (bool), SoftwareId
-```
-
-`Updateable: true` means iLO can flash it via UpdateService. Filter by this before suggesting upgrades.
-
-**FirmwareInventory does NOT contain `UpdatableBy`** — that field is only in `payload.json`.
-
-### iLO Version
-
-```
-GET /redfish/v1/Managers/1/  →  FirmwareVersion
-```
-
-### BIOS / System ROM
-
-```
-GET /redfish/v1/Systems/1/Bios/  →  Attributes.SystemRomVersion   (preferred)
-GET /redfish/v1/Systems/1/       →  BiosVersion                    (fallback)
-```
-
-### NICs / Network Adapters
-
-```
-GET /redfish/v1/Chassis/1/NetworkAdapters/
-→ Members[] → each adapter:
-    Controllers[0].FirmwarePackageVersion   ← firmware version
-    Model                                    ← chip/marketing name
-    SKU                                      ← HPE part name
-```
-
-NIC firmware is **NOT** in FirmwareInventory on Gen11 (only via NetworkAdapters). On Gen12, some NICs appear in FirmwareInventory as PLDM targets with `SoftwareId` = PLDM GUID.
-
-#### PLDM Target GUID matching
-
-BCM `.json` sidecars have `Devices.Device[].Target` = PLDM UUID embedding PCI IDs:
-```
-a6b1a447-382a-5a4f-14e4-16d714e41597
-                   ^^^^─ 14e4 = Broadcom PCI vendor
-                        ────── 16d7 = BCM57414 PCI device ID
-```
-When a NIC appears in FirmwareInventory, its `SoftwareId` = this GUID. `sdr.py` matches against `.json` sidecar Target GUIDs — reliable even when `Model` is a marketing name.
-
-#### BCM SDR filename format — version FIRST (inverted)
-
-```
-BCM235.1.164.14_BCM957414A4142HC.fwpkg
-└─ version ───┘ └─ chip model ────────┘
-```
-Normal fwpkg format: `{model}_{version}.fwpkg`. BCM reverses this.
-
-### CPU Microcode
-
-```
-GET /redfish/v1/Systems/1/Processors/{id}
-→ ProcessorId.MicrocodeInfo   (e.g. "0xA10F11")
-```
-
-Microcode is **read-only** — updated only as part of the BIOS package.
-
-### Memory / DIMMs
-
-```
-GET /redfish/v1/Systems/1/Memory/{id}
-→ FirmwareRevision, CapacityMiB, PartNumber, Manufacturer
-```
-
----
-
-## 6. PLDM — How Gen12 Firmware Updates Work
+## 4. PLDM — How Gen12 Firmware Updates Work
 
 **PLDM = Platform Level Data Model** (DMTF DSP0267) — messaging protocol for firmware delivery over **MCTP** (sideband bus connecting iLO directly to components, no host OS needed).
 
@@ -197,7 +105,7 @@ GET /redfish/v1/Systems/1/Memory/{id}
   iLO 7 (BMC) ─── MCTP sideband ─── NIC / StorageCtrl / BIOS ROM
 ```
 
-iLO 7 is the **PLDM Update Agent** — flashes NIC/storage/BIOS via PLDM without the host CPU.
+iLO 7 is the **PLDM Update Agent** — flashes NIC/storage/BIOS via PLDM without the host CPU or OS.
 
 Gen12 changed the definition of "offline" updates:
 - **Gen11 offline**: boot from SPP ISO (Linux SUM environment)
@@ -205,120 +113,27 @@ Gen12 changed the definition of "offline" updates:
 
 Gen12 dropped the bootable SPP ISO entirely. All updates go through iLO Redfish.
 
-`pcli ilo upgrade` uses `AddFromUri` + `UpdateTaskQueue` — the exact same Redfish calls that SUM uses internally when connected to the iLO out-of-band management IP.
+### SUM Remote vs pcli
 
-### SUM Remote / iLO-Connected Mode
-
-SUM running on a jumpbox communicates with iLO over HTTPS:
-```
-Jumpbox: SUM ──HTTPS──► iLO mgmt port
-  GET /FirmwareInventory      ← discover installed versions
-  POST AddFromUri             ← stage .fwpkg (iLO downloads from HPE SDR)
-  POST UpdateTaskQueue        ← queue for flash
-  POST ComputerSystem.Reset   ← reboot to apply
-```
-
-No OS or agent needed on the target — pure out-of-band Redfish.
-
-**vNIC vs OOB distinction:**
-- SUM running ON the server itself → uses `hpilo` kernel driver (vNIC, in-band)
-- SUM on jumpbox pointing at iLO IP → pure HTTPS Redfish, no driver needed
-
-### SUM CLI + SPP ISO on Jumpbox
-
-```bash
-# Mount SPP ISO
-sudo mount -o loop SPP_2026.03.0_spp.iso /mnt/spp
-
-# Run against single server
-/mnt/spp/smartupdate --s \
-  --target 10.16.41.31 --user Administrator --password hpent123 \
-  --baseline /mnt/spp --reboot
-
-# Run fleet via input file (INI format, NOT XML)
-/mnt/spp/smartupdate --inputfile update.in --s
-```
-
-**Input file format (INI-style):**
-```ini
-SILENT = YES
-REBOOTALLOWED = YES
-REBOOTDELAY = 30
-SOURCEPATH = /mnt/spp
-FORCEALL = YES
-ONFAILEDDEPENDENCY = OmitComponent
-
-[TARGETS]
-HOST = 10.16.41.31
-UID = Administrator
-PWD = hpent123
-[END]
-```
-
-**Note:** "Non-bootable SPP ISO on Gen12" means you can't *boot* from it — using it as a **firmware source on a jumpbox** while SUM connects to iLO remotely is fully supported.
+Both SUM (from a jumpbox) and `pcli ilo upgrade` use the same iLO Redfish calls under the hood. Neither requires an OS on the target server.
 
 | | SUM CLI + SPP ISO | pcli + SDR |
 |---|---|---|
 | Firmware source | Local ISO (~6-8 GB) | HPE SDR (internet, per component) |
 | Air-gap friendly | ✅ Yes | ❌ Needs internet |
-| Multi-server | INI input file | Not yet implemented |
+| Multi-server | INI input file | Not yet (planned) |
 | Best for | Air-gapped fleets | Internet-connected, scripted, CI |
 
-### Windows Driver Batch Updates at Scale
+### iSUT and AMS (OS Agents)
 
-The `.exe` and `.zip` files in the SPP catalog are Windows SoftPaqs and ESXi driver packages — NOT firmware. They are not available on the Linux SDR (confirmed 404). They are delivered via a separate channel:
+These are only needed for OS-level components (Intel NICs, Windows drivers). For firmware-only updates (iLO/BIOS/NIC firmware via PLDM), **neither is required**.
 
-**SUM remote mode for Windows drivers:**
-```
-Admin workstation running SUM
-  ├── iLO IP (Redfish)  → stages firmware (.fwpkg)
-  └── OS IP (WinRM)     → inventories installed drivers, copies and runs .exe silently
+| Agent | Purpose |
+|---|---|
+| **AMS** (Agentless Management Service) | Feeds OS inventory into iLO: hostname, OS version, NIC teams |
+| **iSUT** (Intelligent System Update Tool) | Polls iLO for staged packages → downloads → installs on OS |
 
-Per-server flow:
-  1. SUM connects to Windows OS via WinRM (port 5985/5986)
-  2. Inventories installed driver versions via WMI
-  3. Compares against SPP catalog → finds outdated packages
-  4. Copies only applicable .exe to server temp dir over network
-  5. Runs: cp066362.exe /s /f  (silent, forced)
-  6. Coordinates reboots in maintenance window
-```
-
-Both iLO IP and OS IP must be supplied in the SUM node list for full coverage (firmware + drivers). iLO-only gives firmware but misses OS drivers.
-
-**At scale:** SUM processes a CSV/INI node list with 10–20 servers in parallel. HPE OneView adds another layer: define a "Server Profile" with a firmware baseline version → OneView auto-detects drift → triggers SUM remediation unattended.
-
-**ESXi drivers** (`.zip` in SPP) follow the same pattern via VMware vLCM (vCenter Lifecycle Manager) — HPE publishes a depot that vLCM pulls directly, no manual handling needed.
-
-### iSUT vs AMS — Roles and vNIC Architecture
-
-Both are OS agents that use the **iLO vNIC host interface** (private point-to-point link `169.254.1.2 ↔ 169.254.1.1`). They serve completely different purposes and neither replaces the other.
-
-**vNIC direction:** The OS always initiates — iLO cannot push to the OS. The vNIC is just a private TCP/IP link; iLO exposes its Redfish API on `169.254.1.1` and waits. Both agents must be pre-installed on the OS.
-
-| | AMS (Agentless Management Service) | iSUT (Intelligent System Update Tool) |
-|---|---|---|
-| Direction | OS → iLO (reporting) | OS polls iLO → installs locally |
-| Purpose | Feeds OS inventory into iLO dashboard: hostname, OS ver, NIC teams, software list | Polls iLO for staged update packages → downloads → runs installer |
-| Action | Read-only telemetry | Executes `.exe` / `.rpm` / `.deb` on the OS |
-| Trigger | Continuous background sync | Commanded by SUM/OneView staging a package to iLO |
-| "Agentless" claim | Misleading branding — it IS an agent | Same |
-
-**Full update flow with iSUT:**
-```
-SUM/OneView ──Redfish──▶ iLO (stages package to UpdateService)
-                                    │
-                         iSUT polls via vNIC (169.254.1.2 → 169.254.1.1)
-                                    │
-                         iSUT sees staged package → downloads → installs
-                                    │
-                         iSUT reports status back to iLO → SUM/OneView sees result
-```
-
-For firmware-only updates (iLO/BIOS/NIC firmware via PLDM), **neither AMS nor iSUT is required** — iLO handles those directly via Redfish with no OS involvement.
-
----
-
-## 7. Recommended Firmware Upgrade Order
+Both use the iLO vNIC host interface (`169.254.1.2 ↔ 169.254.1.1`). Despite the branding, "Agentless" management still requires AMS installed on the OS.
 
 | Step | Component | Reason |
 |------|-----------|--------|
@@ -330,7 +145,7 @@ For firmware-only updates (iLO/BIOS/NIC firmware via PLDM), **neither AMS nor iS
 
 ---
 
-## 8. Which Firmware Can (and Cannot) Be Upgraded via iLO
+## 5. Which Firmware Can (and Cannot) Be Upgraded via iLO
 
 ### What CAN be upgraded via iLO
 
@@ -374,7 +189,7 @@ SDR covers HPE-branded components only. NIC coverage is per chip variant — som
 
 ---
 
-## 9. High-Level Upgrade Steps
+## 6. High-Level Upgrade Steps
 
 ### iLO Firmware
 

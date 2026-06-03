@@ -56,7 +56,7 @@ jobs:
       - name: Build binary (Windows — onedir to avoid temp DLL extraction issues)
         if: runner.os == 'Windows'
         run: |
-          pyinstaller --onedir --name pcli --console --copy-metadata pcli src/pcli/cli.py
+          pyinstaller --onedir --name pcli --console --copy-metadata pcli --hidden-import yaml src/pcli/cli.py
 
       - name: Build binary (Linux/macOS)
         if: runner.os != 'Windows'

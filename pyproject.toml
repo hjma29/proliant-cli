@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pcli"
-version = "0.3.21"
+version = "0.3.22"
 description = "HPE ProLiant unified CLI — iLO Redfish and Compute Ops Management"
 readme = "README.md"
 requires-python = ">=3.11"

@@ -624,7 +624,11 @@ async def _cmd_report_memory(args: argparse.Namespace) -> None:
 
     async with COMClient(session) as client:
         with console.status("[dim]Fetching memory inventory across fleet…[/dim]"):
-            dimms = await get_fleet_memory(client)
+            try:
+                dimms = await get_fleet_memory(client)
+            except RuntimeError as e:
+                console.print(f"[red]Error:[/red] {e}")
+                return
 
     if not dimms:
         console.print("[yellow]No memory inventory data returned.[/yellow]")

@@ -31,6 +31,7 @@ ilo = [
 ]
 com = [
     "httpx[http2]>=0.27",
+    "pyyaml>=6.0",
 ]
 qs = [
     "beautifulsoup4>=4.12",

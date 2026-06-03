@@ -783,6 +783,7 @@ async def _cmd_describe_server(args: argparse.Namespace) -> None:
         console.print(fw_table)
 
 
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="pcli com",
         description="HPE Compute Ops Management Python CLI",
@@ -989,6 +990,7 @@ def main(argv: Optional[list[str]] = None) -> None:
             run(_cmd_add_device(args))
     elif args.command == "describe":
         run(_cmd_describe_server(args))
+    elif args.command == "report":
         if args.what == "memory":
             run(_cmd_report_memory(args))
         elif args.what == "gpu":

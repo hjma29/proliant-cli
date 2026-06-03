@@ -650,6 +650,14 @@ _HOSTS_INI_TEMPLATE = (
     "# host = myilo.example.com\n"
     "# username = localadmin\n"
     "# password = differentpass\n"
+    "\n"
+    "# To store other appliances (e.g. OneView) without affecting iLO commands,\n"
+    "# add 'type = oneview' — pcli ilo will skip non-ilo entries automatically.\n"
+    "# [my-oneview]\n"
+    "# host = 10.0.0.100\n"
+    "# username = Administrator\n"
+    "# password = yourpassword\n"
+    "# type = oneview\n"
 )
 
 

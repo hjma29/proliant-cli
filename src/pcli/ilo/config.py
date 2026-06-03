@@ -106,6 +106,11 @@ def load_hosts(name: str | None = None) -> list[dict]:
     for section in cfg.sections():
         if section.lower() == "defaults":
             continue
+        # Skip non-iLO entries (e.g. type = oneview) so hosts-ilo.ini can
+        # hold other appliance addresses without polluting iLO commands.
+        host_type = cfg.get(section, "type", fallback="ilo").strip().lower()
+        if host_type != "ilo":
+            continue
         host_addr = cfg.get(section, "host", fallback="").strip()
         if not host_addr:
             raise ValueError(f"Section [{section}] in hosts-ilo.ini is missing the 'host' key")

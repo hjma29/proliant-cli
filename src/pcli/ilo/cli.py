@@ -605,10 +605,23 @@ def _load_hosts_or_exit(name: str | None) -> list[dict]:
     try:
         return load_hosts(name=name)
     except FileNotFoundError:
-        from pcli.ilo.config import HOSTS_FILE
-        print(f"ERROR: hosts-ilo.ini not found. Expected at: {HOSTS_FILE}", file=sys.stderr)
-        print("       Run 'pcli ilo init' to create a starter config in the current directory.", file=sys.stderr)
-        sys.exit(1)
+        from pathlib import Path
+        from rich.console import Console
+        from rich.prompt import Confirm
+
+        console = Console()
+        dest = Path.cwd() / "hosts-ilo.ini"
+        console.print(f"\n[green]No hosts-ilo.ini found.[/green] A config file is needed to connect to your iLO servers.")
+        console.print(f"  It would be created at: [bold]{dest}[/bold]\n")
+        if Confirm.ask("[green]Create hosts-ilo.ini now?[/green]", default=True):
+            _write_hosts_ini(dest)
+            console.print(f"\n[green]✓[/green] Created: [bold]{dest}[/bold]")
+            console.print("  Fill in your server addresses and credentials, then re-run your command.\n")
+            if Confirm.ask("[green]Open it in your default editor now?[/green]", default=True):
+                _open_in_editor(dest)
+        else:
+            console.print("\n  Run [bold]pcli ilo init[/bold] any time to create the file.\n")
+        sys.exit(0)
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(1)

@@ -70,27 +70,53 @@ _BROWSER_HEADERS = {
 
 # Lazy HTTP client — curl_cffi (Chrome TLS) or httpx fallback, created on first use
 _client = None
+# Set to True at runtime if curl_cffi's BoringSSL fails (e.g. Zscaler TLS interception)
+_curl_cffi_broken = False
 
 # Raw HTML cache keyed by doc_id — shared between fetch_quickspec_versions and
 # fetch_quickspec_markdown so a list → describe workflow only downloads once
 _html_cache: dict[str, str] = {}
 
 
+def _make_httpx_client() -> httpx.Client:
+    return httpx.Client(
+        http2=True,
+        follow_redirects=True,
+        headers=_BROWSER_HEADERS,
+        timeout=30.0,
+    )
+
+
 def _get_client():
-    global _client
+    global _client, _curl_cffi_broken
     if _client is None:
-        if _CURL_CFFI_AVAILABLE:
+        if _CURL_CFFI_AVAILABLE and not _curl_cffi_broken:
             # Chrome TLS fingerprint bypasses Akamai bot detection on www.hpe.com
             _client = _CurlSession(impersonate="chrome")
         else:
-            # Dev fallback — httpx with HTTP/2 and browser-like headers
-            _client = httpx.Client(
-                http2=True,
-                follow_redirects=True,
-                headers=_BROWSER_HEADERS,
-                timeout=30.0,
-            )
+            # Fallback: httpx with HTTP/2 and browser-like headers
+            _client = _make_httpx_client()
     return _client
+
+
+def _qs_get(url: str, **kwargs):
+    """
+    Perform a GET request using curl_cffi if available, auto-falling back to httpx
+    if curl_cffi fails with a TLS/BoringSSL error (e.g. Zscaler SSL interception).
+    """
+    global _client, _curl_cffi_broken
+    client = _get_client()
+    try:
+        return client.get(url, **kwargs)
+    except Exception as exc:
+        err = str(exc)
+        is_tls_error = any(k in err for k in ("TLS", "SSL", "OPENSSL", "curl: (35)", "curl: (60)"))
+        if _CURL_CFFI_AVAILABLE and not _curl_cffi_broken and is_tls_error:
+            # BoringSSL failed — switch permanently to httpx for this session
+            _curl_cffi_broken = True
+            _client = _make_httpx_client()
+            return _client.get(url, **kwargs)
+        raise
 
 # ── Disk cache ────────────────────────────────────────────────────────────────
 
@@ -193,7 +219,7 @@ def search_quickspecs(model: str, count: int = 10) -> list[QSEntry]:
     }
 
     try:
-        r = _get_client().get(_JSON_SEARCH_URL, params=params)
+        r = _qs_get(_JSON_SEARCH_URL, params=params)
         r.raise_for_status()
         data = r.json()
     except Exception as e:
@@ -245,8 +271,7 @@ def _fetch_collateral_html(doc_id: str, ver: str = "") -> str:
     url = _COLLATERAL_URL.format(docid=doc_id)
     if ver:
         url = f"{url}?ver={ver}"
-    r = _get_client().get(url)
-    if r.status_code >= 400:
+    r = _qs_get(url)
         raise RuntimeError(f"HTTP {r.status_code} fetching {url}")
     html = r.text
     _html_cache[cache_key] = html
@@ -274,7 +299,7 @@ def fetch_quickspec_versions(doc_id: str, title: str = "", n: int = 3) -> list[Q
     # doc_id like "a00073551enw" → asset_id "a00073551:enw" (colon before last 3 chars)
     asset_id = doc_id[:-3] + ":" + doc_id[-3:]
     url = _VARIANTS_URL.format(asset_id=asset_id)
-    r = _get_client().get(url, headers={"Referer": _COLLATERAL_URL.format(docid=doc_id)})
+    r = _qs_get(url, headers={"Referer": _COLLATERAL_URL.format(docid=doc_id)})
     r.raise_for_status()
     data = r.json()
 
@@ -336,7 +361,7 @@ def _fetch_from_psnow_pdf(doc_id: str, ver: str = "") -> tuple[str, list[str]]:
     if ver:
         # Fetch the versioned psnow page to extract the versioned PDF download link
         wrapper_url = f"https://www.hpe.com/psnow/doc/{doc_id}?ver={ver}"
-        r = _get_client().get(wrapper_url)
+        r = _qs_get(wrapper_url)
         r.raise_for_status()
         wrapper_html = r.text
         # Extract the downloadDoc URL for this specific version
@@ -348,7 +373,7 @@ def _fetch_from_psnow_pdf(doc_id: str, ver: str = "") -> tuple[str, list[str]]:
     else:
         # Fetch the wrapper page to extract the real PDF download link
         wrapper_url = _PSNOW_WRAPPER_URL.format(docid=doc_id)
-        r = _get_client().get(wrapper_url)
+        r = _qs_get(wrapper_url)
         r.raise_for_status()
         wrapper_html = r.text
         m = _PSNOW_DOWNLOAD_RE.search(wrapper_html)
@@ -360,7 +385,7 @@ def _fetch_from_psnow_pdf(doc_id: str, ver: str = "") -> tuple[str, list[str]]:
     pdf_url = parsed._replace(path=urllib.parse.quote(parsed.path)).geturl()
 
     # Download PDF bytes
-    pdf_r = _get_client().get(pdf_url, timeout=60.0)
+    pdf_r = _qs_get(pdf_url, timeout=60.0)
     pdf_r.raise_for_status()
     pdf_bytes = pdf_r.content
 

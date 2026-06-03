@@ -1,7 +1,7 @@
 # pcli — Project Notes & Technical Reference
 
 > **AI context lives in `.github/copilot-instructions.md`** — automatically loaded by Copilot each session.
-> This file is the human-readable deep reference: Redfish quirks, COM API lessons, upgrade flows.
+> **Implementation internals, auth flows, API edge cases, lessons learned: `notes-agents.md`**
 > User-facing CLI reference: `README.md`.
 
 ---
@@ -9,44 +9,18 @@
 ## Table of Contents
 
 - [1. Test Servers & COM Workspace](#1-test-servers--com-workspace)
-- [2. Project Layout](#2-project-layout)
-- [3. Firmware Update Methods — BMC / UEFI / OS](#3-firmware-update-methods--bmc--uefi--os)
-  - [How the Classification Works](#how-the-classification-works)
-  - [payload.json Inside fwpkg — The Source of Truth](#payloadjson-inside-fwpkg--the-source-of-truth)
-  - [pcli spp inspect — Output Sections](#pcli-spp-inspect--output-sections)
-  - [SPP Catalog Composition](#spp-catalog-composition)
-  - [pcli ilo get update-method](#pcli-ilo-get-update-method)
-- [4. COM Firmware Update Mechanism](#4-com-firmware-update-mechanism)
-  - [COM Does NOT Download the Entire SPP ISO](#com-does-not-download-the-entire-spp-iso)
-  - [No SUM Inside iLO — Two Native Agents](#no-sum-inside-ilo--two-native-agents)
-  - [COM Job Templates](#com-job-templates)
-  - [Components Requiring OS (RuntimeAgent)](#components-requiring-os-runtimeagent)
-  - [SPP Bundle API — No Per-Component Data](#spp-bundle-api--no-per-component-data)
-- [5. Querying Components — Gen11 vs Gen12 Redfish Differences](#5-querying-components--gen11-vs-gen12-redfish-differences)
-  - [Storage Controllers](#storage-controllers)
-  - [Full Firmware Inventory (FirmwareInventory)](#full-firmware-inventory-firmwareinventory)
-  - [iLO Version](#ilo-version)
-  - [BIOS / System ROM](#bios--system-rom)
-  - [NICs / Network Adapters](#nics--network-adapters)
-  - [CPU Microcode](#cpu-microcode)
-  - [Memory / DIMMs](#memory--dimms)
-- [6. PLDM — How Gen12 Firmware Updates Work](#6-pldm--how-gen12-firmware-updates-work)
-  - [SUM Remote / iLO-Connected Mode](#sum-remote--ilo-connected-mode)
-  - [SUM CLI + SPP ISO on Jumpbox](#sum-cli--spp-iso-on-jumpbox)
-  - [Windows Driver Batch Updates at Scale](#windows-driver-batch-updates-at-scale)
-  - [iSUT vs AMS — Roles and vNIC Architecture](#isut-vs-ams--roles-and-vnic-architecture)
-- [7. Recommended Firmware Upgrade Order](#7-recommended-firmware-upgrade-order)
-- [8. Which Firmware Can (and Cannot) Be Upgraded via iLO](#8-which-firmware-can-and-cannot-be-upgraded-via-ilo)
-  - [HPE SDR — Software Delivery Repository](#hpe-sdr--software-delivery-repository)
-- [9. High-Level Upgrade Steps](#9-high-level-upgrade-steps)
-- [10. iLO 6 vs iLO 7 — UpdateService Schema Differences](#10-ilo-6-vs-ilo-7--updateservice-schema-differences)
-- [11. Observed Server-Specific Notes](#11-observed-server-specific-notes)
-- [12. BCM957414 NIC — Stepping Chain & SUM CLI Lessons (dl325-gen12)](#12-bcm957414-nic-firmware--stepping-chain--sum-cli-lessons-dl325-gen12)
-- [13. COM Auth Architecture](#13-com-auth-architecture)
-- [14. COM API Endpoints](#14-com-api-endpoints)
-- [15. COM Device Onboarding](#15-com-device-onboarding)
-- [16. Quick Reference — Redfish Endpoints](#16-quick-reference--redfish-endpoints)
-- [17. Lessons Learned (All)](#17-lessons-learned-all)
+- [2. Firmware Update Methods — BMC / UEFI / OS](#2-firmware-update-methods--bmc--uefi--os)
+- [3. COM Firmware Update Mechanism](#3-com-firmware-update-mechanism)
+- [4. PLDM — How Gen12 Firmware Updates Work](#4-pldm--how-gen12-firmware-updates-work)
+- [5. Recommended Firmware Upgrade Order](#5-recommended-firmware-upgrade-order)
+- [6. Which Firmware Can (and Cannot) Be Upgraded via iLO](#6-which-firmware-can-and-cannot-be-upgraded-via-ilo)
+- [7. High-Level Upgrade Steps](#7-high-level-upgrade-steps)
+- [8. iLO 6 vs iLO 7 — Key Differences](#8-ilo-6-vs-ilo-7--key-differences)
+- [9. Observed Server-Specific Notes](#9-observed-server-specific-notes)
+- [10. BCM957414 NIC — Stepping Chain (dl325-gen12)](#10-bcm957414-nic--stepping-chain-dl325-gen12)
+- [11. COM Auth Overview](#11-com-auth-overview)
+- [12. COM Device Onboarding](#12-com-device-onboarding)
+- [13. Quick Reference — Redfish Endpoints](#13-quick-reference--redfish-endpoints)
 
 ---
 
@@ -62,31 +36,7 @@ Credentials: `Administrator / hpent123` COM token: `~/.config/hpecom/token.json`
 
 ---
 
-## 2. Project Layout
-
-```
-src/pcli/
-  cli.py                Top-level entry — dispatches ilo/com, sets _ARGCOMPLETE=2
-  ilo/
-    cli.py              All pcli ilo commands: get/upgrade subparsers, table printers
-    client.py           Async Redfish client (httpx, HTTP/2, session management)
-    inventory.py        Read-only Redfish fetches; classify_update_method()
-    firmware.py         Stage, queue, wait helpers for iLO firmware operations
-    sdr.py              HPE SDR fetch, fwpkg parsing, find_upgrades()
-    config.py           hosts.yml: env → ~/.config/pcli/ilo/ → ./
-  com/
-    cli.py              All pcli com commands: get devices/bundles/servers; login/logout
-    client.py           Async HTTP COM client (httpx, HTTP/2, pagination)
-    auth.py             COMSession — load/save token.json, client credentials refresh
-    devices.py          GLP devices API, resolve_user_ids() UUID→email
-    firmware.py         FirmwareBundle dataclass, fetch_bundles()
-tests/                  pytest — all 40 tests must pass before commit
-notes.md                This file
-```
-
----
-
-## 3. Firmware Update Methods — BMC / UEFI / OS
+## 2. Firmware Update Methods — BMC / UEFI / OS
 
 HPE components can be updated by three different agents:
 

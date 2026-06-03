@@ -189,7 +189,7 @@ def search_quickspecs(model: str, count: int = 10) -> list[QSEntry]:
         "status": "active",
         "sort": "date",
         "search": q,
-        "limit": str(count * 3),  # fetch more to account for title filtering
+        "limit": "100",  # fetch broadly — client-side filtering narrows to exact model
     }
 
     try:

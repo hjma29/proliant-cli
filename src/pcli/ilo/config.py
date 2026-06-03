@@ -109,7 +109,7 @@ def load_hosts(name: str | None = None) -> list[dict]:
         # Skip non-iLO entries (e.g. type = oneview) so hosts-ilo.ini can
         # hold other appliance addresses without polluting iLO commands.
         host_type = cfg.get(section, "type", fallback="ilo").strip().lower()
-        if host_type != "ilo":
+        if host_type != "ilo" or "oneview" in section.lower():
             continue
         host_addr = cfg.get(section, "host", fallback="").strip()
         if not host_addr:

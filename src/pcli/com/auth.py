@@ -141,25 +141,27 @@ class COMSession:
 
         glp_cid = data.get("glp_client_id", "")
         glp_sec = data.get("glp_client_secret", "")
-        okta_expired = data.get("expires_at", 0) < time.time() - 60
 
-        # Fast path: Okta session expired but we have a valid cached GLP token.
-        # Skip any Okta refresh attempt and use the cached token directly.
-        glp_tok = data.get("glp_access_token", "")
-        glp_exp = data.get("glp_token_expires_at", 0)
-        if okta_expired and glp_tok and glp_exp > time.time() + 60:
+        # Always prefer GLP client-credentials token when available.
+        # The regional compute-ops-mgmt endpoint requires a GLP token for routing;
+        # the Okta user token does NOT carry workspace routing context.
+        if glp_cid and glp_sec:
             sess = cls(client_id=glp_cid, client_secret=glp_sec,
                        region=data.get("region", "us-west"))
-            sess._access_token = glp_tok
-            sess._token_expiry = time.monotonic() + (glp_exp - time.time())
             sess._workspace_id = data.get("workspace_id", "")
             sess._workspace_name = data.get("workspace_name", "")
-            # Preserve ccs_session so compute-ops-mgmt workspace-scoped endpoints
-            # still work even though _user_token is False (GLP token flow).
             sess._ccs_session = data.get("ccs_session", "")
-            # _user_token stays False (default) → fetch_devices uses GLP global API
+            # Use cached GLP token if still valid
+            glp_tok = data.get("glp_access_token", "")
+            glp_exp = data.get("glp_token_expires_at", 0)
+            if glp_tok and glp_exp > time.time() + 60:
+                sess._access_token = glp_tok
+                sess._token_expiry = time.monotonic() + (glp_exp - time.time())
+            # else: ensure_token() will fetch a fresh GLP token via client_credentials
             return sess
 
+        # No GLP credentials — use Okta user token (limited: no COM API access)
+        okta_expired = data.get("expires_at", 0) < time.time() - 60
         sess = cls(client_id="", client_secret="", region=data.get("region", "us-west"))
         sess._access_token = data.get("access_token", "")
         remaining = data.get("expires_at", time.time()) - time.time()
@@ -168,16 +170,10 @@ class COMSession:
         sess._ccs_session = data.get("ccs_session", "")
         sess._workspace_id = data.get("workspace_id", "")
         sess._workspace_name = data.get("workspace_name", "")
-        # Clear refresh token if Okta session is clearly stale (>30 min past expiry)
-        # to skip the doomed refresh attempt in ensure_token() and go straight to
-        # GLP client-credentials fallback.
         if okta_expired:
             sess._refresh_token = ""
         else:
             sess._refresh_token = data.get("refresh_token", "")
-        # Store GLP client credentials for fallback when user session expires
-        sess._glp_client_id = glp_cid
-        sess._glp_client_secret = glp_sec
         return sess
 
     def glp_fallback_session(self) -> Optional["COMSession"]:

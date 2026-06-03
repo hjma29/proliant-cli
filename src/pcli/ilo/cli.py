@@ -567,7 +567,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "describe",
         help="Show full details for a single server (identity, iLO, CPU, GPU, memory, firmware)",
     )
-    _add_host(desc_p, required=True)
+    desc_p.add_argument("name", metavar="NAME",
+                        help="Server name from hosts-ilo.ini").completer = _host_completer
 
     return parser
 
@@ -1148,7 +1149,7 @@ async def _cmd_describe(args: argparse.Namespace) -> None:
     from rich import box as rich_box
 
     console = Console()
-    hosts = _load_hosts_or_exit(args.host)
+    hosts = _load_hosts_or_exit(args.name)
     if not hosts:
         console.print("[red]No host found.[/red]")
         sys.exit(1)

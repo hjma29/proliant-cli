@@ -301,7 +301,7 @@ async def connect_ilo_to_com(
     """Onboard a server to COM by connecting its iLO.
 
     Corresponds to: Connect-HPEGLDeviceComputeiLOtoCOM
-    Endpoint: POST /compute-ops-mgmt/v1beta2/servers
+    Endpoint: POST /compute-ops-mgmt/{COM_API_VERSION}/servers
     """
     async with COMClient(session) as client:
         url = session.com_url("/servers")

@@ -61,7 +61,7 @@ class COMSession:
 
         session = COMSession.load()           # from env or credentials.yml
         async with COMClient(session) as c:
-            devices = await c.get_all("/compute-ops-mgmt/v1beta2/servers")
+            devices = await c.get_all(session.com_url("/servers"))
     """
 
     client_id:     str

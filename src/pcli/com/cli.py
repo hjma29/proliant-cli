@@ -667,7 +667,122 @@ async def _cmd_report_memory(args: argparse.Namespace) -> None:
 
 
 
-def _build_parser() -> argparse.ArgumentParser:
+
+
+# ── pcli com describe ─────────────────────────────────────────────────────────
+
+_HEALTH_STYLE = {
+    "OK": "green", "WARNING": "yellow", "CRITICAL": "red",
+    "REDUNDANT": "green", "NON_REDUNDANT": "yellow",
+    "NOT_PRESENT": "dim", "UNKNOWN": "dim",
+}
+
+
+def _h(val: str) -> str:
+    """Wrap a health/state value in its colour."""
+    style = _HEALTH_STYLE.get((val or "").upper(), "")
+    return f"[{style}]{val}[/{style}]" if style else (val or "—")
+
+
+async def _cmd_describe_server(args: argparse.Namespace) -> None:
+    from rich.table import Table
+    from rich import box as rich_box
+    from rich.panel import Panel
+
+    session = await _ensure_session(args)
+    base = session.base_url
+    target = args.server.upper()
+
+    async with COMClient(session) as c:
+        with console.status("[dim]Fetching server list…[/dim]"):
+            r = await c.get(f"{base}/compute-ops-mgmt/v1beta2/servers", params={"limit": 1000})
+    items = r.get("items", [])
+
+    server = None
+    for s in items:
+        hw = s.get("hardware", {})
+        sn = (hw.get("serialNumber") or "").upper()
+        name = (s.get("name") or "").upper()
+        if target == sn or target == name:
+            server = s
+            break
+
+    if not server:
+        console.print(f"[red]Server '{args.server}' not found.[/red]")
+        sys.exit(1)
+
+    hw    = server.get("hardware", {})
+    bmc   = hw.get("bmc", {})
+    state = server.get("state", {})
+    health = hw.get("health", {})
+
+    # ── Header ────────────────────────────────────────────────────────────────
+    console.print(Panel(
+        f"[bold]{server.get('name')}[/bold]   [dim]{hw.get('model', '—')}[/dim]",
+        expand=False,
+    ))
+
+    # ── Identity ──────────────────────────────────────────────────────────────
+    id_table = Table(box=rich_box.SIMPLE, show_header=False, padding=(0, 2))
+    id_table.add_column(style="dim", no_wrap=True)
+    id_table.add_column()
+    id_table.add_row("Serial",      hw.get("serialNumber", "—"))
+    id_table.add_row("Product ID",  hw.get("productId", "—"))
+    id_table.add_row("Generation",  server.get("serverGeneration", "—"))
+    id_table.add_row("Power",       _h(hw.get("powerState", "—")))
+    id_table.add_row("Connection",  _h("CONNECTED" if state.get("connected") else "DISCONNECTED"))
+    id_table.add_row("Managed",     "Yes" if state.get("managed") else "No")
+    console.print(id_table)
+
+    # ── iLO ───────────────────────────────────────────────────────────────────
+    console.print("[bold]iLO[/bold]")
+    ilo_table = Table(box=rich_box.SIMPLE, show_header=False, padding=(0, 2))
+    ilo_table.add_column(style="dim", no_wrap=True)
+    ilo_table.add_column()
+    ilo_table.add_row("Model",    bmc.get("model", "—"))
+    ilo_table.add_row("Version",  bmc.get("version", "—"))
+    ilo_table.add_row("IP",       bmc.get("ip", "—"))
+    ilo_table.add_row("Hostname", bmc.get("hostname", "—"))
+    ilo_table.add_row("MAC",      bmc.get("mac", "—"))
+    console.print(ilo_table)
+
+    # ── Health ────────────────────────────────────────────────────────────────
+    console.print("[bold]Health[/bold]")
+    h_table = Table(box=rich_box.SIMPLE, show_header=False, padding=(0, 2))
+    h_table.add_column(style="dim", no_wrap=True)
+    h_table.add_column()
+    skip = {"summary", "healthLED", "airFilter", "smartStorage"}
+    for k, v in health.items():
+        if k not in skip:
+            h_table.add_row(k.replace("_", " ").title(), _h(v))
+    console.print(h_table)
+
+    # ── Subscription ──────────────────────────────────────────────────────────
+    console.print("[bold]Subscription[/bold]")
+    sub_table = Table(box=rich_box.SIMPLE, show_header=False, padding=(0, 2))
+    sub_table.add_column(style="dim", no_wrap=True)
+    sub_table.add_column()
+    sub_table.add_row("Tier",    state.get("subscriptionTier", "—"))
+    sub_table.add_row("Key",     state.get("subscriptionKey", "—"))
+    expires = (state.get("subscriptionExpiresAt") or "—")[:10]
+    sub_table.add_row("Expires", expires)
+    console.print(sub_table)
+
+    # ── Firmware inventory ────────────────────────────────────────────────────
+    fw_items = server.get("firmwareInventory") or []
+    if fw_items:
+        console.print("[bold]Firmware[/bold]")
+        fw_table = Table(box=rich_box.SIMPLE, show_header=True, header_style="bold cyan",
+                         padding=(0, 2))
+        fw_table.add_column("Component", no_wrap=True)
+        fw_table.add_column("Version")
+        fw_table.add_column("Location", style="dim")
+        for fw in fw_items:
+            fw_table.add_row(fw.get("name", ""), fw.get("version", ""),
+                             fw.get("deviceContext", ""))
+        console.print(fw_table)
+
+
     parser = argparse.ArgumentParser(
         prog="pcli com",
         description="HPE Compute Ops Management Python CLI",
@@ -838,6 +953,11 @@ def _build_parser() -> argparse.ArgumentParser:
     rep_gpu_p = rep_sub.add_parser("gpu", help="Discrete GPU inventory across fleet")
     rep_gpu_p.add_argument("--raw", action="store_true", help="Print raw JSON")
 
+    # ── describe ──────────────────────────────────────────────────────────────
+    desc_p = subparsers.add_parser("describe", help="Show details for a server")
+    desc_p.add_argument("server", metavar="SERIAL_OR_NAME",
+                        help="Server serial number or name, e.g. TWA25380A01")
+
     return parser
 
 
@@ -867,7 +987,8 @@ def main(argv: Optional[list[str]] = None) -> None:
     elif args.command == "add":
         if args.what == "device":
             run(_cmd_add_device(args))
-    elif args.command == "report":
+    elif args.command == "describe":
+        run(_cmd_describe_server(args))
         if args.what == "memory":
             run(_cmd_report_memory(args))
         elif args.what == "gpu":

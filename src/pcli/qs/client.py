@@ -323,12 +323,9 @@ def _fetch_from_psnow_pdf(doc_id: str, ver: str = "") -> tuple[str, list[str]]:
     if ver:
         # Fetch the versioned psnow page to extract the versioned PDF download link
         wrapper_url = f"https://www.hpe.com/psnow/doc/{doc_id}?ver={ver}"
-        req = urllib.request.Request(
-            wrapper_url,
-            headers={"User-Agent": "Mozilla/5.0 (pcli-qs/1.0)"},
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            wrapper_html = resp.read().decode("utf-8", errors="replace")
+        r = _get_client().get(wrapper_url)
+        r.raise_for_status()
+        wrapper_html = r.text
         # Extract the downloadDoc URL for this specific version
         ver_pattern = re.compile(
             r'href="(https://www\.hpe\.com/psnow/downloadDoc/[^"]+?ver='
@@ -338,12 +335,9 @@ def _fetch_from_psnow_pdf(doc_id: str, ver: str = "") -> tuple[str, list[str]]:
     else:
         # Fetch the wrapper page to extract the real PDF download link
         wrapper_url = _PSNOW_WRAPPER_URL.format(docid=doc_id)
-        req = urllib.request.Request(
-            wrapper_url,
-            headers={"User-Agent": "Mozilla/5.0 (pcli-qs/1.0)"},
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            wrapper_html = resp.read().decode("utf-8", errors="replace")
+        r = _get_client().get(wrapper_url)
+        r.raise_for_status()
+        wrapper_html = r.text
         m = _PSNOW_DOWNLOAD_RE.search(wrapper_html)
 
     if not m:
@@ -352,13 +346,10 @@ def _fetch_from_psnow_pdf(doc_id: str, ver: str = "") -> tuple[str, list[str]]:
     parsed = urllib.parse.urlparse(raw_url)
     pdf_url = parsed._replace(path=urllib.parse.quote(parsed.path)).geturl()
 
-    # Download PDF to a temp file
-    pdf_req = urllib.request.Request(
-        pdf_url,
-        headers={"User-Agent": "Mozilla/5.0 (pcli-qs/1.0)"},
-    )
-    with urllib.request.urlopen(pdf_req, timeout=60) as resp:
-        pdf_bytes = resp.read()
+    # Download PDF bytes
+    pdf_r = _get_client().get(pdf_url, timeout=60.0)
+    pdf_r.raise_for_status()
+    pdf_bytes = pdf_r.content
 
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
         f.write(pdf_bytes)

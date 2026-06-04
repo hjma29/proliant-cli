@@ -44,7 +44,7 @@ import argcomplete
 
 from pcli.common.completers import comma_sep_completer
 from pcli.common.display import get_console, make_table, print_json, OutputMode, get_output_mode
-from pcli.common.runner import run_parallel
+from pcli.common.runner import run_parallel, run_sync
 from pcli.common.targets import resolve_hosts, add_target_args
 from pcli.ilo import firmware, inventory
 from pcli.ilo.client import ILOClient, ServerDownOrUnreachableError, ilo_session
@@ -358,7 +358,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     if getattr(args, "json_output", False):
         set_output_mode(OutputMode.JSON)
-    asyncio.run(_async_main(args))
+    run_sync(_async_main(args))
 
 
 async def _async_main(args: argparse.Namespace) -> None:

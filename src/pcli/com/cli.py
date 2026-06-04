@@ -51,8 +51,9 @@ from typing import Optional
 import argcomplete
 
 from pcli.common.display import get_console, make_table, print_json, print_memory_report, OutputMode, get_output_mode, set_output_mode
+from pcli.common.runner import run_sync
 from pcli.com.auth import COMSession, CredentialsError, AuthError
-from pcli.com.client import COMClient, run
+from pcli.com.client import COMClient
 from pcli.com import devices as _devices
 from pcli.com import workspaces as _workspaces
 from pcli.com import firmware as _firmware
@@ -201,19 +202,18 @@ async def _cmd_login_agent(args: argparse.Namespace) -> None:
 # Logout command
 # ---------------------------------------------------------------------------
 
-def _cmd_logout(_args: argparse.Namespace) -> None:
+async def _cmd_logout(_args: argparse.Namespace) -> None:
     from pcli.com.login import TOKEN_CACHE, CREDS_FILE, load_token, delete_glp_api_credential
 
     # Clean up GLP API credential before deleting token
     data = load_token()
     if data and data.get("glp_credential_name") and data.get("ccs_session"):
         try:
-            import asyncio
-            asyncio.run(delete_glp_api_credential(
+            await delete_glp_api_credential(
                 data["access_token"], data["ccs_session"], data["glp_credential_name"]
-            ))
+            )
         except Exception:
-            pass  # best-effort
+            pass  # intentional: GLP credential cleanup is best-effort
 
     removed = []
     for path in (TOKEN_CACHE, CREDS_FILE):
@@ -875,27 +875,33 @@ def main(argv: Optional[list[str]] = None) -> None:
     if getattr(args, "json_output", False):
         set_output_mode(OutputMode.JSON)
 
+    run_sync(_async_main(args))
+
+
+async def _async_main(args: argparse.Namespace) -> None:
+    """Single async entry point — all commands are dispatched from here."""
     if args.command == "login":
-        run(_cmd_login(args))
+        await _cmd_login(args)
     elif args.command == "logout":
-        _cmd_logout(args)
+        await _cmd_logout(args)
     elif args.command == "list":
         if args.what == "devices":
-            run(_cmd_show_devices(args))
+            await _cmd_show_devices(args)
         elif args.what == "workspaces":
-            run(_cmd_show_workspaces(args))
+            await _cmd_show_workspaces(args)
         elif args.what == "bundles":
-            run(_cmd_show_bundles(args))
+            await _cmd_show_bundles(args)
     elif args.command == "use":
         if args.what == "workspace":
-            run(_cmd_use_workspace(args))
+            await _cmd_use_workspace(args)
     elif args.command == "add":
         if args.what == "device":
-            run(_cmd_add_device(args))
+            await _cmd_add_device(args)
     elif args.command == "describe":
-        run(_cmd_describe_server(args))
+        await _cmd_describe_server(args)
     elif args.command == "report":
         if args.what == "memory":
-            run(_cmd_report_memory(args))
+            await _cmd_report_memory(args)
         elif args.what == "gpu":
-            run(_cmd_report_gpu(args))
+            await _cmd_report_gpu(args)
+

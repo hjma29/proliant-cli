@@ -17,6 +17,11 @@ _PORT_RE = re.compile(r"\s*\b(?:\d+-port|dual[ -]port|quad[ -]port)\b", re.IGNOR
 _MODEL_STRIP_RE = re.compile(r"^\s*(?:HPE\s+)?(?:ProLiant\s+)?(?:Compute\s+)?", re.IGNORECASE)
 _EMPTY: list[tuple[str, str]] = [("N/A", "N/A")]
 FLEET_KEYS = ("Model", "iLO", "BIOS", "NIC-FW", "Storage-FW")
+_NIC_MARKETING_NAME_BY_PART = {
+    # iLO Redfish exposes generic BCM57414 strings for this PCIe card while the GUI
+    # labels it by the HPE marketing name.
+    "P26264-001": "Broadcom P225p NetXtreme-E Dual-port 10Gb/25Gb Ethernet PCIe Adapter - NIC",
+}
 
 
 async def _collection_members(client: ILOClient, collection_uri: str) -> list[dict[str, Any]]:
@@ -79,20 +84,23 @@ async def fetch_ilo_version(client: ILOClient) -> list[tuple[str, str]]:
     return _EMPTY
 
 
-async def fetch_network_versions(client: ILOClient) -> list[tuple[str, str]]:
+async def fetch_network_versions(client: ILOClient) -> list[dict[str, str]]:
     chassis = await client.get(await client.get_chassis_uri())
     na_uri = chassis.get("NetworkAdapters", {}).get("@odata.id")
     if not na_uri:
-        return _EMPTY
+        return [{"Name": "N/A", "Version": "N/A", "Location": "N/A"}]
 
     found = []
     for adapter in await _member_resources(client, na_uri):
-        label = adapter.get("Model") or adapter.get("Name", "N/A")
-        label = _PORT_RE.sub("", label).strip()
+        label = _network_adapter_display_name(adapter)
         controllers = adapter.get("Controllers", [])
         version = controllers[0].get("FirmwarePackageVersion", "N/A") if controllers else "N/A"
-        found.append((label, version or "N/A"))
-    return found or _EMPTY
+        found.append({
+            "Name": label,
+            "Version": version or "N/A",
+            "Location": _adapter_location(adapter) or "N/A",
+        })
+    return found or [{"Name": "N/A", "Version": "N/A", "Location": "N/A"}]
 
 
 async def _storage_members(client: ILOClient) -> list[dict[str, Any]]:
@@ -285,13 +293,9 @@ async def _build_nic_label_map(client: ILOClient) -> dict[str, str]:
 
     label_map: dict[str, str] = {}
     for adapter in await _member_resources(client, na_uri):
-        model = (adapter.get("Model") or adapter.get("Name") or "NIC").strip()
+        model = _network_adapter_display_name(adapter)
         model = _PORT_RE.sub("", model).strip()
-        controllers = adapter.get("Controllers", [])
-        slot_label = (
-            controllers[0].get("Location", {}).get("PartLocation", {}).get("ServiceLabel", "")
-            if controllers else ""
-        ) or ""
+        slot_label = _adapter_location(adapter)
         short_model = re.sub(r"\W+$", "", model[:35])
         abbrev_slot = re.sub(r"\bSlot (\S+)", r"S_\1", slot_label) if slot_label else ""
         label_prefix = f"{abbrev_slot}({short_model})" if slot_label else short_model
@@ -319,6 +323,42 @@ async def _build_nic_label_map(client: ILOClient) -> dict[str, str]:
                 if uri:
                     label_map[uri] = label
     return label_map
+
+
+def _is_generic_nic_model(model: str) -> bool:
+    return bool(re.fullmatch(r"[A-Z]{2,}\d{4,}[A-Z0-9-]*", model.strip().upper()))
+
+
+def _adapter_location(adapter: dict[str, Any]) -> str:
+    part_loc = adapter.get("Location", {}).get("PartLocation", {})
+    if not part_loc:
+        controllers = adapter.get("Controllers") or []
+        if controllers:
+            part_loc = controllers[0].get("Location", {}).get("PartLocation", {})
+    label = (part_loc.get("ServiceLabel") or "").strip()
+    if label:
+        return label
+    ordinal = part_loc.get("LocationOrdinalValue")
+    if ordinal is not None and part_loc.get("LocationType") == "Slot":
+        return f"Slot {ordinal}"
+    return ""
+
+
+def _network_adapter_display_name(adapter: dict[str, Any]) -> str:
+    part_number = (adapter.get("PartNumber") or "").strip().upper()
+    model = (adapter.get("Model") or "").strip()
+    sku = (adapter.get("SKU") or "").strip()
+    name = (adapter.get("Name") or "").strip()
+
+    if part_number in _NIC_MARKETING_NAME_BY_PART:
+        return _NIC_MARKETING_NAME_BY_PART[part_number]
+    if model and not _is_generic_nic_model(model):
+        return model
+    if sku and sku.lower() != model.lower():
+        return sku
+    if model:
+        return model
+    return name or "N/A"
 
 
 async def fetch_nic_status(client: ILOClient) -> list[tuple[str, str]]:

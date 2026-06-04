@@ -62,6 +62,7 @@ from pcli.ilo.printers import (
     _header_line,
     print_ilo_table,
     _print_component_table,
+    print_network_table,
     _print_raw_table,
     print_disk_map_table,
     print_fleet_table,
@@ -577,7 +578,7 @@ async def _run_get(args: argparse.Namespace) -> None:
     printers = {
         "firmwares": lambda r: print_fleet_table(r, fields=getattr(args, "fields", None)),
         "ilo": print_ilo_table,
-        "network": lambda r: _print_component_table(r, "NIC Firmware"),
+        "network": print_network_table,
         "nic": lambda r: _print_component_table(r, "NIC Link Status + MAC"),
         "storage": lambda r: _print_component_table(r, "Storage Firmware"),
         "cpu": lambda r: _print_component_table(r, "CPU Info"),

@@ -89,6 +89,67 @@ def _print_component_table(results: list[tuple[str, str | None, list]], title: s
             print(f"{label:<{server_w}}   {name[:ver_w]:<{ver_w}}   {version}")
 
 
+def print_network_table(results: list[tuple[str, str | None, list]]) -> None:
+    normalized: list[tuple[str, str | None, list[tuple[str, str, str]]]] = []
+    server_w = len("Server")
+    name_w = len("Name")
+    loc_w = len("Location")
+    ver_w = len("Version")
+
+    for host_name, error, rows in sorted(results, key=lambda r: r[0]):
+        server_w = max(server_w, len(host_name))
+        if error:
+            normalized.append((host_name, error, []))
+            continue
+
+        norm_rows: list[tuple[str, str, str]] = []
+        for row in rows:
+            if isinstance(row, dict):
+                name = str(row.get("Name", "N/A"))
+                location = str(row.get("Location", "N/A"))
+                version = str(row.get("Version", row.get("Value", "N/A")))
+            elif isinstance(row, (list, tuple)) and len(row) == 2:
+                name = str(row[0])
+                version = str(row[1])
+                location = "N/A"
+            else:
+                name = str(row)
+                location = "N/A"
+                version = "N/A"
+            name_w = max(name_w, len(name))
+            loc_w = max(loc_w, len(location))
+            ver_w = max(ver_w, len(version))
+            norm_rows.append((name, location, version))
+        normalized.append((host_name, None, norm_rows))
+
+    total_w = server_w + name_w + loc_w + ver_w + 9
+    print("--- NIC Firmware ---")
+    print(
+        f"{'Server':<{server_w}}   "
+        f"{'Name':<{name_w}}   "
+        f"{'Location':<{loc_w}}   "
+        f"{'Version':<{ver_w}}"
+    )
+    print("-" * total_w)
+    for host_name, error, rows in normalized:
+        if error:
+            print(
+                f"{host_name:<{server_w}}   "
+                f"{'ERROR':<{name_w}}   "
+                f"{'N/A':<{loc_w}}   "
+                f"{error}"
+            )
+            continue
+        for i, (name, location, version) in enumerate(rows):
+            label = host_name if i == 0 else ""
+            print(
+                f"{label:<{server_w}}   "
+                f"{name:<{name_w}}   "
+                f"{location:<{loc_w}}   "
+                f"{version:<{ver_w}}"
+            )
+
+
 def _print_raw_table(results: list[tuple[str, str | None, list]]) -> None:
     for host_name, error, rows in sorted(results, key=lambda r: r[0]):
         print(f"\n=== {host_name} ===")

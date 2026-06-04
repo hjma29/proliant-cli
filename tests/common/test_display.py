@@ -1,5 +1,6 @@
 """Tests for pcli.common.display."""
 import json
+import threading
 import pytest
 
 from pcli.common.display import (
@@ -44,6 +45,41 @@ class TestOutputMode:
         set_output_mode(OutputMode.JSON)
         c2 = get_console()
         assert c1 is not c2
+
+    def test_thread_isolation(self):
+        """Each thread has its own output mode — no cross-thread pollution."""
+        set_output_mode(OutputMode.JSON)
+        assert get_output_mode() == OutputMode.JSON
+
+        results = {}
+
+        def thread_fn():
+            # Child thread starts in TABLE mode (fresh thread-local)
+            results["child_mode"] = get_output_mode()
+            set_output_mode(OutputMode.JSON)
+            results["child_after_set"] = get_output_mode()
+
+        t = threading.Thread(target=thread_fn)
+        t.start()
+        t.join()
+
+        # Main thread mode must be unaffected by child thread's set_output_mode
+        assert get_output_mode() == OutputMode.JSON
+        assert results["child_mode"] == OutputMode.TABLE  # fresh TLS in new thread
+        assert results["child_after_set"] == OutputMode.JSON
+
+    def test_thread_json_does_not_pollute_main(self):
+        """Setting JSON mode in a child thread doesn't affect main thread."""
+        set_output_mode(OutputMode.TABLE)
+
+        def set_json_in_thread():
+            set_output_mode(OutputMode.JSON)
+
+        t = threading.Thread(target=set_json_in_thread)
+        t.start()
+        t.join()
+
+        assert get_output_mode() == OutputMode.TABLE
 
 
 class TestMakeTable:

@@ -170,6 +170,8 @@ def _build_parser() -> argparse.ArgumentParser:
             return [host["name"] for host in load_hosts()]
         except Exception:  # intentional: tab completion must never print to stdout
             return []
+
+    def _add_host(p: argparse.ArgumentParser, required: bool = False) -> None:
         p.add_argument(
             "--host", metavar="NAME[,NAME,...]", required=required,
             help="Target host(s) by name — comma-separated for multiple",

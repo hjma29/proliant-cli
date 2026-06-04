@@ -75,6 +75,33 @@ class TestIloJsonOutput:
         assert result[0]["Server"] == "dl325-gen12"
         assert result[0]["System ROM"] == "U46 v2.82"
 
+    def test_list_network_json_includes_location(self, capsys):
+        from pcli.ilo import cli
+
+        fake_network_data = [
+            {
+                "Name": "Broadcom P225p NetXtreme-E Dual-port 10Gb/25Gb Ethernet PCIe Adapter - NIC",
+                "Version": "235.1.164.14",
+                "Location": "PCIE Slot 6",
+            }
+        ]
+        fake_results = [(FAKE_HOST["name"], None, fake_network_data)]
+
+        with patch("pcli.ilo.cli._load_hosts_or_exit", return_value=[FAKE_HOST]), \
+             patch("pcli.ilo.cli._run_parallel_async", new_callable=AsyncMock, return_value=fake_results):
+            cli.main(["--json", "list", "network", "--host", "dl325-gen12"])
+
+        captured = capsys.readouterr()
+        result = json.loads(captured.out)
+        assert result == [
+            {
+                "Server": "dl325-gen12",
+                "Name": "Broadcom P225p NetXtreme-E Dual-port 10Gb/25Gb Ethernet PCIe Adapter - NIC",
+                "Version": "235.1.164.14",
+                "Location": "PCIE Slot 6",
+            }
+        ]
+
     def test_json_error_host_included(self, capsys):
         """Errors for a host are serialised as {"Server": ..., "error": ...}."""
         from pcli.ilo import cli

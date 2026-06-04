@@ -55,6 +55,7 @@ def test_all_printers_exist():
         "print_ilo_table",
         "print_full_table",
         "print_fleet_table",
+        "print_network_table",
         "print_disk_map_table",
         "_print_component_table",
         "_print_raw_table",

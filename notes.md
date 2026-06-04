@@ -266,6 +266,10 @@ iLO 6 `HttpPushUri` multipart upload (`/cgi-bin/uploadFile`) often fails with em
 
 - Storage: `Storage/{id}/Controllers/` present
 - Has **HPE MR416i-o Gen11 RAID controller** (current `52.22.3-4650`)
+- NICs:
+  - `P10113-001` in `OCP Slot 21` reports generic `Model=BCM57414`, `SKU=10/25Gb 2-port SFP28 BCM57414 OCP3 Adapter`
+  - `P26264-001` in `PCIE Slot 6` also reports generic `Model=BCM57414`, but HPE GUI labels it **Broadcom P225p**
+  - Both adapters run firmware `235.1.164.14`
 - NVMe drives: SK Hynix (no fw via iLO)
 - ✅ In COM workspace HPECC_USWEST_1
 
@@ -445,4 +449,3 @@ POST /redfish/v1/Systems/1/Actions/ComputerSystem.Reset/
 ```
 
 ---
-

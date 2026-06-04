@@ -87,6 +87,11 @@ pcli com get servers  (planned)
 - Path: `GET /redfish/v1/Chassis/1/NetworkAdapters/{id}` → `Controllers[0].FirmwarePackageVersion`
 - `inventory.py::fetch_nic_firmware_inventory()` returns FirmwareInventory-style dicts.
 
+**2b. Gen12 NIC labels can differ between Redfish fields for the same Broadcom family**
+- `NetworkAdapters[].Model` may be a generic silicon name like `BCM57414`, while the GUI shows an HPE marketing name such as `Broadcom P225p`.
+- For user-facing inventory, prefer the most descriptive label available (`PartNumber` mapping or `SKU`) and always include slot location.
+- Example observed on `dl345-gen12`: OCP card reports `BCM57414` + `P10113-001`; PCIe card reports `BCM57414` + `P26264-001` (GUI labels it `P225p`).
+
 **3. BCM NIC SDR filenames have inverted format (version FIRST)**
 - Normal: `{model}_{version}.fwpkg` — BCM/NIC: `BCM{version}_{chipmodel}.fwpkg`
 - Example: `BCM235.1.164.14_BCM957414A4142HC.fwpkg`

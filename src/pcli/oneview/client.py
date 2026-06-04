@@ -25,6 +25,8 @@ from typing import Any
 
 import httpx
 
+from pcli.common.http import BaseAsyncClient
+
 _TIMEOUT = httpx.Timeout(timeout=60.0, connect=10.0)
 _PAGE_SIZE = 500  # OneView default max is 65535, but 500 is safe and fast
 
@@ -33,7 +35,7 @@ class OneViewError(RuntimeError):
     """Raised for OneView API errors with a human-readable message."""
 
 
-class OneViewClient:
+class OneViewClient(BaseAsyncClient):
     """Async REST client for a single HPE OneView appliance."""
 
     def __init__(

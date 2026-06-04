@@ -290,8 +290,8 @@ def print_devices_table(device_list: list, raw: bool = False,
                         fields: Optional[str] = None,
                         sort_by: Optional[str] = None,
                         user_cache: Optional[dict] = None) -> None:
-    if raw:
-        print(json.dumps([d.raw for d in device_list], indent=2))
+    if raw or get_output_mode() == OutputMode.JSON:
+        print_json([d.raw for d in device_list])
         return
 
     if not device_list:
@@ -325,8 +325,8 @@ def print_devices_table(device_list: list, raw: bool = False,
 
 
 def print_workspaces_table(workspace_list: list, raw: bool = False) -> None:
-    if raw:
-        print(json.dumps([w.raw for w in workspace_list], indent=2))
+    if raw or get_output_mode() == OutputMode.JSON:
+        print_json([w.raw for w in workspace_list])
         return
 
     if not workspace_list:
@@ -452,9 +452,8 @@ async def _cmd_show_workspaces(args: argparse.Namespace) -> None:
 
 
 def print_bundles_table(bundle_list: list, raw: bool = False) -> None:
-    if raw:
-        import json as _json
-        print(_json.dumps([b.raw for b in bundle_list], indent=2))
+    if raw or get_output_mode() == OutputMode.JSON:
+        print_json([b.raw for b in bundle_list])
         return
 
     if not bundle_list:
@@ -579,9 +578,8 @@ async def _cmd_report_gpu(args: argparse.Namespace) -> None:
         get_console().print("[yellow]No discrete GPUs found across fleet.[/yellow]")
         return
 
-    if getattr(args, "raw", False):
-        import json
-        get_console().print(json.dumps(gpus, indent=2))
+    if getattr(args, "raw", False) or get_output_mode() == OutputMode.JSON:
+        print_json(gpus)
         return
 
     rows = aggregate_gpus_by_model(gpus)
@@ -855,6 +853,10 @@ def _build_parser() -> argparse.ArgumentParser:
         description="HPE Compute Ops Management Python CLI",
     )
 
+    # Global flags
+    parser.add_argument("--json", action="store_true", dest="json_output",
+                        help="Output as JSON (for piping/scripting)")
+
     # Global optional credential overrides
     parser.add_argument("--client-id",     metavar="ID",     dest="client_id",
                         help="GreenLake API client ID (overrides env/file)")
@@ -1036,6 +1038,9 @@ def main(argv: Optional[list[str]] = None) -> None:
     parser = _build_parser()
     argcomplete.autocomplete(parser)
     args = parser.parse_args(argv)
+
+    if getattr(args, "json_output", False):
+        set_output_mode(OutputMode.JSON)
 
     if args.command == "login":
         run(_cmd_login(args))

@@ -14,7 +14,7 @@ import argparse
 import re
 import sys
 
-from pcli.common.display import get_console, make_table
+from pcli.common.display import get_console, get_output_mode, make_table, OutputMode, print_json, set_output_mode
 from rich.markdown import Markdown
 from rich.rule import Rule
 from rich import box
@@ -222,11 +222,7 @@ def _cmd_list(args: argparse.Namespace) -> None:
         get_console().print(f"[red]Error:[/red] {exc}", highlight=False)
         sys.exit(1)
 
-    # Header
-    get_console().print()
-    get_console().print(Rule(f"[bold]{top.title}[/bold]  [dim]{top.doc_id}[/dim]"))
-
-    # Find and render Summary of Changes
+    # Find Summary of Changes
     matched = next((s for s in sections if "summary of changes" in s.lower()), None)
     if not matched:
         get_console().print("[yellow]No 'Summary of Changes' section found in this QuickSpec.[/yellow]")
@@ -239,6 +235,22 @@ def _cmd_list(args: argparse.Namespace) -> None:
 
     rows = _parse_change_rows(body)
     rows = _take_n_versions(rows, args.count)
+
+    # ── JSON early return ─────────────────────────────────────────────────────
+    if get_output_mode() == OutputMode.JSON:
+        print_json({
+            "doc_id": top.doc_id,
+            "title": top.title,
+            "revisions": [
+                {"date": r[0], "version": r[1], "action": r[2], "description": r[3]}
+                for r in rows
+            ],
+        })
+        return
+
+    # ── Table output ──────────────────────────────────────────────────────────
+    get_console().print()
+    get_console().print(Rule(f"[bold]{top.title}[/bold]  [dim]{top.doc_id}[/dim]"))
 
     t = make_table(
         "",
@@ -489,6 +501,8 @@ examples:
   pcli qs describe a00073551enw --section "Standard Features"
 """,
     )
+    p.add_argument("--json", action="store_true", dest="json_output",
+                   help="Output as JSON (for piping/scripting)")
     sub = p.add_subparsers(dest="cmd", metavar="COMMAND")
 
     # ── list ──────────────────────────────────────────────────────────────────
@@ -570,6 +584,9 @@ def main(argv: list[str] | None = None) -> None:
     except ImportError:
         pass
     args = parser.parse_args(argv)
+
+    if getattr(args, "json_output", False):
+        set_output_mode(OutputMode.JSON)
 
     if not args.cmd:
         parser.print_help()

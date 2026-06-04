@@ -57,6 +57,8 @@ from pcli.com.client import COMClient
 from pcli.com import devices as _devices
 from pcli.com import workspaces as _workspaces
 from pcli.com import firmware as _firmware
+from pcli.com.describe import run_describe as _run_describe
+from pcli.com.reports import run_report_gpu as _run_report_gpu, run_report_memory as _run_report_memory
 from pcli.com.printers import (
     _DEVICE_FIELDS,
     _DEVICE_DEFAULT_FIELDS,
@@ -389,295 +391,23 @@ async def _cmd_add_device(args: argparse.Namespace) -> None:
 # ── pcli com report gpu ───────────────────────────────────────────────────────
 
 async def _cmd_report_gpu(args: argparse.Namespace) -> None:
-    from pcli.com.inventory import get_fleet_gpus, aggregate_gpus_by_model
-    from rich.table import Table
-    from rich import box as rich_box
-
     session = await _ensure_session(args)
-
-    async with COMClient(session) as client:
-        with get_console().status("[dim]Fetching GPU inventory across fleet…[/dim]"):
-            try:
-                gpus = await get_fleet_gpus(client)
-            except RuntimeError as e:
-                get_console().print(f"[red]Error:[/red] {e}")
-                return
-
-    if not gpus:
-        get_console().print("[yellow]No discrete GPUs found across fleet.[/yellow]")
-        return
-
-    if getattr(args, "raw", False) or get_output_mode() == OutputMode.JSON:
-        print_json(gpus)
-        return
-
-    rows = aggregate_gpus_by_model(gpus)
-    total = sum(r["count"] for r in rows)
-
-    table = Table(
-        title=f"GPU Inventory  ({total} GPUs across {len({g['server'] for g in gpus})} servers)",
-        box=rich_box.ROUNDED,
-        show_header=True,
-        header_style="bold cyan",
-    )
-    table.add_column("GPU Model", min_width=28)
-    table.add_column("Count",     justify="right", no_wrap=True, style="bold")
-    table.add_column("Servers",   min_width=20)
-
-    for r in rows:
-        table.add_row(
-            r["gpu"],
-            str(r["count"]),
-            ", ".join(sorted(r["servers"])),
-        )
-
-    get_console().print(table)
+    await _run_report_gpu(session)
 
 
 # ── pcli com report memory ────────────────────────────────────────────────────
 
 async def _cmd_report_memory(args: argparse.Namespace) -> None:
-    from pcli.com.inventory import get_fleet_memory, aggregate_by_part_number
-    from rich.table import Table
-    from rich import box as rich_box
-
     session = await _ensure_session(args)
-
-    async with COMClient(session) as client:
-        with get_console().status("[dim]Fetching memory inventory across fleet…[/dim]"):
-            try:
-                dimms = await get_fleet_memory(client)
-            except RuntimeError as e:
-                get_console().print(f"[red]Error:[/red] {e}")
-                return
-
-    if not dimms:
-        get_console().print("[yellow]No memory inventory data returned.[/yellow]")
-        return
-
-    if getattr(args, "raw", False):
-        import json
-        get_console().print(json.dumps(dimms, indent=2))
-        return
-
-    rows = aggregate_by_part_number(dimms)
-    print_memory_report(rows, source="COM")
+    await _run_report_memory(session)
 
 
 
 # ── pcli com describe ─────────────────────────────────────────────────────────
 
-_HEALTH_STYLE = {
-    "OK": "green", "WARNING": "yellow", "CRITICAL": "red",
-    "REDUNDANT": "green", "NON_REDUNDANT": "yellow",
-    "NOT_PRESENT": "dim", "UNKNOWN": "dim",
-}
-
-
-def _h(val: str) -> str:
-    """Wrap a health/state value in its colour."""
-    style = _HEALTH_STYLE.get((val or "").upper(), "")
-    return f"[{style}]{val}[/{style}]" if style else (val or "—")
-
-
 async def _cmd_describe_server(args: argparse.Namespace) -> None:
-    from rich.table import Table
-    from rich import box as rich_box
-    from rich.panel import Panel
-
     session = await _ensure_session(args)
-    target = args.server.upper()
-
-    async with COMClient(session) as c:
-        with get_console().status("[dim]Fetching server list…[/dim]"):
-            r = await c.get(session.com_url("/servers"), params={"limit": 1000})
-    items = r.get("items", [])
-
-    server = None
-    for s in items:
-        hw = s.get("hardware", {})
-        sn       = (hw.get("serialNumber") or "").upper()
-        name     = (s.get("name") or "").upper()
-        ilo_host = ((hw.get("bmc") or {}).get("hostname") or "").upper()
-        if target == sn or target == name or target == ilo_host:
-            server = s
-            break
-
-    # Fallback: substring match — handles iLO FQDNs like iTWA25345G1208.domain.local
-    if not server:
-        for s in items:
-            hw = s.get("hardware", {})
-            sn   = (hw.get("serialNumber") or "").upper()
-            name = (s.get("name") or "").upper()
-            if (sn and sn in target) or (name and name in target):
-                server = s
-                break
-
-    if not server:
-        get_console().print(f"[red]Server '{args.server}' not found.[/red]")
-        sys.exit(1)
-
-    hw    = server.get("hardware", {})
-    bmc   = hw.get("bmc") or {}
-    state = server.get("state", {})
-    health = hw.get("health", {})
-
-    # ── JSON early return ─────────────────────────────────────────────────────
-    if get_output_mode() == OutputMode.JSON:
-        print_json(server)
-        return
-
-    get_console().print(Panel(
-        f"[bold]{server.get('name')}[/bold]   [dim]{hw.get('model', '—')}[/dim]",
-        expand=False,
-    ))
-
-    # ── Identity ──────────────────────────────────────────────────────────────
-    id_table = Table(box=rich_box.SIMPLE, show_header=False, padding=(0, 2))
-    id_table.add_column(style="dim", no_wrap=True)
-    id_table.add_column()
-    id_table.add_row("Serial",      hw.get("serialNumber", "—"))
-    id_table.add_row("Product ID",  hw.get("productId", "—"))
-    id_table.add_row("Generation",  server.get("serverGeneration", "—"))
-    id_table.add_row("Power",       _h(hw.get("powerState", "—")))
-    id_table.add_row("Connection",  _h("CONNECTED" if state.get("connected") else "DISCONNECTED"))
-    id_table.add_row("Managed",     "Yes" if state.get("managed") else "No")
-    get_console().print(id_table)
-
-    # ── iLO ───────────────────────────────────────────────────────────────────
-    get_console().print("[bold]iLO[/bold]")
-    ilo_table = Table(box=rich_box.SIMPLE, show_header=False, padding=(0, 2))
-    ilo_table.add_column(style="dim", no_wrap=True)
-    ilo_table.add_column()
-    ilo_table.add_row("Model",    bmc.get("model", "—"))
-    ilo_table.add_row("Version",  bmc.get("version", "—"))
-    ilo_table.add_row("IP",       bmc.get("ip", "—"))
-    ilo_table.add_row("Hostname", bmc.get("hostname", "—"))
-    ilo_table.add_row("MAC",      bmc.get("mac", "—"))
-    get_console().print(ilo_table)
-
-    # ── Health ────────────────────────────────────────────────────────────────
-    get_console().print("[bold]Health[/bold]")
-    h_table = Table(box=rich_box.SIMPLE, show_header=False, padding=(0, 2))
-    h_table.add_column(style="dim", no_wrap=True)
-    h_table.add_column()
-    skip = {"summary", "healthLED", "airFilter", "smartStorage"}
-    for k, v in (health or {}).items():
-        if k not in skip:
-            h_table.add_row(k.replace("_", " ").title(), _h(v))
-    get_console().print(h_table)
-
-    # ── Subscription ──────────────────────────────────────────────────────────
-    get_console().print("[bold]Subscription[/bold]")
-    sub_table = Table(box=rich_box.SIMPLE, show_header=False, padding=(0, 2))
-    sub_table.add_column(style="dim", no_wrap=True)
-    sub_table.add_column()
-    sub_table.add_row("Tier",    state.get("subscriptionTier", "—"))
-    sub_table.add_row("Key",     state.get("subscriptionKey", "—"))
-    expires = (state.get("subscriptionExpiresAt") or "—")[:10]
-    sub_table.add_row("Expires", expires)
-    get_console().print(sub_table)
-
-    # ── GPU ───────────────────────────────────────────────────────────────────
-    _GPU_KEYWORDS = ("video controller", "gpu", "nvidia", "radeon", "gaudi",
-                     "accelerator", "xe graphics")
-    fw_items = server.get("firmwareInventory") or []
-    gpu_items = [
-        fw for fw in fw_items
-        if any(kw in (fw.get("name") or "").lower() for kw in _GPU_KEYWORDS)
-    ]
-    if gpu_items:
-        get_console().print("[bold]GPU[/bold]")
-        gpu_table = Table(box=rich_box.SIMPLE, show_header=True, header_style="bold cyan",
-                          padding=(0, 2))
-        gpu_table.add_column("Model", no_wrap=True)
-        gpu_table.add_column("Driver/FW")
-        gpu_table.add_column("Slot", style="dim")
-        for fw in gpu_items:
-            gpu_table.add_row(fw.get("name", ""), fw.get("version", ""),
-                              fw.get("deviceContext", ""))
-        get_console().print(gpu_table)
-
-    # ── Memory population map (via iLO Redfish) ───────────────────────────────
-    ilo_ip = bmc.get("ip")
-    if ilo_ip:
-        try:
-            from pcli.ilo.config import load_hosts
-            from pcli.ilo.client import ILOClient
-            from pcli.ilo.inventory import fetch_memory_population
-
-            # Find matching host credentials by IP or hostname
-            ilo_creds = None
-            try:
-                for h in load_hosts():
-                    if ilo_ip in h.get("url", "") or (bmc.get("hostname") or "") in h.get("url", ""):
-                        ilo_creds = h
-                        break
-                if not ilo_creds:
-                    # Try matching by serial in host name
-                    sn = (hw.get("serialNumber") or "").lower()
-                    for h in load_hosts():
-                        if sn and sn in h.get("name", "").lower():
-                            ilo_creds = h
-                            break
-            except Exception:
-                pass  # intentional: iLO creds lookup is best-effort; fallback to COM data
-
-            if ilo_creds:
-                async with ILOClient(ilo_creds["url"], ilo_creds["username"], ilo_creds["password"]) as ilo:
-                    dimms = await fetch_memory_population(ilo)
-
-                if dimms:
-                    get_console().print("[bold]Memory[/bold]")
-                    # Group by part number for summary
-                    from collections import Counter
-                    populated = [d for d in dimms if d["present"]]
-                    empty_count = sum(1 for d in dimms if not d["present"])
-
-                    mem_table = Table(box=rich_box.SIMPLE, show_header=True,
-                                      header_style="bold cyan", padding=(0, 2))
-                    mem_table.add_column("Slot", no_wrap=True)
-                    mem_table.add_column("Capacity")
-                    mem_table.add_column("Type")
-                    mem_table.add_column("Speed")
-                    mem_table.add_column("Part Number", style="dim")
-                    for d in dimms:
-                        if d["present"]:
-                            speed_str = f"{d['speed']} MT/s" if d["speed"] else "—"
-                            cap_str   = f"{d['cap_gb']} GB" if d["cap_gb"] else "—"
-                            mem_table.add_row(d["slot"], cap_str, d["type"] or "—",
-                                              speed_str, d["part"] or "—")
-                        else:
-                            mem_table.add_row(f"[dim]{d['slot']}[/dim]", "[dim]empty[/dim]",
-                                              "", "", "")
-                    get_console().print(mem_table)
-                    total_gb = sum(d["cap_gb"] for d in populated)
-                    get_console().print(f"  [dim]{len(populated)} DIMMs populated, "
-                                  f"{empty_count} empty — {total_gb} GB total[/dim]")
-        except Exception:
-            # iLO unreachable or no creds — show total from COM
-            mem_mb = hw.get("memoryMb")
-            if mem_mb:
-                get_console().print("[bold]Memory[/bold]")
-                get_console().print(f"  {mem_mb // 1024} GB total  [dim](slot detail requires iLO access)[/dim]")
-    else:
-        mem_mb = hw.get("memoryMb")
-        if mem_mb:
-            get_console().print("[bold]Memory[/bold]")
-            get_console().print(f"  {mem_mb // 1024} GB total  [dim](slot detail requires iLO access)[/dim]")
-
-    # ── Firmware inventory ────────────────────────────────────────────────────
-    if fw_items:
-        get_console().print("[bold]Firmware[/bold]")
-        fw_table = Table(box=rich_box.SIMPLE, show_header=True, header_style="bold cyan",
-                         padding=(0, 2))
-        fw_table.add_column("Component", no_wrap=True)
-        fw_table.add_column("Version")
-        fw_table.add_column("Location", style="dim")
-        for fw in fw_items:
-            fw_table.add_row(fw.get("name", ""), fw.get("version", ""),
-                             fw.get("deviceContext", ""))
-        get_console().print(fw_table)
+    await _run_describe(session, args.server)
 
 
 def _build_parser() -> argparse.ArgumentParser:

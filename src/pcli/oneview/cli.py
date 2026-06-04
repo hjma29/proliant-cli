@@ -215,17 +215,16 @@ async def _async_networks_list() -> None:
         get_console().print("[yellow]No ethernet networks found.[/yellow]")
         return
 
-    table = Table(
-        title=f"Ethernet Networks  ({len(nets)} total)",
-        box=box.ROUNDED, show_header=True, header_style="bold cyan",
+    table = make_table(
+        f"Ethernet Networks  ({len(nets)} total)",
+        ("Name",      {"min_width": 24, "no_wrap": True}),
+        ("VLAN",      {"justify": "right", "no_wrap": True}),
+        ("Type",      {"no_wrap": True}),
+        ("Purpose",   {"no_wrap": True}),
+        ("Status",    {"justify": "center", "no_wrap": True}),
+        ("State",     {"justify": "center", "no_wrap": True}),
+        ("SmartLink", {"justify": "center", "no_wrap": True}),
     )
-    table.add_column("Name",       min_width=24, no_wrap=True)
-    table.add_column("VLAN",       justify="right", no_wrap=True)
-    table.add_column("Type",       no_wrap=True)
-    table.add_column("Purpose",    no_wrap=True)
-    table.add_column("Status",     justify="center", no_wrap=True)
-    table.add_column("State",      justify="center", no_wrap=True)
-    table.add_column("SmartLink",  justify="center", no_wrap=True)
 
     for n in nets:
         vlan = str(n["vlan"]) if n["vlan"] else "—"
@@ -259,16 +258,15 @@ async def _async_networksets_list() -> None:
         get_console().print("[yellow]No network sets found.[/yellow]")
         return
 
-    table = Table(
-        title=f"Network Sets  ({len(sets)} total)",
-        box=box.ROUNDED, show_header=True, header_style="bold cyan",
+    table = make_table(
+        f"Network Sets  ({len(sets)} total)",
+        ("Name",           {"min_width": 24, "no_wrap": True}),
+        ("Type",           {"no_wrap": True}),
+        ("Networks",       {"justify": "right", "no_wrap": True}),
+        ("Native Network", {"no_wrap": True, "style": "dim"}),
+        ("Status",         {"justify": "center", "no_wrap": True}),
+        ("State",          {"justify": "center", "no_wrap": True}),
     )
-    table.add_column("Name",           min_width=24, no_wrap=True)
-    table.add_column("Type",           no_wrap=True)
-    table.add_column("Networks",       justify="right", no_wrap=True)
-    table.add_column("Native Network", no_wrap=True, style="dim")
-    table.add_column("Status",         justify="center", no_wrap=True)
-    table.add_column("State",          justify="center", no_wrap=True)
 
     for s in sets:
         table.add_row(
@@ -300,18 +298,17 @@ async def _async_uplinksets_list() -> None:
         get_console().print("[yellow]No uplink sets found.[/yellow]")
         return
 
-    table = Table(
-        title=f"Uplink Sets  ({len(uplinks)} total)",
-        box=box.ROUNDED, show_header=True, header_style="bold cyan",
+    table = make_table(
+        f"Uplink Sets  ({len(uplinks)} total)",
+        ("Name",         {"min_width": 20, "no_wrap": True}),
+        ("Type",         {"no_wrap": True}),
+        ("Mode",         {"no_wrap": True}),
+        ("Reachability", {"no_wrap": True}),
+        ("Networks",     {"justify": "right", "no_wrap": True}),
+        ("Ports",        {"style": "dim"}),
+        ("Logical IC",   {"no_wrap": True}),
+        ("Status",       {"justify": "center", "no_wrap": True}),
     )
-    table.add_column("Name",          min_width=20, no_wrap=True)
-    table.add_column("Type",          no_wrap=True)
-    table.add_column("Mode",          no_wrap=True)
-    table.add_column("Reachability",  no_wrap=True)
-    table.add_column("Networks",      justify="right", no_wrap=True)
-    table.add_column("Ports",         style="dim")
-    table.add_column("Logical IC",    no_wrap=True)
-    table.add_column("Status",        justify="center", no_wrap=True)
 
     for u in uplinks:
         reach = u["reachability"]
@@ -346,15 +343,14 @@ async def _async_profiles_list() -> None:
         get_console().print("[yellow]No server profiles found.[/yellow]")
         return
 
-    table = Table(
-        title=f"Server Profiles  ({len(profiles)} total)",
-        box=box.ROUNDED, show_header=True, header_style="bold cyan",
+    table = make_table(
+        f"Server Profiles  ({len(profiles)} total)",
+        ("Name",        {"min_width": 22, "no_wrap": True}),
+        ("Server",      {"min_width": 20, "no_wrap": True}),
+        ("Status",      {"justify": "center", "no_wrap": True}),
+        ("State",       {"justify": "center", "no_wrap": True}),
+        ("Description", {"style": "dim"}),
     )
-    table.add_column("Name",        min_width=22, no_wrap=True)
-    table.add_column("Server",      min_width=20, no_wrap=True)
-    table.add_column("Status",      justify="center", no_wrap=True)
-    table.add_column("State",       justify="center", no_wrap=True)
-    table.add_column("Description", style="dim")
 
     for p in profiles:
         table.add_row(
@@ -397,21 +393,29 @@ async def _async_describe_uplinkset(name: str) -> None:
     ))
 
     # Ports table
-    port_table = Table(title="Ports", box=box.SIMPLE_HEAD, header_style="bold")
-    port_table.add_column("Bay",   justify="center", no_wrap=True)
-    port_table.add_column("Port",  no_wrap=True)
-    port_table.add_column("Speed", no_wrap=True)
-    port_table.add_column("FEC",   no_wrap=True)
+    port_table = make_table(
+        "Ports",
+        ("Bay",   {"justify": "center", "no_wrap": True}),
+        ("Port",  {"no_wrap": True}),
+        ("Speed", {"no_wrap": True}),
+        ("FEC",   {"no_wrap": True}),
+        box_style=box.SIMPLE_HEAD,
+        header_style="bold",
+    )
     for p in u["ports"]:
         port_table.add_row(p["bay"], p["port"], p["speed"], p["fec"])
     get_console().print(port_table)
 
     # Networks table
-    net_table = Table(title=f"Member Networks ({len(u['networks'])})", box=box.SIMPLE_HEAD, header_style="bold")
-    net_table.add_column("Name",   min_width=24, no_wrap=True)
-    net_table.add_column("VLAN",   justify="right", no_wrap=True)
-    net_table.add_column("Type",   no_wrap=True)
-    net_table.add_column("Status", justify="center", no_wrap=True)
+    net_table = make_table(
+        f"Member Networks ({len(u['networks'])})",
+        ("Name",   {"min_width": 24, "no_wrap": True}),
+        ("VLAN",   {"justify": "right", "no_wrap": True}),
+        ("Type",   {"no_wrap": True}),
+        ("Status", {"justify": "center", "no_wrap": True}),
+        box_style=box.SIMPLE_HEAD,
+        header_style="bold",
+    )
     for n in u["networks"]:
         vlan = str(n["vlan"]) if n["vlan"] else "—"
         net_table.add_row(n["name"], vlan, n["type"], _status_style(n["status"]))

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 from enum import Enum
 from typing import Any
 
@@ -27,36 +28,33 @@ class OutputMode(Enum):
     JSON = "json"
 
 
-# Module-level console — shared across all modules.
-# When JSON output is active, status/spinners go to stderr so stdout stays clean.
-_console: Console | None = None
-_output_mode: OutputMode = OutputMode.TABLE
+# Thread-local storage for output mode and console instance.
+# Using threading.local() means each thread (test worker, parallel task)
+# has its own independent output state without cross-thread pollution.
+_tls = threading.local()
 
 
 def set_output_mode(mode: OutputMode) -> None:
-    """Set global output mode. Call early in CLI main() based on --json flag."""
-    global _output_mode, _console
-    _output_mode = mode
-    _console = None  # force re-creation
+    """Set per-thread output mode. Call early in CLI main() based on --json flag."""
+    _tls.mode = mode
+    _tls.console = None  # force re-creation on next get_console() call
 
 
 def get_output_mode() -> OutputMode:
-    return _output_mode
+    return getattr(_tls, "mode", OutputMode.TABLE)
 
 
 def get_console() -> Console:
-    """Return the shared Console instance.
+    """Return the thread-local Console instance.
 
     In JSON mode, console writes to stderr so stdout is reserved for data.
     """
-    global _console
-    if _console is None:
-        if _output_mode == OutputMode.JSON:
-            _console = Console(stderr=True)
+    if getattr(_tls, "console", None) is None:
+        if get_output_mode() == OutputMode.JSON:
+            _tls.console = Console(stderr=True)
         else:
-            _console = Console()
-    return _console
-
+            _tls.console = Console()
+    return _tls.console
 
 
 def make_table(
@@ -108,7 +106,7 @@ def print_memory_report(rows: list[dict], source: str = "") -> None:
     """
     c = get_console()
 
-    if _output_mode == OutputMode.JSON:
+    if get_output_mode() == OutputMode.JSON:
         print_json(rows)
         return
 

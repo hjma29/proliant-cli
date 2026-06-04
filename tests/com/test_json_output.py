@@ -32,12 +32,17 @@ FAKE_DEVICE_RAW = {
 }
 
 FAKE_WORKSPACE_RAW = {
-    "id": "ws-aaa",
-    "name": "lab-workspace",
+    "platform_customer_id": "ws-aaa",
+    "company_name": "lab-workspace",
     "description": "Lab env",
-    "account_type": "Standard",
-    "created_at": "2024-01-01T00:00:00Z",
+    "account_status": "ACTIVE",
+    "address": {"city": "Houston", "state_or_region": "TX", "country_code": "US"},
 }
+
+
+def _make_workspace():
+    from pcli.com.workspaces import Workspace
+    return Workspace.from_api(FAKE_WORKSPACE_RAW, active_id="ws-aaa", region="us-west")
 
 
 @pytest.fixture(autouse=True)
@@ -75,20 +80,18 @@ def _run_com_main(argv: list[str], capsys) -> dict | list:
 
 class TestComJsonDevices:
     def test_list_devices_json_is_valid(self, capsys):
-        result = _run_com_main(["list", "devices", "--json"], capsys)
+        result = _run_com_main(["--json", "list", "devices"], capsys)
         assert isinstance(result, list)
         assert len(result) == 1
 
     def test_list_devices_json_fields(self, capsys):
-        result = _run_com_main(["list", "devices", "--json"], capsys)
+        result = _run_com_main(["--json", "list", "devices"], capsys)
         device = result[0]
         assert device["serial_number"] == "TWA25325G1206"
         assert device["name"] == "dl325-gen12"
 
     def test_list_devices_json_no_rich_markup(self, capsys):
-        result = _run_com_main(["list", "devices", "--json"], capsys)
-        raw = capsys.readouterr().out  # already consumed, check via re-parse
-        # Verify the result roundtrips cleanly (no Rich tags in serialised form)
+        result = _run_com_main(["--json", "list", "devices"], capsys)
         text = json.dumps(result)
         assert "[bold" not in text
         assert "[/bold" not in text
@@ -96,10 +99,12 @@ class TestComJsonDevices:
 
     def test_list_devices_stderr_clean(self, capsys):
         """Status spinners and warnings must go to stderr, not stdout."""
-        _run_com_main(["list", "devices", "--json"], capsys)
+        _run_com_main(["--json", "list", "devices"], capsys)
+        # stdout is consumed in _run_com_main; second readouterr() returns empty
         captured = capsys.readouterr()
-        # stdout must be pure JSON
-        json.loads(captured.out) if captured.out.strip() else None
+        # Any remaining stdout must also be parseable (or empty)
+        if captured.out.strip():
+            json.loads(captured.out)
 
 
 class TestComJsonWorkspaces:
@@ -107,11 +112,10 @@ class TestComJsonWorkspaces:
         from pcli.com import cli
 
         fake_session = MagicMock()
-        set_output_mode(OutputMode.TABLE)  # reset before test
 
         with patch("pcli.com.cli._ensure_session", new_callable=AsyncMock, return_value=fake_session), \
              patch("pcli.com.workspaces.fetch_workspaces", new_callable=AsyncMock, return_value=[_make_workspace()]):
-            cli.main(["list", "workspaces", "--json"])
+            cli.main(["--json", "list", "workspaces"])
 
         captured = capsys.readouterr()
         result = json.loads(captured.out)
@@ -123,7 +127,7 @@ class TestComParserJson:
     def test_parser_accepts_json_flag(self):
         from pcli.com.cli import _build_parser
         parser = _build_parser()
-        args = parser.parse_args(["list", "devices", "--json"])
+        args = parser.parse_args(["--json", "list", "devices"])
         assert args.json_output is True
 
     def test_parser_json_default_false(self):

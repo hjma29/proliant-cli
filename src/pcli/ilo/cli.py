@@ -42,6 +42,10 @@ from typing import Any
 
 import argcomplete
 
+from pcli.common.completers import comma_sep_completer
+from pcli.common.display import get_console, make_table, print_json, OutputMode, get_output_mode
+from pcli.common.runner import run_parallel
+from pcli.common.targets import resolve_hosts, add_target_args
 from pcli.ilo import firmware, inventory
 from pcli.ilo.client import ILOClient, ServerDownOrUnreachableError, ilo_session
 from pcli.ilo.config import (
@@ -58,14 +62,7 @@ FetchFn = Callable[[ILOClient], Awaitable[list[Any]]]
 
 def _ilo_fields_completer(choices: tuple):
     """Argcomplete completer for comma-separated ilo field lists."""
-    def completer(prefix: str, **kwargs):
-        if "," in prefix:
-            before, current = prefix.rsplit(",", 1)
-            before += ","
-        else:
-            before, current = "", prefix
-        return [before + c for c in choices if c.lower().startswith(current.lower())]
-    return completer
+    return comma_sep_completer(choices)
 
 
 _FETCH_DISPATCH: dict[str, FetchFn] = {

@@ -53,6 +53,8 @@ from rich.console import Console
 from rich.table import Table
 from rich import box
 
+from pcli.common.completers import comma_sep_completer
+from pcli.common.display import get_console, make_table, print_json, print_memory_report, OutputMode, get_output_mode, set_output_mode
 from pcli.com.auth import COMSession, CredentialsError, AuthError
 from pcli.com.client import COMClient, run
 from pcli.com import devices as _devices
@@ -266,14 +268,7 @@ DEVICE_FIELD_NAMES = tuple(_DEVICE_FIELDS.keys())
 
 def _comma_sep_completer(choices: tuple):
     """Argcomplete completer for comma-separated field lists like 'name,ser<TAB>'."""
-    def completer(prefix: str, **kwargs):
-        if "," in prefix:
-            before, current = prefix.rsplit(",", 1)
-            before += ","
-        else:
-            before, current = "", prefix
-        return [before + c for c in choices if c.lower().startswith(current.lower())]
-    return completer
+    return comma_sep_completer(choices)
 
 
 def _parse_fields(fields_str: Optional[str], available: dict, defaults: tuple) -> list[str]:

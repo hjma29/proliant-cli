@@ -111,6 +111,35 @@ async def _run_parallel_async(hosts: list[dict], fetch_fn: FetchFn) -> list[tupl
     return await run_parallel(hosts, fetch_fn, session_factory=ilo_session, max_workers=MAX_WORKERS)
 
 
+def _print_json_results(what: str, results: list[tuple[str, str | None, list]]) -> None:
+    """Emit structured JSON for --json output mode (pipeable to jq/ConvertFrom-Json)."""
+    output = []
+    for host_name, error, rows in results:
+        if error:
+            output.append({"Server": host_name, "error": error})
+        elif what == "firmwares":
+            entry = {"Server": host_name}
+            entry.update(dict(rows))
+            output.append(entry)
+        elif what in ("serial", "update_method"):
+            if what == "serial":
+                entry = {"Server": host_name}
+                entry.update(dict(rows))
+                output.append(entry)
+            else:
+                for item in rows:
+                    output.append({"Server": host_name, **item})
+        else:
+            for item in rows:
+                if isinstance(item, dict):
+                    output.append({"Server": host_name, **item})
+                elif isinstance(item, (list, tuple)) and len(item) == 2:
+                    output.append({"Server": host_name, "Name": item[0], "Value": item[1]})
+                else:
+                    output.append({"Server": host_name, "data": item})
+    print_json(output)
+
+
 def _header_line(server_col: int, label_col: int, value_col: int) -> str:
     return f"{'Server':<{server_col}}   {'Name':<{label_col}}   {'Version':<{value_col}}"
 
@@ -381,6 +410,8 @@ def _build_parser() -> argparse.ArgumentParser:
         description="HPE iLO firmware/hardware inventory and update tool",
     )
     parser.add_argument("--version", "-V", action="version", version=f"%(prog)s {_version}")
+    parser.add_argument("--json", action="store_true", dest="json_output",
+                        help="Output structured JSON (for piping to jq / ConvertFrom-Json)")
 
     def _host_completer(**_kwargs):
         try:
@@ -390,9 +421,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
     def _add_host(p: argparse.ArgumentParser, required: bool = False) -> None:
         p.add_argument(
-            "--host", metavar="NAME", required=required,
-            help="Target a single host by name (from hosts-ilo.ini)",
+            "--host", metavar="NAME[,NAME,...]", required=required,
+            help="Target host(s) by name — comma-separated for multiple",
         ).completer = _host_completer
+        p.add_argument(
+            "--hosts-from", metavar="FILE", dest="hosts_from",
+            help="Read target hosts from FILE (one per line), or '-' for stdin",
+        )
 
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
     subparsers.required = True
@@ -565,9 +600,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
+    from pcli.common.display import set_output_mode, OutputMode
     parser = _build_parser()
     argcomplete.autocomplete(parser)
     args = parser.parse_args(argv)
+    if getattr(args, "json_output", False):
+        set_output_mode(OutputMode.JSON)
     asyncio.run(_async_main(args))
 
 

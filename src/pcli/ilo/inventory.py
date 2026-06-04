@@ -99,16 +99,16 @@ async def fetch_network_versions(client: ILOClient) -> list[dict[str, str]]:
         }]
 
     found = []
-    oem_location_map = await _build_oem_device_location_map(client)
+    oem_info_map = await _build_oem_device_info_map(client)
     for adapter in await _member_resources(client, na_uri):
         label = _network_adapter_display_name(adapter)
         controllers = adapter.get("Controllers", [])
         version = controllers[0].get("FirmwarePackageVersion", "N/A") if controllers else "N/A"
         base_row = {
             "Name": label,
-            "PartNumber": (adapter.get("PartNumber") or "N/A").strip() or "N/A",
+            "PartNumber": _adapter_part_number(adapter, oem_info_map) or "N/A",
             "Version": version or "N/A",
-            "Location": _adapter_location(adapter, oem_location_map) or "N/A",
+            "Location": _adapter_location(adapter, oem_info_map) or "N/A",
         }
         port_rows = await _network_adapter_ports(client, adapter)
         if not port_rows:
@@ -354,19 +354,26 @@ async def _build_nic_label_map(client: ILOClient) -> dict[str, str]:
     return label_map
 
 
-async def _build_oem_device_location_map(client: ILOClient) -> dict[str, str]:
+async def _build_oem_device_info_map(client: ILOClient) -> dict[str, dict[str, str]]:
     chassis = await client.get(await client.get_chassis_uri())
     devices_uri = ((chassis.get("Oem") or {}).get("Hpe") or {}).get("Links", {}).get("Devices", {}).get("@odata.id")
     if not devices_uri:
         return {}
 
-    location_map: dict[str, str] = {}
+    info_map: dict[str, dict[str, str]] = {}
     for device in await _member_resources(client, devices_uri):
         serial = (device.get("SerialNumber") or "").strip()
-        location = (device.get("Location") or "").strip()
-        if serial and location:
-            location_map[serial] = location
-    return location_map
+        if not serial:
+            continue
+        info_map[serial] = {
+            "Location": (device.get("Location") or "").strip(),
+            "PartNumber": (
+                device.get("ProductPartNumber")
+                or device.get("PartNumber")
+                or ""
+            ).strip(),
+        }
+    return info_map
 
 
 async def _network_adapter_ports(client: ILOClient, adapter: dict[str, Any]) -> list[dict[str, str]]:
@@ -415,7 +422,17 @@ def _display_link_status(status: str) -> str:
     return status
 
 
-def _adapter_location(adapter: dict[str, Any], oem_location_map: dict[str, str] | None = None) -> str:
+def _adapter_part_number(adapter: dict[str, Any], oem_info_map: dict[str, dict[str, str]] | None = None) -> str:
+    part_number = (adapter.get("PartNumber") or "").strip()
+    if part_number:
+        return part_number
+    serial = (adapter.get("SerialNumber") or "").strip()
+    if oem_info_map and serial:
+        return oem_info_map.get(serial, {}).get("PartNumber", "")
+    return ""
+
+
+def _adapter_location(adapter: dict[str, Any], oem_info_map: dict[str, dict[str, str]] | None = None) -> str:
     part_loc = adapter.get("Location", {}).get("PartLocation", {})
     if not part_loc:
         controllers = adapter.get("Controllers") or []
@@ -428,8 +445,8 @@ def _adapter_location(adapter: dict[str, Any], oem_location_map: dict[str, str] 
     if ordinal is not None and part_loc.get("LocationType") == "Slot":
         return f"Slot {ordinal}"
     serial = (adapter.get("SerialNumber") or "").strip()
-    if oem_location_map and serial:
-        return oem_location_map.get(serial, "")
+    if oem_info_map and serial:
+        return oem_info_map.get(serial, {}).get("Location", "")
     return ""
 
 

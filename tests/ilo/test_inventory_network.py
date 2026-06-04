@@ -149,6 +149,7 @@ async def test_fetch_network_versions_uses_oem_location_fallback_for_ilo6():
         "/redfish/v1/Chassis/1/Devices/2/": {
             "SerialNumber": "VNM2450RTD",
             "Location": "OCP 3.0 Slot 15",
+            "ProductPartNumber": "P10113-001",
         },
         "/redfish/v1/Chassis/1/NetworkAdapters": {
             "Members": [{"@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE009000"}]
@@ -156,7 +157,7 @@ async def test_fetch_network_versions_uses_oem_location_fallback_for_ilo6():
         "/redfish/v1/Chassis/1/NetworkAdapters/DE009000": {
             "Model": "BCM57414",
             "SKU": "10/25Gb 2-port SFP28 BCM57414 OCP3 Adapter",
-            "PartNumber": "P10113-001",
+            "PartNumber": "",
             "SerialNumber": "VNM2450RTD",
             "Location": {"PartLocation": {"ServiceLabel": None, "LocationOrdinalValue": None}},
             "Ports": {"@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE009000/Ports"},

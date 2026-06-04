@@ -15,7 +15,6 @@ import re
 import sys
 
 from pcli.common.display import get_console, make_table
-from rich.table import Table
 from rich.markdown import Markdown
 from rich.rule import Rule
 from rich import box

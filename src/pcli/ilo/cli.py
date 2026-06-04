@@ -208,7 +208,7 @@ def _build_parser() -> argparse.ArgumentParser:
                 formatter_class=argparse.RawDescriptionHelpFormatter,
             )
             _add_host(sp)
-            sp.add_argument("--raw", action="store_true", help="Print raw JSON instead of a formatted table")
+            sp.add_argument("--raw", action="store_true", help="Dump unprocessed Redfish API response (bypasses pcli field parsing)")
             fleet_fields_arg = sp.add_argument(
                 "--fields", metavar="FIELDS",
                 help=(
@@ -236,11 +236,11 @@ def _build_parser() -> argparse.ArgumentParser:
                 formatter_class=argparse.RawDescriptionHelpFormatter,
             )
             _add_host(sp)
-            sp.add_argument("--raw", action="store_true", help="Print raw JSON instead of a formatted table")
+            sp.add_argument("--raw", action="store_true", help="Dump unprocessed Redfish API response (bypasses pcli field parsing)")
         else:
             sp = get_sub.add_parser(name, help=help_text)
             _add_host(sp)
-            sp.add_argument("--raw", action="store_true", help="Print raw JSON instead of a formatted table")
+            sp.add_argument("--raw", action="store_true", help="Dump unprocessed Redfish API response (bypasses pcli field parsing)")
 
     upgrade_p = subparsers.add_parser(
         "upgrade",

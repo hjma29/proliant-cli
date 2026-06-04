@@ -21,17 +21,17 @@ Usage::
     pcli com list devices --sort added      Sort by date added
     pcli com list devices --sort added-by   Sort by who added the device
     pcli com list devices --fields name,serial,added,added-by --sort added
-    pcli com list devices --raw             Raw JSON
+    pcli com list devices --raw             Unprocessed API response
 
     pcli com list bundles                   Active SPP firmware bundles in COM
     pcli com list bundles --all             Include inactive/superseded bundles
     pcli com list bundles --gen 12          Gen12 bundles only
     pcli com list bundles --gen 11          Gen11 bundles only
     pcli com list bundles --type patch      PATCH bundles only (base/patch/hotfix)
-    pcli com list bundles --raw             Raw JSON
+    pcli com list bundles --raw             Unprocessed API response
 
     pcli com list workspaces                All workspaces (active one marked with *)
-    pcli com list workspaces --raw          Raw JSON
+    pcli com list workspaces --raw          Unprocessed API response
 
     pcli com use workspace <name-or-id>    Switch active workspace
 
@@ -766,7 +766,7 @@ def _build_parser() -> argparse.ArgumentParser:
     dev_p.add_argument("--type", metavar="TYPE",
                        choices=["COMPUTE", "NETWORK", "STORAGE"],
                        help="Filter by device type")
-    dev_p.add_argument("--raw", action="store_true", help="Print raw JSON")
+    dev_p.add_argument("--raw", action="store_true", help="Dump unprocessed API response (bypasses pcli field parsing)")
     fields_arg = dev_p.add_argument(
         "--fields", metavar="FIELDS",
         help=(
@@ -784,7 +784,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # pcli com list workspaces
     ws_p = get_sub.add_parser("workspaces", help="List all workspaces (* = active)")
-    ws_p.add_argument("--raw", action="store_true", help="Print raw JSON")
+    ws_p.add_argument("--raw", action="store_true", help="Dump unprocessed API response (bypasses pcli field parsing)")
 
     # pcli com list bundles
     bun_p = get_sub.add_parser(
@@ -813,7 +813,7 @@ def _build_parser() -> argparse.ArgumentParser:
                        choices=["base", "patch", "hotfix"],
                        metavar="TYPE",
                        help="Filter by bundle type: base, patch, or hotfix")
-    bun_p.add_argument("--raw", action="store_true", help="Print raw JSON")
+    bun_p.add_argument("--raw", action="store_true", help="Dump unprocessed API response (bypasses pcli field parsing)")
 
     # ── use ───────────────────────────────────────────────────────────────
     use_p = subparsers.add_parser("use", help="Switch active resource")
@@ -851,9 +851,9 @@ def _build_parser() -> argparse.ArgumentParser:
     rep_sub.required = True
 
     rep_mem_p = rep_sub.add_parser("memory", help="Memory part-number breakdown across fleet")
-    rep_mem_p.add_argument("--raw", action="store_true", help="Print raw JSON")
+    rep_mem_p.add_argument("--raw", action="store_true", help="Dump unprocessed API response (bypasses pcli field parsing)")
     rep_gpu_p = rep_sub.add_parser("gpu", help="Discrete GPU inventory across fleet")
-    rep_gpu_p.add_argument("--raw", action="store_true", help="Print raw JSON")
+    rep_gpu_p.add_argument("--raw", action="store_true", help="Dump unprocessed API response (bypasses pcli field parsing)")
 
     # ── describe ──────────────────────────────────────────────────────────────
     desc_p = subparsers.add_parser("describe", help="Show details for a server")

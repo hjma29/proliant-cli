@@ -167,11 +167,14 @@ def print_network_table(results: list[tuple[str, str | None, list]]) -> None:
                 f"{error}"
             )
             continue
+        prev_card_key: tuple[str, str, str, str] | None = None
         for i, (name, part, location, port, mac, link, version) in enumerate(rows):
             label = host_name if i == 0 else ""
+            card_key = (name, part, location, version)
+            display_name = _truncate(name, name_w) if card_key != prev_card_key else ""
             print(
                 f"{label:<{server_w}}   "
-                f"{_truncate(name, name_w):<{name_w}}   "
+                f"{display_name:<{name_w}}   "
                 f"{part:<{part_w}}   "
                 f"{location:<{loc_w}}   "
                 f"{port:<{port_w}}   "
@@ -179,6 +182,7 @@ def print_network_table(results: list[tuple[str, str | None, list]]) -> None:
                 f"{link:<{link_w}}   "
                 f"{version:<{ver_w}}"
             )
+            prev_card_key = card_key
 
 
 def _truncate(value: str, width: int) -> str:

@@ -17,13 +17,6 @@ _PORT_RE = re.compile(r"\s*\b(?:\d+-port|dual[ -]port|quad[ -]port)\b", re.IGNOR
 _MODEL_STRIP_RE = re.compile(r"^\s*(?:HPE\s+)?(?:ProLiant\s+)?(?:Compute\s+)?", re.IGNORECASE)
 _EMPTY: list[tuple[str, str]] = [("N/A", "N/A")]
 FLEET_KEYS = ("Model", "iLO", "BIOS", "NIC-FW", "Storage-FW")
-_NIC_MARKETING_NAME_BY_PART = {
-    # iLO Redfish exposes generic BCM57414 strings for this PCIe card while the GUI
-    # labels it by the HPE marketing name.
-    "P26264-001": "Broadcom P225p NetXtreme-E Dual-port 10Gb/25Gb Ethernet PCIe Adapter - NIC",
-}
-
-
 async def _collection_members(client: ILOClient, collection_uri: str) -> list[dict[str, Any]]:
     return (await client.get(collection_uri)).get("Members", [])
 
@@ -101,7 +94,7 @@ async def fetch_network_versions(client: ILOClient) -> list[dict[str, str]]:
     found = []
     oem_info_map = await _build_oem_device_info_map(client)
     for adapter in await _member_resources(client, na_uri):
-        label = _network_adapter_display_name(adapter)
+        label = (adapter.get("Model") or adapter.get("Name") or "N/A").strip() or "N/A"
         controllers = adapter.get("Controllers", [])
         version = controllers[0].get("FirmwarePackageVersion", "N/A") if controllers else "N/A"
         base_row = {
@@ -322,7 +315,7 @@ async def _build_nic_label_map(client: ILOClient) -> dict[str, str]:
 
     label_map: dict[str, str] = {}
     for adapter in await _member_resources(client, na_uri):
-        model = _network_adapter_display_name(adapter)
+        model = (adapter.get("Model") or adapter.get("Name") or "NIC").strip()
         model = _PORT_RE.sub("", model).strip()
         slot_label = _adapter_location(adapter)
         short_model = re.sub(r"\W+$", "", model[:35])
@@ -409,10 +402,6 @@ async def _network_adapter_ports(client: ILOClient, adapter: dict[str, Any]) -> 
     return port_rows
 
 
-def _is_generic_nic_model(model: str) -> bool:
-    return bool(re.fullmatch(r"[A-Z]{2,}\d{4,}[A-Z0-9-]*", model.strip().upper()))
-
-
 def _display_link_status(status: str) -> str:
     normalized = status.replace("_", "").replace("-", "").strip().lower()
     if normalized == "linkup":
@@ -448,23 +437,6 @@ def _adapter_location(adapter: dict[str, Any], oem_info_map: dict[str, dict[str,
     if oem_info_map and serial:
         return oem_info_map.get(serial, {}).get("Location", "")
     return ""
-
-
-def _network_adapter_display_name(adapter: dict[str, Any]) -> str:
-    part_number = (adapter.get("PartNumber") or "").strip().upper()
-    model = (adapter.get("Model") or "").strip()
-    sku = (adapter.get("SKU") or "").strip()
-    name = (adapter.get("Name") or "").strip()
-
-    if part_number in _NIC_MARKETING_NAME_BY_PART:
-        return _NIC_MARKETING_NAME_BY_PART[part_number]
-    if model and not _is_generic_nic_model(model):
-        return model
-    if sku and sku.lower() != model.lower():
-        return sku
-    if model:
-        return model
-    return name or "N/A"
 
 
 async def fetch_nic_status(client: ILOClient) -> list[tuple[str, str]]:

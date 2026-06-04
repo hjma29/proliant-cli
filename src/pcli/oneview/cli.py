@@ -20,12 +20,6 @@ from pcli.common.display import get_console, get_output_mode, make_table, Output
 from pcli.common.runner import run_sync
 
 
-# ── async runner ─────────────────────────────────────────────────────────────
-
-def _run(coro):
-    return run_sync(coro)
-
-
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _load_client():
@@ -130,7 +124,7 @@ async def _async_servers_list(fields: list[str] | None) -> None:
 def _cmd_servers_list(args: argparse.Namespace) -> None:
     fields = [f.strip() for f in args.fields.split(",")] if args.fields else None
     try:
-        _run(_async_servers_list(fields))
+        run_sync(_async_servers_list(fields))
     except Exception as exc:
         get_console().print(f"[red]Error: {exc}[/red]")
         sys.exit(1)
@@ -206,9 +200,9 @@ async def _async_firmware_server(server_name: str) -> None:
 def _cmd_firmware_list(args: argparse.Namespace) -> None:
     try:
         if args.server:
-            _run(_async_firmware_server(args.server))
+            run_sync(_async_firmware_server(args.server))
         else:
-            _run(_async_firmware_fleet())
+            run_sync(_async_firmware_fleet())
     except Exception as exc:
         get_console().print(f"[red]Error: {exc}[/red]")
         sys.exit(1)
@@ -256,7 +250,7 @@ async def _async_networks_list() -> None:
 
 def _cmd_networks_list(args: argparse.Namespace) -> None:
     try:
-        _run(_async_networks_list())
+        run_sync(_async_networks_list())
     except Exception as exc:
         get_console().print(f"[red]Error: {exc}[/red]")
         sys.exit(1)
@@ -301,7 +295,7 @@ async def _async_networksets_list() -> None:
 
 def _cmd_networksets_list(args: argparse.Namespace) -> None:
     try:
-        _run(_async_networksets_list())
+        run_sync(_async_networksets_list())
     except Exception as exc:
         get_console().print(f"[red]Error: {exc}[/red]")
         sys.exit(1)
@@ -351,7 +345,7 @@ async def _async_uplinksets_list() -> None:
 
 def _cmd_uplinksets_list(args: argparse.Namespace) -> None:
     try:
-        _run(_async_uplinksets_list())
+        run_sync(_async_uplinksets_list())
     except Exception as exc:
         get_console().print(f"[red]Error: {exc}[/red]")
         sys.exit(1)
@@ -395,7 +389,7 @@ async def _async_profiles_list() -> None:
 
 def _cmd_profiles_list(args: argparse.Namespace) -> None:
     try:
-        _run(_async_profiles_list())
+        run_sync(_async_profiles_list())
     except Exception as exc:
         get_console().print(f"[red]Error: {exc}[/red]")
         sys.exit(1)
@@ -548,11 +542,11 @@ async def _async_describe_profile(name: str) -> None:
 def _cmd_describe(args: argparse.Namespace) -> None:
     try:
         if args.resource == "uplinkset":
-            _run(_async_describe_uplinkset(args.name))
+            run_sync(_async_describe_uplinkset(args.name))
         elif args.resource == "networkset":
-            _run(_async_describe_networkset(args.name))
+            run_sync(_async_describe_networkset(args.name))
         elif args.resource == "server-profile":
-            _run(_async_describe_profile(args.name))
+            run_sync(_async_describe_profile(args.name))
     except ValueError as exc:
         get_console().print(f"[red]{exc}[/red]")
         sys.exit(1)
@@ -570,7 +564,7 @@ def _cmd_report_memory(args: argparse.Namespace) -> None:
             with get_console().status("[dim]Fetching memory inventory across fleet…[/dim]"):
                 return await get_fleet_memory(client)
 
-    dimms = _run(_run_report())
+    dimms = run_sync(_run_report())
 
     if not dimms:
         get_console().print("[yellow]No memory inventory data returned.[/yellow]")

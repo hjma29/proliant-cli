@@ -276,6 +276,7 @@ def _cmd_list(args: argparse.Namespace) -> None:
 def _cmd_describe(args: argparse.Namespace) -> None:
     # Resolve doc_id: either explicit or via --model (latest result)
     doc_id = args.doc_id if args.doc_id else None
+    resolved_title: str | None = None
     if not doc_id:
         if not args.model:
             get_console().print(
@@ -293,8 +294,9 @@ def _cmd_describe(args: argparse.Namespace) -> None:
             get_console().print("[yellow]No QuickSpec found for that model.[/yellow]")
             sys.exit(1)
         doc_id = entries[0].doc_id
+        resolved_title = entries[0].title
         get_console().print(
-            f"[dim]Using latest: {doc_id} ({entries[0].title})[/dim]"
+            f"[dim]Using latest: {doc_id} ({resolved_title})[/dim]"
         )
 
     get_console().print(f"[dim]Fetching QuickSpec {doc_id}…[/dim]")
@@ -307,7 +309,7 @@ def _cmd_describe(args: argparse.Namespace) -> None:
     # ── JSON early return ─────────────────────────────────────────────────────
     if get_output_mode() == OutputMode.JSON:
         section_map = {s: filter_section(markdown, s) for s in sections}
-        print_json({"doc_id": doc_id, "title": getattr(args, "model", doc_id) or doc_id, "sections": section_map})
+        print_json({"doc_id": doc_id, "title": resolved_title or doc_id, "sections": section_map})
         return
 
     if args.list_sections:

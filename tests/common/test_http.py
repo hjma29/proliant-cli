@@ -23,11 +23,12 @@ class TestSafeJson:
         result = client._safe_json(response)
         assert result == {}
 
-    def test_returns_empty_dict_for_non_json_body(self):
+    def test_returns_raw_key_for_non_json_body(self):
         client = ConcreteClient.__new__(ConcreteClient)
         response = httpx.Response(200, content=b"not json", headers={"content-type": "text/plain"})
         result = client._safe_json(response)
-        assert result == {}
+        assert "raw" in result
+        assert "not json" in result["raw"]
 
 
 class TestErrorDetail:
@@ -37,11 +38,11 @@ class TestErrorDetail:
         detail = client._error_detail(response)
         assert "bad request" in detail
 
-    def test_falls_back_to_status_code_for_non_json(self):
+    def test_falls_back_to_text_for_non_json(self):
         client = ConcreteClient.__new__(ConcreteClient)
         response = httpx.Response(500, content=b"internal error", headers={"content-type": "text/plain"})
         detail = client._error_detail(response)
-        assert "500" in detail
+        assert "internal error" in detail
 
     def test_returns_string(self):
         client = ConcreteClient.__new__(ConcreteClient)

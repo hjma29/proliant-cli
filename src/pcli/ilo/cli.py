@@ -56,6 +56,20 @@ from pcli.ilo.config import (
     MAX_WORKERS,
     load_hosts,
 )
+from pcli.ilo.printers import (
+    _print_json_results,
+    _header_line,
+    print_ilo_table,
+    _print_component_table,
+    _print_raw_table,
+    print_disk_map_table,
+    print_fleet_table,
+    print_serial_table,
+    print_update_method_table,
+    print_full_table,
+    _print_fw_components,
+    _print_fw_queue,
+)
 
 FetchFn = Callable[[ILOClient], Awaitable[list[Any]]]
 
@@ -111,8 +125,6 @@ async def _run_parallel_async(hosts: list[dict], fetch_fn: FetchFn) -> list[tupl
     return await run_parallel(hosts, fetch_fn, session_factory=ilo_session, max_workers=MAX_WORKERS)
 
 
-def _print_json_results(what: str, results: list[tuple[str, str | None, list]]) -> None:
-    """Emit structured JSON for --json output mode (pipeable to jq/ConvertFrom-Json)."""
     output = []
     for host_name, error, rows in results:
         if error:

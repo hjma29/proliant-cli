@@ -179,7 +179,6 @@ async def _storage_controller_versions(client: ILOClient) -> list[tuple[str, str
 async def fetch_storage_versions(client: ILOClient) -> list[tuple[str, str]]:
     found = list(await _storage_controller_versions(client))
 
-    seen_ctrl_names = {name for name, _ in found}
     for storage in await _storage_members(client):
         for drive in await _resource_list(client, storage.get("Drives", [])):
             fw = drive.get("FirmwareVersion") or ""

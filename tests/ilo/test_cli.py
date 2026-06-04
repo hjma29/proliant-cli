@@ -3,8 +3,11 @@ CLI smoke tests — catch missing functions, broken dispatch tables,
 and argument parser regressions without needing a live iLO.
 """
 
-import pytest
+from argparse import Namespace
+from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 
 # ---------------------------------------------------------------------------
@@ -134,3 +137,69 @@ def test_parser_upgrade_dry_run_subcommand():
     parser = _build_parser()
     args = parser.parse_args(["upgrade", "clear", "--host", "srv1", "--dry-run"])
     assert args.dry_run is True
+
+
+def test_parser_init_command():
+    from pcli.ilo.cli import _build_parser
+    parser = _build_parser()
+    args = parser.parse_args(["init"])
+    assert args.command == "init"
+
+
+@pytest.mark.asyncio
+async def test_async_main_dispatches_init():
+    from pcli.ilo import cli
+
+    with patch("pcli.ilo.cli._run_init") as run_init:
+        await cli._async_main(Namespace(command="init"))
+
+    run_init.assert_called_once_with()
+
+
+def test_run_init_creates_user_config(monkeypatch, tmp_path):
+    from pcli.ilo import cli
+
+    config_home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", lambda: config_home)
+
+    with patch("rich.prompt.Confirm.ask", side_effect=[False]), \
+         patch("pcli.ilo.cli._open_in_editor") as open_editor:
+        cli._run_init()
+
+    dest = config_home / ".config" / "pcli" / "hosts-ilo.ini"
+    assert dest.exists()
+    assert "[defaults]" in dest.read_text()
+    open_editor.assert_not_called()
+
+
+class FakeILOClient:
+    def __init__(self, responses):
+        self.responses = responses
+
+    async def get_manager_uri(self):
+        return "/redfish/v1/Managers/1"
+
+    async def get(self, uri):
+        return self.responses[uri]
+
+
+@pytest.mark.asyncio
+async def test_manager_network_targets_discovers_interface_and_reset_action():
+    from pcli.ilo.cli import _manager_network_targets
+
+    client = FakeILOClient({
+        "/redfish/v1/Managers/1": {
+            "EthernetInterfaces": {"@odata.id": "/redfish/v1/Managers/1/EthernetInterfaces"},
+            "Actions": {
+                "#Manager.Reset": {"target": "/redfish/v1/Managers/1/Actions/Manager.Reset"}
+            },
+        },
+        "/redfish/v1/Managers/1/EthernetInterfaces": {
+            "Members": [{"@odata.id": "/redfish/v1/Managers/1/EthernetInterfaces/1"}]
+        },
+    })
+
+    interface_uri, reset_target = await _manager_network_targets(client)
+
+    assert interface_uri == "/redfish/v1/Managers/1/EthernetInterfaces/1"
+    assert reset_target == "/redfish/v1/Managers/1/Actions/Manager.Reset"

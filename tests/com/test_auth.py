@@ -33,6 +33,39 @@ class TestCOMSessionLoad:
         with pytest.raises(ValueError, match="Unknown region"):
             _ = s.base_url
 
+    def test_from_user_token_preserves_glp_credentials(self, monkeypatch):
+        from pcli.com import login
+
+        monkeypatch.setattr(login, "load_token", lambda: {
+            "access_token": "user-token",
+            "refresh_token": "refresh-token",
+            "expires_at": time.time() + 3600,
+            "region": "us-west",
+            "workspace_id": "ws-1",
+            "workspace_name": "Workspace",
+            "ccs_session": "cookie",
+            "glp_client_id": "glp-id",
+            "glp_client_secret": "glp-secret",
+        }, raising=False)
+
+        s = COMSession.from_user_token()
+
+        assert s.client_id == "glp-id"
+        assert s.client_secret == "glp-secret"
+        assert s._glp_client_id == "glp-id"
+        assert s._glp_client_secret == "glp-secret"
+
+    def test_glp_fallback_session_uses_stored_credentials(self):
+        s = COMSession(client_id="", client_secret="", region="us-west")
+        s._glp_client_id = "glp-id"
+        s._glp_client_secret = "glp-secret"
+
+        fallback = s.glp_fallback_session()
+
+        assert fallback is not None
+        assert fallback.client_id == "glp-id"
+        assert fallback.client_secret == "glp-secret"
+
 
 class TestCOMSessionURLs:
     def test_base_url(self):

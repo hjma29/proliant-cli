@@ -132,6 +132,24 @@ def _parse_fwpkg(filename: str, url: str) -> "FwComponent | None":
                            version_str=ver_str, version=ver_tuple,
                            chip_model=chip_model, software_ids=software_ids)
 
+    # HPE storage/controller pattern:
+    #   HPE_MR416i-p_Gen11_52.36.3-6584_A.fwpkg
+    #   HPE_NS204i_Gen11_1.2.14.1026_A.fwpkg
+    #   HPE_UBM6_Gen12_1.06_A.fwpkg
+    if parts[0] == "HPE" and len(parts) >= 4 and re.match(r'^Gen\d+$', parts[2], re.IGNORECASE):
+        model = parts[1]
+        ver_str = parts[3]
+        ver_tuple = _parse_version(ver_str)
+        software_ids = _fetch_software_ids(url)
+        return FwComponent(
+            filename=filename,
+            url=url,
+            prefix=f"HPE_{model}",
+            version_str=ver_str,
+            version=ver_tuple,
+            software_ids=software_ids,
+        )
+
     prefix = parts[0]
     ver_str = parts[1]
     ver_tuple = _parse_version(ver_str, prefix)
@@ -140,7 +158,7 @@ def _parse_fwpkg(filename: str, url: str) -> "FwComponent | None":
 
 
 def _fetch_software_ids(fwpkg_url: str) -> list[str]:
-    """Fetch Target GUIDs from the .json sidecar for a BCM NIC .fwpkg.
+    """Fetch Target GUIDs from the .json sidecar for a firmware package.
 
     The JSON sidecar contains Devices.Device[].Target entries — these are
     PLDM UUIDs that match the SoftwareId field in iLO's FirmwareInventory.
@@ -164,6 +182,9 @@ def _parse_version(ver_str: str, prefix: str = "") -> tuple:
     # iLO 6 special case: 3-digit no-dot build number like "174"
     if re.match(r'^\d{3}$', ver_str) and prefix.lower().startswith("ilo6"):
         return (int(ver_str[0]), int(ver_str[1:]))
+    dotted = re.search(r'\d+\.\d+(?:\.\d+)*', ver_str)
+    if dotted:
+        return tuple(int(n) for n in dotted.group(0).split("."))
     nums = re.findall(r'\d+', ver_str)
     return tuple(int(n) for n in nums) if nums else (0,)
 
@@ -197,6 +218,12 @@ def extract_bios_prefix(version_str: str) -> str | None:
     """
     m = re.match(r'^([A-Z]\d+)\b', version_str.strip())
     return m.group(1) if m else None
+
+
+def extract_storage_model_id(name: str) -> str | None:
+    """Extract the controller model token from a storage inventory name."""
+    m = re.search(r'\b(MR|SR|NS|UBM|P)\d+[A-Za-z0-9-]*\b', name, re.IGNORECASE)
+    return m.group(0) if m else None
 
 
 # ---------------------------------------------------------------------------
@@ -295,6 +322,12 @@ def find_upgrades(
             m = re.match(r'ilo\s*(\d+)', nl)
             if m:
                 sdr_comp = sdr_by_prefix.get(f"ilo{m.group(1)}")
+
+        # ── Storage controller packages: matched by model token (MR416i-p, NS204i, UBM6, ...)
+        elif sdr_comp is None:
+            storage_model = extract_storage_model_id(name)
+            if storage_model:
+                sdr_comp = sdr_by_prefix.get(f"hpe_{storage_model.lower()}")
 
         if sdr_comp is None:
             # NIC from NetworkAdapters feed with no matching SDR package: still show in table

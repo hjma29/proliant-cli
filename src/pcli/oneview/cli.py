@@ -150,7 +150,11 @@ async def _async_firmware_fleet() -> None:
         get_console().print("[yellow]No firmware data returned.[/yellow]")
         return
 
-    for entry in fleet:
+    # ── JSON early return ─────────────────────────────────────────────────────
+    if get_output_mode() == OutputMode.JSON:
+        print_json(fleet)
+        return
+
         server_name = entry["server_name"]
         fw_list = entry["firmware"]
 
@@ -180,6 +184,11 @@ async def _async_firmware_server(server_name: str) -> None:
         with get_console().status(f"[dim]Fetching firmware for {server_name}…[/dim]"):
             server = await get_server(client, server_name)
             fw_list = await get_server_firmware(client, server["uri"])
+
+    # ── JSON early return ─────────────────────────────────────────────────────
+    if get_output_mode() == OutputMode.JSON:
+        print_json({"server": server_name, "firmware": fw_list})
+        return
 
     table = make_table(
         f"[bold]{server_name}[/bold]  Firmware Inventory",
@@ -216,6 +225,11 @@ async def _async_networks_list() -> None:
 
     if not nets:
         get_console().print("[yellow]No ethernet networks found.[/yellow]")
+        return
+
+    # ── JSON early return ─────────────────────────────────────────────────────
+    if get_output_mode() == OutputMode.JSON:
+        print_json(nets)
         return
 
     table = make_table(
@@ -261,6 +275,11 @@ async def _async_networksets_list() -> None:
         get_console().print("[yellow]No network sets found.[/yellow]")
         return
 
+    # ── JSON early return ─────────────────────────────────────────────────────
+    if get_output_mode() == OutputMode.JSON:
+        print_json(sets)
+        return
+
     table = make_table(
         f"Network Sets  ({len(sets)} total)",
         ("Name",           {"min_width": 24, "no_wrap": True}),
@@ -299,6 +318,11 @@ async def _async_uplinksets_list() -> None:
 
     if not uplinks:
         get_console().print("[yellow]No uplink sets found.[/yellow]")
+        return
+
+    # ── JSON early return ─────────────────────────────────────────────────────
+    if get_output_mode() == OutputMode.JSON:
+        print_json(uplinks)
         return
 
     table = make_table(
@@ -344,6 +368,11 @@ async def _async_profiles_list() -> None:
 
     if not profiles:
         get_console().print("[yellow]No server profiles found.[/yellow]")
+        return
+
+    # ── JSON early return ─────────────────────────────────────────────────────
+    if get_output_mode() == OutputMode.JSON:
+        print_json(profiles)
         return
 
     table = make_table(
@@ -573,6 +602,9 @@ examples:
 """,
     )
 
+    parser.add_argument("--json", action="store_true", dest="json_output",
+                        help="Output as JSON (for piping/scripting)")
+
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
     sub.required = True
 
@@ -636,6 +668,8 @@ def main(argv: list[str] | None = None) -> None:
         parser = _build_parser()
 
     args = parser.parse_args(argv)
+    if getattr(args, "json_output", False):
+        set_output_mode(OutputMode.JSON)
     args.func(args)
 
 

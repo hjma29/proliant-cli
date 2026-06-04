@@ -14,6 +14,8 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
+import httpx
+
 T = TypeVar("T")
 
 # Default concurrency limit for parallel host queries
@@ -51,9 +53,12 @@ async def run_parallel(
                 async with session_factory(host) as client:
                     results = await fetch_fn(client)
                 return host["name"], None, results
+            except _connect_errors() as exc:
+                return host["name"], f"Unreachable: {exc}", []
+            except _timeout_errors() as exc:
+                return host["name"], f"Timeout: {exc}", []
             except Exception as exc:  # noqa: BLE001
-                err_type = "Unreachable" if "Connect" in type(exc).__name__ else "Error"
-                return host["name"], f"{err_type}: {exc}", []
+                return host["name"], f"Error: {exc}", []
 
     return list(await asyncio.gather(*(_query_one(h) for h in hosts)))
 

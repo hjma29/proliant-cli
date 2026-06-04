@@ -17,6 +17,18 @@ _PORT_RE = re.compile(r"\s*\b(?:\d+-port|dual[ -]port|quad[ -]port)\b", re.IGNOR
 _MODEL_STRIP_RE = re.compile(r"^\s*(?:HPE\s+)?(?:ProLiant\s+)?(?:Compute\s+)?", re.IGNORECASE)
 _EMPTY: list[tuple[str, str]] = [("N/A", "N/A")]
 FLEET_KEYS = ("Model", "iLO", "BIOS", "NIC-FW", "Storage-FW")
+_STORAGE_FIRMWARE_KEYWORDS = (
+    "sata controller",
+    "nvme",
+    "raid",
+    "storage controller",
+    "boot controller",
+    "smart array",
+    "hpe mr",
+    "hpe sr",
+    "hpe ns",
+    "hpe ubm",
+)
 async def _collection_members(client: ILOClient, collection_uri: str) -> list[dict[str, Any]]:
     return (await client.get(collection_uri)).get("Members", [])
 
@@ -133,8 +145,8 @@ async def _storage_members(client: ILOClient) -> list[dict[str, Any]]:
     return await _member_resources(client, storage_uri)
 
 
-async def fetch_storage_versions(client: ILOClient) -> list[tuple[str, str]]:
-    found = []
+async def _storage_controller_versions(client: ILOClient) -> list[tuple[str, str]]:
+    found: list[tuple[str, str]] = []
     seen_ctrl_names: set[str] = set()
 
     for storage in await _storage_members(client):
@@ -154,20 +166,25 @@ async def fetch_storage_versions(client: ILOClient) -> list[tuple[str, str]]:
                 found.append((name, fw))
                 seen_ctrl_names.add(name)
 
+    if found:
+        return found
+
+    for item in await _member_resources(client, await client.get_firmware_inventory_uri()):
+        name = item.get("Name", "")
+        if any(keyword in name.lower() for keyword in _STORAGE_FIRMWARE_KEYWORDS):
+            found.append((name, item.get("Version") or "N/A"))
+    return found
+
+
+async def fetch_storage_versions(client: ILOClient) -> list[tuple[str, str]]:
+    found = list(await _storage_controller_versions(client))
+
+    seen_ctrl_names = {name for name, _ in found}
+    for storage in await _storage_members(client):
         for drive in await _resource_list(client, storage.get("Drives", [])):
             fw = drive.get("FirmwareVersion") or ""
             if fw:
                 found.append((drive.get("Name", "N/A"), fw))
-
-    if not found:
-        storage_keywords = (
-            "sata controller", "nvme", "raid", "storage controller", "boot controller",
-            "smart array", "mr4", "mr8", "p408", "p816",
-        )
-        for item in await _member_resources(client, await client.get_firmware_inventory_uri()):
-            name = item.get("Name", "")
-            if any(keyword in name.lower() for keyword in storage_keywords):
-                found.append((name, item.get("Version") or "N/A"))
 
     return found or _EMPTY
 
@@ -744,22 +761,8 @@ async def fetch_fleet_summary(client: ILOClient) -> list[tuple[str, str]]:
             controllers = adapter.get("Controllers", [])
             nic_ver = (controllers[0].get("FirmwarePackageVersion", "N/A") if controllers else "N/A") or "N/A"
 
-    storage_ver = "N/A"
-    storage_uri = system.get("Storage", {}).get("@odata.id")
-    if storage_uri:
-        s_members = await _collection_members(client, storage_uri)
-        if s_members:
-            storage = await client.get(s_members[0]["@odata.id"])
-            controllers = storage.get("StorageControllers", [])
-            if controllers:
-                storage_ver = controllers[0].get("FirmwareVersion", "N/A") or "N/A"
-            else:
-                ctrl_link = (storage.get("Controllers") or {}).get("@odata.id")
-                if ctrl_link:
-                    ctrl_members = await _collection_members(client, ctrl_link)
-                    if ctrl_members:
-                        ctrl = await client.get(ctrl_members[0]["@odata.id"])
-                        storage_ver = ctrl.get("FirmwareVersion", "N/A") or "N/A"
+    storage_entries = await _storage_controller_versions(client)
+    storage_ver = storage_entries[0][1] if storage_entries else "N/A"
 
     return [
         ("Model",      model),

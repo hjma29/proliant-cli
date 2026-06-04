@@ -293,8 +293,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser(
         "init",
-        help="Create a starter hosts-ilo.ini at ~/.config/pcli/ilo/hosts-ilo.ini",
-        description="Create ~/.config/pcli/ilo/hosts-ilo.ini with example entries to fill in.",
+        help="Create a starter hosts-ilo.ini at ~/.config/pcli/hosts-ilo.ini",
+        description="Create ~/.config/pcli/hosts-ilo.ini with example entries to fill in.",
     )
 
     report_p = subparsers.add_parser("report", help="Fleet hardware reports")
@@ -429,6 +429,7 @@ _HOSTS_INI_TEMPLATE = (
 
 
 def _write_hosts_ini(dest: "Path") -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(_HOSTS_INI_TEMPLATE)
 
 
@@ -446,24 +447,51 @@ def _open_in_editor(path: "Path") -> None:
             subprocess.run([editor, str(path)], check=False)
     except Exception:  # intentional: editor launch is best-effort; don't crash the CLI
         pass
+
+
+def _run_init() -> None:
     from pathlib import Path
     from rich.console import Console
     from rich.prompt import Confirm
 
     console = Console()
-    dest = Path.cwd() / "hosts-ilo.ini"
+    dest = Path.home() / ".config" / "pcli" / "hosts-ilo.ini"
     if dest.exists():
         console.print(f"[green]Already exists:[/green] [bold]{dest}[/bold]")
         console.print("  Edit it to add or update your servers.")
         if Confirm.ask("\n[green]Open it in your default editor?[/green]", default=True):
             _open_in_editor(dest)
         return
+
     _write_hosts_ini(dest)
     console.print(f"\n[green]✓[/green] Created: [bold]{dest}[/bold]")
     console.print("  Fill in your server addresses and credentials.\n")
     console.print("  Then try: [bold]pcli ilo list firmwares[/bold]\n")
     if Confirm.ask("[green]Open it in your default editor now?[/green]", default=True):
         _open_in_editor(dest)
+
+
+async def _manager_network_targets(client: ILOClient) -> tuple[str, str]:
+    manager_uri = await client.get_manager_uri()
+    manager = await client.get(manager_uri)
+
+    eth_collection_uri = manager.get("EthernetInterfaces", {}).get("@odata.id")
+    if not eth_collection_uri:
+        raise RuntimeError("Manager has no EthernetInterfaces collection")
+
+    members = (await client.get(eth_collection_uri)).get("Members", [])
+    if not members:
+        raise RuntimeError("Manager EthernetInterfaces collection is empty")
+
+    interface_uri = members[0].get("@odata.id")
+    if not interface_uri:
+        raise RuntimeError("Manager EthernetInterface member is missing @odata.id")
+
+    reset_target = (manager.get("Actions") or {}).get("#Manager.Reset", {}).get("target")
+    if not reset_target:
+        raise RuntimeError("Manager.Reset action is not available on this iLO")
+
+    return interface_uri, reset_target
 
 
 async def _run_set_dhcp(args: argparse.Namespace) -> None:
@@ -479,8 +507,9 @@ async def _run_set_dhcp(args: argparse.Namespace) -> None:
         name = host["name"]
         try:
             async with ilo_session(host) as client:
+                interface_uri, reset_target = await _manager_network_targets(client)
                 # Check current state first
-                data = await client.get("/redfish/v1/Managers/1/EthernetInterfaces/1")
+                data = await client.get(interface_uri)
                 ni = (data.get("IPv4Addresses") or [{}])[0]
                 origin = ni.get("AddressOrigin", "Unknown")
                 current_ip = ni.get("Address", "?")
@@ -525,7 +554,7 @@ async def _run_set_dhcp(args: argparse.Namespace) -> None:
                             }
                         },
                     }
-                    result = await client.patch("/redfish/v1/Managers/1/EthernetInterfaces/1", payload)
+                    result = await client.patch(interface_uri, payload)
                     # iLO wraps success in an "error" envelope with MessageId containing "Success"
                     ext = result.get("error", {})
                     msgs = ext.get("@Message.ExtendedInfo", [])
@@ -538,10 +567,7 @@ async def _run_set_dhcp(args: argparse.Namespace) -> None:
 
                 if do_reset:
                     print(f"[{name}] ✓ DHCP staged. Resetting iLO — current IP {current_ip} will be lost...")
-                    await client.post(
-                        "/redfish/v1/Managers/1/Actions/Manager.Reset",
-                        {"ResetType": "GracefulRestart"},
-                    )
+                    await client.post(reset_target, {"ResetType": "GracefulRestart"})
                     print(f"[{name}] iLO reset triggered. It will come up with a DHCP-assigned IP.")
                 else:
                     print(f"[{name}] ✓ DHCP staged. Run with --reset to apply (requires iLO restart).")

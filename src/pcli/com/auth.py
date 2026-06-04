@@ -76,6 +76,8 @@ class COMSession:
     _workspace_id:  str   = field(default="",    init=False, repr=False)
     _workspace_name: str  = field(default="",    init=False, repr=False)
     _refresh_token: str   = field(default="",    init=False, repr=False)
+    _glp_client_id: str   = field(default="",    init=False, repr=False)
+    _glp_client_secret: str = field(default="",  init=False, repr=False)
 
     def __post_init__(self):
         # asyncio.Lock must be created inside an event loop context,
@@ -148,6 +150,8 @@ class COMSession:
         if glp_cid and glp_sec:
             sess = cls(client_id=glp_cid, client_secret=glp_sec,
                        region=data.get("region", "us-west"))
+            sess._glp_client_id = glp_cid
+            sess._glp_client_secret = glp_sec
             sess._workspace_id = data.get("workspace_id", "")
             sess._workspace_name = data.get("workspace_name", "")
             sess._ccs_session = data.get("ccs_session", "")
@@ -170,6 +174,8 @@ class COMSession:
         sess._ccs_session = data.get("ccs_session", "")
         sess._workspace_id = data.get("workspace_id", "")
         sess._workspace_name = data.get("workspace_name", "")
+        sess._glp_client_id = glp_cid
+        sess._glp_client_secret = glp_sec
         if okta_expired:
             sess._refresh_token = ""
         else:

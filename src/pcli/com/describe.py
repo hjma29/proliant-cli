@@ -135,7 +135,7 @@ async def run_describe(session: COMSession, target: str) -> None:
         get_console().print(gpu_t)
 
     # ── Memory (via iLO Redfish if creds available, else COM total) ───────────
-    _render_memory(hw, bmc)
+    await _render_memory(hw, bmc)
 
     # ── Firmware inventory ────────────────────────────────────────────────────
     if fw_items:
@@ -149,7 +149,7 @@ async def run_describe(session: COMSession, target: str) -> None:
         get_console().print(fw_t)
 
 
-def _render_memory(hw: dict, bmc: dict) -> None:
+async def _render_memory(hw: dict, bmc: dict) -> None:
     """Render memory section: DIMM detail via iLO if available, else COM total."""
     from rich import box as rich_box
     from rich.table import Table
@@ -160,8 +160,6 @@ def _render_memory(hw: dict, bmc: dict) -> None:
             from pcli.ilo.config import load_hosts
             from pcli.ilo.client import ILOClient
             from pcli.ilo.inventory import fetch_memory_population
-            from pcli.common.runner import run_sync
-            import asyncio
 
             ilo_creds = None
             try:
@@ -179,11 +177,8 @@ def _render_memory(hw: dict, bmc: dict) -> None:
                 pass
 
             if ilo_creds:
-                async def _fetch() -> list:
-                    async with ILOClient(ilo_creds["url"], ilo_creds["username"], ilo_creds["password"]) as ilo:
-                        return await fetch_memory_population(ilo)
-
-                dimms = asyncio.get_event_loop().run_until_complete(_fetch())
+                async with ILOClient(ilo_creds["url"], ilo_creds["username"], ilo_creds["password"]) as ilo:
+                    dimms = await fetch_memory_population(ilo)
                 if dimms:
                     populated  = [d for d in dimms if d["present"]]
                     empty_cnt  = sum(1 for d in dimms if not d["present"])

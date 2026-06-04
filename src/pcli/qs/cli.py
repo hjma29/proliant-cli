@@ -304,6 +304,12 @@ def _cmd_describe(args: argparse.Namespace) -> None:
         get_console().print(f"[red]Error:[/red] {exc}", highlight=False)
         sys.exit(1)
 
+    # ── JSON early return ─────────────────────────────────────────────────────
+    if get_output_mode() == OutputMode.JSON:
+        section_map = {s: filter_section(markdown, s) for s in sections}
+        print_json({"doc_id": doc_id, "title": getattr(args, "model", doc_id) or doc_id, "sections": section_map})
+        return
+
     if args.list_sections:
         get_console().print("[bold]Available sections:[/bold]")
         for s in sections:

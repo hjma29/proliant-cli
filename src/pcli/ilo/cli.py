@@ -56,6 +56,7 @@ from pcli.ilo.config import (
     MAX_WORKERS,
     load_hosts,
 )
+from pcli.ilo.describe import run_describe
 from pcli.ilo.printers import (
     _print_json_results,
     _header_line,
@@ -70,6 +71,8 @@ from pcli.ilo.printers import (
     _print_fw_components,
     _print_fw_queue,
 )
+from pcli.ilo.reports import run_report_cpu, run_report_gpu, run_report_memory
+from pcli.ilo.upgrade import run_fw_upgrade, run_upgrade_action
 
 FetchFn = Callable[[ILOClient], Awaitable[list[Any]]]
 

@@ -259,6 +259,7 @@ iLO 6 `HttpPushUri` multipart upload (`/cgi-bin/uploadFile`) often fails with em
   - `228.1.111.0` installed; SDR has `235.1.164.14` (upgrade available)
   - OCP3 NIC: **NOT in FirmwareInventory** on iLO 6 (no PLDM channel)
   - Only upgradeble via in-band `bnxtnvm` OS tool
+  - `NetworkAdapters[].Location` is blank on iLO 6; GUI slot label comes from HPE OEM `Chassis/Devices` (`Location: OCP 3.0 Slot 15`)
 - **COM status**: Permanently blocked — `ProductID=NA` (internal test unit, no supply chain record)
 - dl380 iLO had `Gateway: 0.0.0.0` (fixed May 2026 via `ilorest load --force_network_config`)
 

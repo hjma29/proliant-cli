@@ -16,7 +16,7 @@ import sys
 
 from rich import box
 
-from pcli.common.display import get_console, make_table, print_memory_report
+from pcli.common.display import get_console, get_output_mode, make_table, OutputMode, print_json, print_memory_report, set_output_mode
 from pcli.common.runner import run_sync
 
 
@@ -79,7 +79,11 @@ async def _async_servers_list(fields: list[str] | None) -> None:
         get_console().print("[yellow]No servers found in OneView.[/yellow]")
         return
 
-    # Default columns (ilo_ip omitted for Synergy — always blank)
+    # ── JSON early return ─────────────────────────────────────────────────────
+    if get_output_mode() == OutputMode.JSON:
+        print_json(servers)
+        return
+
     all_fields = ["name", "model", "serial", "ilo", "power", "state", "profile"]
     show = fields if fields else all_fields
 

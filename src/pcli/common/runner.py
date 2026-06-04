@@ -53,9 +53,9 @@ async def run_parallel(
                 async with session_factory(host) as client:
                     results = await fetch_fn(client)
                 return host["name"], None, results
-            except _connect_errors() as exc:
+            except httpx.ConnectError as exc:
                 return host["name"], f"Unreachable: {exc}", []
-            except _timeout_errors() as exc:
+            except httpx.TimeoutException as exc:
                 return host["name"], f"Timeout: {exc}", []
             except Exception as exc:  # noqa: BLE001
                 return host["name"], f"Error: {exc}", []

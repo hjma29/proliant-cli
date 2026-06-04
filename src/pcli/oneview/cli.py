@@ -15,7 +15,6 @@ import sys
 
 
 from rich import box
-from rich.table import Table
 
 from pcli.common.display import get_console, make_table, print_memory_report
 from pcli.common.runner import run_sync
@@ -438,13 +437,17 @@ async def _async_describe_networkset(name: str) -> None:
         title="Network Set", border_style="cyan",
     ))
 
-    net_table = Table(title=f"Member Networks ({len(s['networks'])})", box=box.SIMPLE_HEAD, header_style="bold")
-    net_table.add_column("Name",    min_width=28, no_wrap=True)
-    net_table.add_column("VLAN",    justify="right", no_wrap=True)
-    net_table.add_column("Type",    no_wrap=True)
-    net_table.add_column("Purpose", no_wrap=True)
-    net_table.add_column("Status",  justify="center", no_wrap=True)
-    net_table.add_column("Native",  justify="center", no_wrap=True)
+    net_table = make_table(
+        f"Member Networks ({len(s['networks'])})",
+        ("Name",    {"min_width": 28, "no_wrap": True}),
+        ("VLAN",    {"justify": "right", "no_wrap": True}),
+        ("Type",    {"no_wrap": True}),
+        ("Purpose", {"no_wrap": True}),
+        ("Status",  {"justify": "center", "no_wrap": True}),
+        ("Native",  {"justify": "center", "no_wrap": True}),
+        box_style=box.SIMPLE_HEAD,
+        header_style="bold",
+    )
     for n in s["networks"]:
         vlan = str(n["vlan"]) if n["vlan"] else "—"
         net_table.add_row(
@@ -490,12 +493,16 @@ async def _async_describe_profile(name: str) -> None:
     ))
 
     if p["connections"]:
-        conn_table = Table(title="Connections", box=box.SIMPLE_HEAD, header_style="bold")
-        conn_table.add_column("ID",       justify="center")
-        conn_table.add_column("Name",     min_width=16, no_wrap=True)
-        conn_table.add_column("Network",  no_wrap=True)
-        conn_table.add_column("Function", no_wrap=True)
-        conn_table.add_column("Speed",    no_wrap=True)
+        conn_table = make_table(
+            "Connections",
+            ("ID",       {"justify": "center"}),
+            ("Name",     {"min_width": 16, "no_wrap": True}),
+            ("Network",  {"no_wrap": True}),
+            ("Function", {"no_wrap": True}),
+            ("Speed",    {"no_wrap": True}),
+            box_style=box.SIMPLE_HEAD,
+            header_style="bold",
+        )
         for c in p["connections"]:
             conn_table.add_row(
                 str(c.get("id", "")), c.get("name", ""),

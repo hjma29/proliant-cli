@@ -515,32 +515,22 @@ async def _async_describe_profile(name: str) -> None:
         get_console().print(conn_table)
 
 
-def _cmd_describe(args: argparse.Namespace) -> None:
-    try:
-        if args.resource == "uplinkset":
-            run_sync(_async_describe_uplinkset(args.name))
-        elif args.resource == "networkset":
-            run_sync(_async_describe_networkset(args.name))
-        elif args.resource == "server-profile":
-            run_sync(_async_describe_profile(args.name))
-    except ValueError as exc:
-        get_console().print(f"[red]{exc}[/red]")
-        sys.exit(1)
-    except Exception as exc:
-        get_console().print(f"[red]Error: {exc}[/red]")
-        sys.exit(1)
+async def _cmd_describe(args: argparse.Namespace) -> None:
+    if args.resource == "uplinkset":
+        await _async_describe_uplinkset(args.name)
+    elif args.resource == "networkset":
+        await _async_describe_networkset(args.name)
+    elif args.resource == "server-profile":
+        await _async_describe_profile(args.name)
 
 
-def _cmd_report_memory(args: argparse.Namespace) -> None:
+async def _cmd_report_memory(args: argparse.Namespace) -> None:
     from pcli.oneview.servers import get_fleet_memory
     from pcli.com.inventory import aggregate_by_part_number
 
-    async def _run_report():
-        async with _load_client() as client:
-            with get_console().status("[dim]Fetching memory inventory across fleet…[/dim]"):
-                return await get_fleet_memory(client)
-
-    dimms = run_sync(_run_report())
+    async with _load_client() as client:
+        with get_console().status("[dim]Fetching memory inventory across fleet…[/dim]"):
+            dimms = await get_fleet_memory(client)
 
     if not dimms:
         get_console().print("[yellow]No memory inventory data returned.[/yellow]")
@@ -640,7 +630,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     if getattr(args, "json_output", False):
         set_output_mode(OutputMode.JSON)
-    args.func(args)
+    run_sync(args.func(args))
 
 
 if __name__ == "__main__":

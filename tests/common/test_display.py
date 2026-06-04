@@ -53,7 +53,7 @@ class TestMakeTable:
 
     def test_correct_column_count(self):
         t = make_table("T", ("A", {}), ("B", {}), ("C", {}))
-        assert t.column_count == 3
+        assert len(t.columns) == 3
 
     def test_column_kwargs_applied(self):
         t = make_table("T", ("Name", {"no_wrap": True, "min_width": 20}))

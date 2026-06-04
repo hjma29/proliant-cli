@@ -17,12 +17,15 @@ from rich.console import Console
 from rich import box
 from rich.table import Table
 
+from pcli.common.display import print_memory_report
+from pcli.common.runner import run_sync
+
 console = Console()
 
 # ── async runner ─────────────────────────────────────────────────────────────
 
 def _run(coro):
-    return asyncio.run(coro)
+    return run_sync(coro)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -526,8 +529,6 @@ def _cmd_describe(args: argparse.Namespace) -> None:
 
 
 def _cmd_report_memory(args: argparse.Namespace) -> None:
-    from rich.table import Table
-    from rich import box as rich_box
     from pcli.oneview.servers import get_fleet_memory
     from pcli.com.inventory import aggregate_by_part_number
 
@@ -543,35 +544,7 @@ def _cmd_report_memory(args: argparse.Namespace) -> None:
         return
 
     rows = aggregate_by_part_number(dimms)
-    total_dimms = sum(r["count"] for r in rows)
-    total_tb = sum(r["count"] * r["capacity_gb"] for r in rows) / 1024
-
-    table = Table(
-        title=f"Memory Part-Number Breakdown  ({total_dimms} DIMMs  /  {total_tb:.1f} TB total)",
-        box=rich_box.ROUNDED,
-        show_header=True,
-        header_style="bold cyan",
-    )
-    table.add_column("HPE Part Number", min_width=14, no_wrap=True)
-    table.add_column("Vendor",          min_width=12, no_wrap=True)
-    table.add_column("Capacity",        justify="right", no_wrap=True)
-    table.add_column("Type",            no_wrap=True)
-    table.add_column("Speed",           justify="right", no_wrap=True)
-    table.add_column("Count",           justify="right", no_wrap=True, style="bold")
-    table.add_column("Total",           justify="right", no_wrap=True)
-    table.add_column("Servers",         justify="right", no_wrap=True, style="dim")
-
-    for r in rows:
-        cap = f"{r['capacity_gb']} GB" if r["capacity_gb"] else "—"
-        speed = f"{r['speed_mts']} MT/s" if r["speed_mts"] else "—"
-        total_cap_gb = r["count"] * r["capacity_gb"]
-        total_cap = f"{total_cap_gb} GB" if total_cap_gb < 1024 else f"{total_cap_gb/1024:.1f} TB"
-        table.add_row(
-            r["hpe_pn"], r["vendor"], cap, r["type"], speed,
-            str(r["count"]), total_cap, str(len(r["servers"])),
-        )
-
-    console.print(table)
+    print_memory_report(rows, source="OneView")
 
 
 # ── argument parser ───────────────────────────────────────────────────────────

@@ -343,60 +343,29 @@ def print_full_table(results: list[tuple[str, str | None, list]]) -> None:
 
 
 async def _run_report_memory(args: argparse.Namespace) -> None:
-    from rich.console import Console
-    from rich.table import Table
-    from rich import box as rich_box
     from pcli.com.inventory import aggregate_by_part_number
 
-    console = Console()
-    hosts = _load_hosts_or_exit(getattr(args, "host", None))
+    c = get_console()
+    hosts = _load_hosts_or_exit(getattr(args, "host", None), getattr(args, "hosts_from", None))
 
-    with console.status("[dim]Fetching memory inventory across fleet…[/dim]"):
+    with c.status("[dim]Fetching memory inventory across fleet…[/dim]"):
         results = await _run_parallel_async(hosts, inventory.fetch_memory_report_data)
 
     all_dimms: list[dict] = []
     for server_name, error, dimms in results:
         if error:
-            console.print(f"[yellow]  {server_name}: {error}[/yellow]")
+            c.print(f"[yellow]  {server_name}: {error}[/yellow]")
             continue
         for d in dimms:
             d["server"] = server_name
             all_dimms.append(d)
 
     if not all_dimms:
-        console.print("[yellow]No memory inventory data returned.[/yellow]")
+        c.print("[yellow]No memory inventory data returned.[/yellow]")
         return
 
     rows = aggregate_by_part_number(all_dimms)
-    total_dimms = sum(r["count"] for r in rows)
-    total_tb = sum(r["count"] * r["capacity_gb"] for r in rows) / 1024
-
-    table = Table(
-        title=f"Memory Part-Number Breakdown  ({total_dimms} DIMMs  /  {total_tb:.1f} TB total)",
-        box=rich_box.ROUNDED,
-        show_header=True,
-        header_style="bold cyan",
-    )
-    table.add_column("HPE Part Number", min_width=14, no_wrap=True)
-    table.add_column("Vendor",          min_width=12, no_wrap=True)
-    table.add_column("Capacity",        justify="right", no_wrap=True)
-    table.add_column("Type",            no_wrap=True)
-    table.add_column("Speed",           justify="right", no_wrap=True)
-    table.add_column("Count",           justify="right", no_wrap=True, style="bold")
-    table.add_column("Total",           justify="right", no_wrap=True)
-    table.add_column("Servers",         justify="right", no_wrap=True, style="dim")
-
-    for r in rows:
-        cap = f"{r['capacity_gb']} GB" if r["capacity_gb"] else "—"
-        speed = f"{r['speed_mts']} MT/s" if r["speed_mts"] else "—"
-        total_cap_gb = r["count"] * r["capacity_gb"]
-        total_cap = f"{total_cap_gb} GB" if total_cap_gb < 1024 else f"{total_cap_gb/1024:.1f} TB"
-        table.add_row(
-            r["hpe_pn"], r["vendor"], cap, r["type"], speed,
-            str(r["count"]), total_cap, str(len(r["servers"])),
-        )
-
-    console.print(table)
+    print_memory_report(rows, source="iLO")
 
 
 def _build_parser() -> argparse.ArgumentParser:

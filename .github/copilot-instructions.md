@@ -89,7 +89,7 @@ pcli com get servers  (planned)
 
 **2b. Gen12 NIC labels can differ between Redfish fields for the same Broadcom family**
 - `NetworkAdapters[].Model` may be a generic silicon name like `BCM57414`, while the GUI shows an HPE marketing name such as `Broadcom P225p`.
-- For user-facing inventory, prefer the most descriptive label available (`PartNumber` mapping or `SKU`) and always include slot location.
+- For `pcli ilo list network`, preserve the raw Redfish `Model`/`Name` for the `Name` column and use `PartNumber` + `Location` to disambiguate cards.
 - Example observed on `dl345-gen12`: OCP card reports `BCM57414` + `P10113-001`; PCIe card reports `BCM57414` + `P26264-001` (GUI labels it `P225p`).
 
 **2c. iLO 6 NIC location can live in the HPE OEM Devices collection**

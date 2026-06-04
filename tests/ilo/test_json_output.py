@@ -80,7 +80,7 @@ class TestIloJsonOutput:
 
         fake_network_data = [
             {
-                "Name": "Broadcom P225p NetXtreme-E Dual-port 10Gb/25Gb Ethernet PCIe Adapter - NIC",
+                "Name": "BCM57414",
                 "PartNumber": "P26264-001",
                 "Version": "235.1.164.14",
                 "Location": "PCIE Slot 6",
@@ -100,7 +100,7 @@ class TestIloJsonOutput:
         assert result == [
             {
                 "Server": "dl325-gen12",
-                "Name": "Broadcom P225p NetXtreme-E Dual-port 10Gb/25Gb Ethernet PCIe Adapter - NIC",
+                "Name": "BCM57414",
                 "PartNumber": "P26264-001",
                 "Version": "235.1.164.14",
                 "Location": "PCIE Slot 6",

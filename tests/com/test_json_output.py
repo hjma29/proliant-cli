@@ -57,10 +57,6 @@ def _make_device():
     return Device.from_api(FAKE_DEVICE_RAW)
 
 
-def _make_workspace():
-    return Workspace.from_api(FAKE_WORKSPACE_RAW)
-
-
 def _run_com_main(argv: list[str], capsys) -> dict | list:
     """Run pcli com main() with given argv and return parsed stdout JSON."""
     from pcli.com import cli
@@ -120,7 +116,7 @@ class TestComJsonWorkspaces:
         captured = capsys.readouterr()
         result = json.loads(captured.out)
         assert isinstance(result, list)
-        assert result[0]["name"] == "lab-workspace"
+        assert result[0]["company_name"] == "lab-workspace"
 
 
 class TestComParserJson:

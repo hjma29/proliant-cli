@@ -168,10 +168,8 @@ def _build_parser() -> argparse.ArgumentParser:
     def _host_completer(**_kwargs):
         try:
             return [host["name"] for host in load_hosts()]
-        except Exception:
+        except Exception:  # intentional: tab completion must never print to stdout
             return []
-
-    def _add_host(p: argparse.ArgumentParser, required: bool = False) -> None:
         p.add_argument(
             "--host", metavar="NAME[,NAME,...]", required=required,
             help="Target host(s) by name — comma-separated for multiple",
@@ -461,11 +459,8 @@ def _open_in_editor(path: "Path") -> None:
         else:
             editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "xdg-open"
             subprocess.run([editor, str(path)], check=False)
-    except Exception:
+    except Exception:  # intentional: editor launch is best-effort; don't crash the CLI
         pass
-
-
-def _run_init() -> None:
     from pathlib import Path
     from rich.console import Console
     from rich.prompt import Confirm

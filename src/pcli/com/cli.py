@@ -621,7 +621,7 @@ async def _cmd_describe_server(args: argparse.Namespace) -> None:
                             ilo_creds = h
                             break
             except Exception:
-                pass
+                pass  # intentional: iLO creds lookup is best-effort; fallback to COM data
 
             if ilo_creds:
                 async with ILOClient(ilo_creds["url"], ilo_creds["username"], ilo_creds["password"]) as ilo:

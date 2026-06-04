@@ -81,8 +81,12 @@ class TestIloJsonOutput:
         fake_network_data = [
             {
                 "Name": "Broadcom P225p NetXtreme-E Dual-port 10Gb/25Gb Ethernet PCIe Adapter - NIC",
+                "PartNumber": "P26264-001",
                 "Version": "235.1.164.14",
                 "Location": "PCIE Slot 6",
+                "Port": "p1",
+                "MACAddress": "bc:97:e1:e3:35:00",
+                "LinkStatus": "Link Up",
             }
         ]
         fake_results = [(FAKE_HOST["name"], None, fake_network_data)]
@@ -97,8 +101,12 @@ class TestIloJsonOutput:
             {
                 "Server": "dl325-gen12",
                 "Name": "Broadcom P225p NetXtreme-E Dual-port 10Gb/25Gb Ethernet PCIe Adapter - NIC",
+                "PartNumber": "P26264-001",
                 "Version": "235.1.164.14",
                 "Location": "PCIE Slot 6",
+                "Port": "p1",
+                "MACAddress": "bc:97:e1:e3:35:00",
+                "LinkStatus": "Link Up",
             }
         ]
 

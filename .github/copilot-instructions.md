@@ -92,6 +92,11 @@ pcli com get servers  (planned)
 - For user-facing inventory, prefer the most descriptive label available (`PartNumber` mapping or `SKU`) and always include slot location.
 - Example observed on `dl345-gen12`: OCP card reports `BCM57414` + `P10113-001`; PCIe card reports `BCM57414` + `P26264-001` (GUI labels it `P225p`).
 
+**2c. iLO 6 NIC location can live in the HPE OEM Devices collection**
+- Some iLO 6 systems leave `NetworkAdapters[].Location` empty/null even though the GUI shows a slot label.
+- Fallback source: `Chassis.Oem.Hpe.Links.Devices` (for example `/redfish/v1/Chassis/1/Devices/2/` → `Location: "OCP 3.0 Slot 15"`).
+- Match the OEM device entry back to the NIC by serial number when the standard Redfish adapter location is blank.
+
 **3. BCM NIC SDR filenames have inverted format (version FIRST)**
 - Normal: `{model}_{version}.fwpkg` — BCM/NIC: `BCM{version}_{chipmodel}.fwpkg`
 - Example: `BCM235.1.164.14_BCM957414A4142HC.fwpkg`

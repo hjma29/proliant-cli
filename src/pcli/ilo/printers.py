@@ -90,10 +90,14 @@ def _print_component_table(results: list[tuple[str, str | None, list]], title: s
 
 
 def print_network_table(results: list[tuple[str, str | None, list]]) -> None:
-    normalized: list[tuple[str, str | None, list[tuple[str, str, str]]]] = []
+    normalized: list[tuple[str, str | None, list[tuple[str, str, str, str, str, str, str]]]] = []
     server_w = len("Server")
-    name_w = len("Name")
+    name_w = 44
+    part_w = len("Part #")
     loc_w = len("Location")
+    port_w = len("Port")
+    mac_w = len("MAC")
+    link_w = len("Link")
     ver_w = len("Version")
 
     for host_name, error, rows in sorted(results, key=lambda r: r[0]):
@@ -102,32 +106,51 @@ def print_network_table(results: list[tuple[str, str | None, list]]) -> None:
             normalized.append((host_name, error, []))
             continue
 
-        norm_rows: list[tuple[str, str, str]] = []
+        norm_rows: list[tuple[str, str, str, str, str, str, str]] = []
         for row in rows:
             if isinstance(row, dict):
                 name = str(row.get("Name", "N/A"))
+                part = str(row.get("PartNumber", "N/A"))
                 location = str(row.get("Location", "N/A"))
+                port = str(row.get("Port", "N/A"))
+                mac = str(row.get("MACAddress", "N/A"))
+                link = str(row.get("LinkStatus", "N/A"))
                 version = str(row.get("Version", row.get("Value", "N/A")))
             elif isinstance(row, (list, tuple)) and len(row) == 2:
                 name = str(row[0])
                 version = str(row[1])
+                part = "N/A"
                 location = "N/A"
+                port = "N/A"
+                mac = "N/A"
+                link = "N/A"
             else:
                 name = str(row)
+                part = "N/A"
                 location = "N/A"
+                port = "N/A"
+                mac = "N/A"
+                link = "N/A"
                 version = "N/A"
-            name_w = max(name_w, len(name))
+            part_w = max(part_w, len(part))
             loc_w = max(loc_w, len(location))
+            port_w = max(port_w, len(port))
+            mac_w = max(mac_w, len(mac))
+            link_w = max(link_w, len(link))
             ver_w = max(ver_w, len(version))
-            norm_rows.append((name, location, version))
+            norm_rows.append((name, part, location, port, mac, link, version))
         normalized.append((host_name, None, norm_rows))
 
-    total_w = server_w + name_w + loc_w + ver_w + 9
+    total_w = server_w + name_w + part_w + loc_w + port_w + mac_w + link_w + ver_w + 21
     print("--- NIC Firmware ---")
     print(
         f"{'Server':<{server_w}}   "
         f"{'Name':<{name_w}}   "
+        f"{'Part #':<{part_w}}   "
         f"{'Location':<{loc_w}}   "
+        f"{'Port':<{port_w}}   "
+        f"{'MAC':<{mac_w}}   "
+        f"{'Link':<{link_w}}   "
         f"{'Version':<{ver_w}}"
     )
     print("-" * total_w)
@@ -136,18 +159,34 @@ def print_network_table(results: list[tuple[str, str | None, list]]) -> None:
             print(
                 f"{host_name:<{server_w}}   "
                 f"{'ERROR':<{name_w}}   "
+                f"{'N/A':<{part_w}}   "
                 f"{'N/A':<{loc_w}}   "
+                f"{'N/A':<{port_w}}   "
+                f"{'N/A':<{mac_w}}   "
+                f"{'N/A':<{link_w}}   "
                 f"{error}"
             )
             continue
-        for i, (name, location, version) in enumerate(rows):
+        for i, (name, part, location, port, mac, link, version) in enumerate(rows):
             label = host_name if i == 0 else ""
             print(
                 f"{label:<{server_w}}   "
-                f"{name:<{name_w}}   "
+                f"{_truncate(name, name_w):<{name_w}}   "
+                f"{part:<{part_w}}   "
                 f"{location:<{loc_w}}   "
+                f"{port:<{port_w}}   "
+                f"{mac:<{mac_w}}   "
+                f"{link:<{link_w}}   "
                 f"{version:<{ver_w}}"
             )
+
+
+def _truncate(value: str, width: int) -> str:
+    if len(value) <= width:
+        return value
+    if width <= 1:
+        return value[:width]
+    return value[: width - 1] + "…"
 
 
 def _print_raw_table(results: list[tuple[str, str | None, list]]) -> None:

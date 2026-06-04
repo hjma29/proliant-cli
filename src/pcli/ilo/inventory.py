@@ -88,19 +88,48 @@ async def fetch_network_versions(client: ILOClient) -> list[dict[str, str]]:
     chassis = await client.get(await client.get_chassis_uri())
     na_uri = chassis.get("NetworkAdapters", {}).get("@odata.id")
     if not na_uri:
-        return [{"Name": "N/A", "Version": "N/A", "Location": "N/A"}]
+        return [{
+            "Name": "N/A",
+            "PartNumber": "N/A",
+            "Location": "N/A",
+            "Port": "N/A",
+            "MACAddress": "N/A",
+            "LinkStatus": "N/A",
+            "Version": "N/A",
+        }]
 
     found = []
+    oem_location_map = await _build_oem_device_location_map(client)
     for adapter in await _member_resources(client, na_uri):
         label = _network_adapter_display_name(adapter)
         controllers = adapter.get("Controllers", [])
         version = controllers[0].get("FirmwarePackageVersion", "N/A") if controllers else "N/A"
-        found.append({
+        base_row = {
             "Name": label,
+            "PartNumber": (adapter.get("PartNumber") or "N/A").strip() or "N/A",
             "Version": version or "N/A",
-            "Location": _adapter_location(adapter) or "N/A",
-        })
-    return found or [{"Name": "N/A", "Version": "N/A", "Location": "N/A"}]
+            "Location": _adapter_location(adapter, oem_location_map) or "N/A",
+        }
+        port_rows = await _network_adapter_ports(client, adapter)
+        if not port_rows:
+            found.append({
+                **base_row,
+                "Port": "N/A",
+                "MACAddress": "N/A",
+                "LinkStatus": "N/A",
+            })
+            continue
+        for port_row in port_rows:
+            found.append({**base_row, **port_row})
+    return found or [{
+        "Name": "N/A",
+        "PartNumber": "N/A",
+        "Location": "N/A",
+        "Port": "N/A",
+        "MACAddress": "N/A",
+        "LinkStatus": "N/A",
+        "Version": "N/A",
+    }]
 
 
 async def _storage_members(client: ILOClient) -> list[dict[str, Any]]:
@@ -325,11 +354,68 @@ async def _build_nic_label_map(client: ILOClient) -> dict[str, str]:
     return label_map
 
 
+async def _build_oem_device_location_map(client: ILOClient) -> dict[str, str]:
+    chassis = await client.get(await client.get_chassis_uri())
+    devices_uri = ((chassis.get("Oem") or {}).get("Hpe") or {}).get("Links", {}).get("Devices", {}).get("@odata.id")
+    if not devices_uri:
+        return {}
+
+    location_map: dict[str, str] = {}
+    for device in await _member_resources(client, devices_uri):
+        serial = (device.get("SerialNumber") or "").strip()
+        location = (device.get("Location") or "").strip()
+        if serial and location:
+            location_map[serial] = location
+    return location_map
+
+
+async def _network_adapter_ports(client: ILOClient, adapter: dict[str, Any]) -> list[dict[str, str]]:
+    port_rows: list[dict[str, str]] = []
+    ports_uri = adapter.get("Ports", {}).get("@odata.id")
+    if ports_uri:
+        for port in await _member_resources(client, ports_uri):
+            macs = ((port.get("Ethernet") or {}).get("AssociatedMACAddresses") or [])
+            port_rows.append({
+                "Port": f"p{port.get('PortId') or port.get('Id') or '?'}",
+                "MACAddress": str(macs[0]).lower() if macs else "N/A",
+                "LinkStatus": _display_link_status(
+                    port.get("LinkStatus")
+                    or port.get("LinkState")
+                    or port.get("Status", {}).get("State")
+                    or "N/A"
+                ),
+            })
+        if port_rows:
+            return port_rows
+
+    ndf_uri = adapter.get("NetworkDeviceFunctions", {}).get("@odata.id")
+    if not ndf_uri:
+        return []
+    for idx, ndf in enumerate(await _member_resources(client, ndf_uri), start=1):
+        eth = ndf.get("Ethernet") or {}
+        mac = (eth.get("PermanentMACAddress") or eth.get("MACAddress") or "").lower().strip() or "N/A"
+        port_rows.append({
+            "Port": f"p{ndf.get('Id') or idx}",
+            "MACAddress": mac,
+            "LinkStatus": "N/A",
+        })
+    return port_rows
+
+
 def _is_generic_nic_model(model: str) -> bool:
     return bool(re.fullmatch(r"[A-Z]{2,}\d{4,}[A-Z0-9-]*", model.strip().upper()))
 
 
-def _adapter_location(adapter: dict[str, Any]) -> str:
+def _display_link_status(status: str) -> str:
+    normalized = status.replace("_", "").replace("-", "").strip().lower()
+    if normalized == "linkup":
+        return "Link Up"
+    if normalized == "nolink":
+        return "No Link"
+    return status
+
+
+def _adapter_location(adapter: dict[str, Any], oem_location_map: dict[str, str] | None = None) -> str:
     part_loc = adapter.get("Location", {}).get("PartLocation", {})
     if not part_loc:
         controllers = adapter.get("Controllers") or []
@@ -341,6 +427,9 @@ def _adapter_location(adapter: dict[str, Any]) -> str:
     ordinal = part_loc.get("LocationOrdinalValue")
     if ordinal is not None and part_loc.get("LocationType") == "Slot":
         return f"Slot {ordinal}"
+    serial = (adapter.get("SerialNumber") or "").strip()
+    if oem_location_map and serial:
+        return oem_location_map.get(serial, "")
     return ""
 
 

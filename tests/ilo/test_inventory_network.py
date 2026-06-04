@@ -25,8 +25,10 @@ class FakeClient:
 async def test_fetch_network_versions_uses_descriptive_labels_and_locations():
     client = FakeClient({
         "/redfish/v1/Chassis/1": {
-            "NetworkAdapters": {"@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters"}
+            "NetworkAdapters": {"@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters"},
+            "Oem": {"Hpe": {"Links": {"Devices": {"@odata.id": "/redfish/v1/Chassis/1/Devices/"}}}},
         },
+        "/redfish/v1/Chassis/1/Devices/": {"Members": []},
         "/redfish/v1/Chassis/1/NetworkAdapters": {
             "Members": [
                 {"@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE07A000"},
@@ -38,6 +40,7 @@ async def test_fetch_network_versions_uses_descriptive_labels_and_locations():
             "SKU": "10/25Gb 2-port SFP28 BCM57414 OCP3 Adapter",
             "PartNumber": "P10113-001",
             "Location": {"PartLocation": {"ServiceLabel": "OCP Slot 21"}},
+            "Ports": {"@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE07A000/Ports"},
             "Controllers": [{"FirmwarePackageVersion": "235.1.164.14"}],
         },
         "/redfish/v1/Chassis/1/NetworkAdapters/DE085000": {
@@ -45,7 +48,24 @@ async def test_fetch_network_versions_uses_descriptive_labels_and_locations():
             "SKU": "10/25Gb 2-port SFP28 BCM57414 Adapter",
             "PartNumber": "P26264-001",
             "Location": {"PartLocation": {"ServiceLabel": "PCIE Slot 6"}},
+            "Ports": {"@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/Ports"},
             "Controllers": [{"FirmwarePackageVersion": "235.1.164.14"}],
+        },
+        "/redfish/v1/Chassis/1/NetworkAdapters/DE07A000/Ports": {
+            "Members": [{"@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE07A000/Ports/1"}]
+        },
+        "/redfish/v1/Chassis/1/NetworkAdapters/DE07A000/Ports/1": {
+            "PortId": "1",
+            "Ethernet": {"AssociatedMACAddresses": ["00:11:22:33:44:55"]},
+            "LinkStatus": "LinkUp",
+        },
+        "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/Ports": {
+            "Members": [{"@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/Ports/2"}]
+        },
+        "/redfish/v1/Chassis/1/NetworkAdapters/DE085000/Ports/2": {
+            "PortId": "2",
+            "Ethernet": {"AssociatedMACAddresses": ["66:77:88:99:aa:bb"]},
+            "LinkStatus": "NoLink",
         },
     })
 
@@ -54,13 +74,21 @@ async def test_fetch_network_versions_uses_descriptive_labels_and_locations():
     assert result == [
         {
             "Name": "10/25Gb 2-port SFP28 BCM57414 OCP3 Adapter",
+            "PartNumber": "P10113-001",
             "Version": "235.1.164.14",
             "Location": "OCP Slot 21",
+            "Port": "p1",
+            "MACAddress": "00:11:22:33:44:55",
+            "LinkStatus": "Link Up",
         },
         {
             "Name": "Broadcom P225p NetXtreme-E Dual-port 10Gb/25Gb Ethernet PCIe Adapter - NIC",
+            "PartNumber": "P26264-001",
             "Version": "235.1.164.14",
             "Location": "PCIE Slot 6",
+            "Port": "p2",
+            "MACAddress": "66:77:88:99:aa:bb",
+            "LinkStatus": "No Link",
         },
     ]
 
@@ -69,8 +97,10 @@ async def test_fetch_network_versions_uses_descriptive_labels_and_locations():
 async def test_fetch_network_versions_preserves_descriptive_model_names():
     client = FakeClient({
         "/redfish/v1/Chassis/1": {
-            "NetworkAdapters": {"@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters"}
+            "NetworkAdapters": {"@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters"},
+            "Oem": {"Hpe": {"Links": {"Devices": {"@odata.id": "/redfish/v1/Chassis/1/Devices/"}}}},
         },
+        "/redfish/v1/Chassis/1/Devices/": {"Members": []},
         "/redfish/v1/Chassis/1/NetworkAdapters": {
             "Members": [{"@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE099999"}]
         },
@@ -78,7 +108,16 @@ async def test_fetch_network_versions_preserves_descriptive_model_names():
             "Model": "Broadcom P225p NetXtreme-E 10Gb/25Gb Ethernet PCIe Adapter - NIC",
             "PartNumber": "P26264-001",
             "Location": {"PartLocation": {"ServiceLabel": "PCI-E Slot 6"}},
+            "Ports": {"@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE099999/Ports"},
             "Controllers": [{"FirmwarePackageVersion": "235.1.164.14"}],
+        },
+        "/redfish/v1/Chassis/1/NetworkAdapters/DE099999/Ports": {
+            "Members": [{"@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE099999/Ports/1"}]
+        },
+        "/redfish/v1/Chassis/1/NetworkAdapters/DE099999/Ports/1": {
+            "PortId": "1",
+            "Ethernet": {"AssociatedMACAddresses": ["bc:97:e1:e3:35:00"]},
+            "LinkStatus": "LinkUp",
         },
     })
 
@@ -87,7 +126,62 @@ async def test_fetch_network_versions_preserves_descriptive_model_names():
     assert result == [
         {
             "Name": "Broadcom P225p NetXtreme-E Dual-port 10Gb/25Gb Ethernet PCIe Adapter - NIC",
+            "PartNumber": "P26264-001",
             "Version": "235.1.164.14",
             "Location": "PCI-E Slot 6",
+            "Port": "p1",
+            "MACAddress": "bc:97:e1:e3:35:00",
+            "LinkStatus": "Link Up",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_network_versions_uses_oem_location_fallback_for_ilo6():
+    client = FakeClient({
+        "/redfish/v1/Chassis/1": {
+            "NetworkAdapters": {"@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters"},
+            "Oem": {"Hpe": {"Links": {"Devices": {"@odata.id": "/redfish/v1/Chassis/1/Devices/"}}}},
+        },
+        "/redfish/v1/Chassis/1/Devices/": {
+            "Members": [{"@odata.id": "/redfish/v1/Chassis/1/Devices/2/"}]
+        },
+        "/redfish/v1/Chassis/1/Devices/2/": {
+            "SerialNumber": "VNM2450RTD",
+            "Location": "OCP 3.0 Slot 15",
+        },
+        "/redfish/v1/Chassis/1/NetworkAdapters": {
+            "Members": [{"@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE009000"}]
+        },
+        "/redfish/v1/Chassis/1/NetworkAdapters/DE009000": {
+            "Model": "BCM57414",
+            "SKU": "10/25Gb 2-port SFP28 BCM57414 OCP3 Adapter",
+            "PartNumber": "P10113-001",
+            "SerialNumber": "VNM2450RTD",
+            "Location": {"PartLocation": {"ServiceLabel": None, "LocationOrdinalValue": None}},
+            "Ports": {"@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE009000/Ports"},
+            "Controllers": [{"FirmwarePackageVersion": "235.1.164.14"}],
+        },
+        "/redfish/v1/Chassis/1/NetworkAdapters/DE009000/Ports": {
+            "Members": [{"@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters/DE009000/Ports/1"}]
+        },
+        "/redfish/v1/Chassis/1/NetworkAdapters/DE009000/Ports/1": {
+            "PortId": "1",
+            "Ethernet": {"AssociatedMACAddresses": ["00:62:0b:a2:9d:7a"]},
+            "LinkStatus": "NoLink",
+        },
+    })
+
+    result = await inventory.fetch_network_versions(client)
+
+    assert result == [
+        {
+            "Name": "10/25Gb 2-port SFP28 BCM57414 OCP3 Adapter",
+            "PartNumber": "P10113-001",
+            "Version": "235.1.164.14",
+            "Location": "OCP 3.0 Slot 15",
+            "Port": "p1",
+            "MACAddress": "00:62:0b:a2:9d:7a",
+            "LinkStatus": "No Link",
         }
     ]

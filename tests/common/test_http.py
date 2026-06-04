@@ -55,25 +55,25 @@ class TestRaiseForStatus:
         client = ConcreteClient.__new__(ConcreteClient)
         request = httpx.Request("GET", "http://test")
         response = httpx.Response(200, json={"ok": True}, request=request)
-        client._raise_for_status(response)  # should not raise
+        client._raise_for_status(response, "GET", "/test")  # should not raise
 
     def test_raises_runtime_error_for_4xx(self):
         client = ConcreteClient.__new__(ConcreteClient)
         request = httpx.Request("GET", "http://test")
         response = httpx.Response(404, json={"message": "not found"}, request=request)
         with pytest.raises(RuntimeError):
-            client._raise_for_status(response)
+            client._raise_for_status(response, "GET", "/test")
 
     def test_raises_runtime_error_for_5xx(self):
         client = ConcreteClient.__new__(ConcreteClient)
         request = httpx.Request("GET", "http://test")
         response = httpx.Response(500, content=b"error", request=request)
         with pytest.raises(RuntimeError):
-            client._raise_for_status(response)
+            client._raise_for_status(response, "GET", "/test")
 
     def test_error_message_includes_url(self):
         client = ConcreteClient.__new__(ConcreteClient)
         request = httpx.Request("GET", "http://myserver/redfish/v1")
         response = httpx.Response(401, json={"message": "unauthorized"}, request=request)
         with pytest.raises(RuntimeError, match="myserver"):
-            client._raise_for_status(response)
+            client._raise_for_status(response, "GET", "http://myserver/redfish/v1")

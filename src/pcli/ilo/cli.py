@@ -108,13 +108,7 @@ async def query_host_async(host: dict, fetch_fn: FetchFn) -> tuple[str, str | No
 
 
 async def _run_parallel_async(hosts: list[dict], fetch_fn: FetchFn) -> list[tuple[str, str | None, list[Any]]]:
-    semaphore = asyncio.Semaphore(MAX_WORKERS)
-
-    async def _run_one(host: dict) -> tuple[str, str | None, list[Any]]:
-        async with semaphore:
-            return await query_host_async(host, fetch_fn)
-
-    return list(await asyncio.gather(*(_run_one(host) for host in hosts)))
+    return await run_parallel(hosts, fetch_fn, session_factory=ilo_session, max_workers=MAX_WORKERS)
 
 
 def _header_line(server_col: int, label_col: int, value_col: int) -> str:
@@ -598,8 +592,11 @@ async def _async_main(args: argparse.Namespace) -> None:
             await _run_set_dhcp(args)
 
 
-def _load_hosts_or_exit(name: str | None) -> list[dict]:
+def _load_hosts_or_exit(name: str | None, hosts_from: str | None = None) -> list[dict]:
+    """Resolve target hosts — supports single, comma-separated, and --hosts-from."""
     try:
+        if hosts_from or (name and "," in name):
+            return resolve_hosts(name, hosts_from, load_hosts)
         return load_hosts(name=name)
     except FileNotFoundError:
         from pathlib import Path
@@ -879,10 +876,15 @@ async def _run_report_gpu(args: argparse.Namespace) -> None:
 
 async def _run_get(args: argparse.Namespace) -> None:
     what = args.what.replace("-", "_")
-    hosts = _load_hosts_or_exit(getattr(args, "host", None))
+    hosts = _load_hosts_or_exit(getattr(args, "host", None), getattr(args, "hosts_from", None))
     raw = getattr(args, "raw", False)
     fetch_fn = _RAW_DISPATCH[what] if raw else _FETCH_DISPATCH[what]
     results = await _run_parallel_async(hosts, fetch_fn)
+
+    # --json output mode: emit structured data and return
+    if get_output_mode() == OutputMode.JSON:
+        _print_json_results(what, results)
+        return
 
     if raw:
         _print_raw_table(results)

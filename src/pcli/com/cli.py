@@ -50,17 +50,22 @@ from typing import Optional
 
 import argcomplete
 
-from rich.table import Table
-from rich import box
-
-from pcli.common.completers import comma_sep_completer
 from pcli.common.display import get_console, make_table, print_json, print_memory_report, OutputMode, get_output_mode, set_output_mode
 from pcli.com.auth import COMSession, CredentialsError, AuthError
 from pcli.com.client import COMClient, run
 from pcli.com import devices as _devices
 from pcli.com import workspaces as _workspaces
 from pcli.com import firmware as _firmware
-
+from pcli.com.printers import (
+    _DEVICE_FIELDS,
+    _DEVICE_DEFAULT_FIELDS,
+    DEVICE_FIELD_NAMES,
+    make_field_completer,
+    parse_fields,
+    print_devices_table,
+    print_workspaces_table,
+    print_bundles_table,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +79,7 @@ def _workspace_names_completer(prefix, **kwargs):
         data = load_token() or {}
         names = [w.get("company_name", "") for w in data.get("workspaces", [])]
         return [n for n in names if n.startswith(prefix)]
-    except Exception:
+    except Exception:  # intentional: completion must never print to stdout
         return []
 
 

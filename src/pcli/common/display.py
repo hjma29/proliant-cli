@@ -58,9 +58,6 @@ def get_console() -> Console:
     return _console
 
 
-# Convenience alias
-console = property(lambda self: get_console())
-
 
 def make_table(
     title: str,

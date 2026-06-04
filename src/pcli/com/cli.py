@@ -49,7 +49,7 @@ import sys
 from typing import Optional
 
 import argcomplete
-from rich.console import Console
+
 from rich.table import Table
 from rich import box
 
@@ -61,7 +61,6 @@ from pcli.com import devices as _devices
 from pcli.com import workspaces as _workspaces
 from pcli.com import firmware as _firmware
 
-console = Console()
 
 
 # ---------------------------------------------------------------------------
@@ -97,11 +96,11 @@ async def _cmd_login(args: argparse.Namespace) -> None:
         try:
             email = Prompt.ask("[bold]HPE GreenLake email[/bold]").strip()
         except (KeyboardInterrupt, EOFError):
-            console.print("\n[yellow]Login cancelled.[/yellow]")
+            get_console().print("\n[yellow]Login cancelled.[/yellow]")
             sys.exit(0)
 
     if not email:
-        console.print("[red]Email is required.[/red]")
+        get_console().print("[red]Email is required.[/red]")
         sys.exit(1)
 
     region = getattr(args, "region", None) or "us-west"
@@ -113,19 +112,19 @@ async def _cmd_login(args: argparse.Namespace) -> None:
         try:
             passwd = _getpass.getpass("Password: ")
         except (KeyboardInterrupt, EOFError):
-            console.print("\n[yellow]Login cancelled.[/yellow]")
+            get_console().print("\n[yellow]Login cancelled.[/yellow]")
             sys.exit(0)
         try:
             await password_login(email=email, password=passwd, region=region)
         except Exception as e:
-            console.print(f"[red]Login failed:[/red] {e}")
+            get_console().print(f"[red]Login failed:[/red] {e}")
             sys.exit(1)
         return
 
     try:
         await okta_verify_login(email=email, region=region)
     except Exception as e:
-        console.print(f"[red]Login failed:[/red] {e}")
+        get_console().print(f"[red]Login failed:[/red] {e}")
         sys.exit(1)
 
 
@@ -144,22 +143,22 @@ async def _cmd_login_agent(args: argparse.Namespace) -> None:
         try:
             client_id = input("Client ID: ").strip()
         except (KeyboardInterrupt, EOFError):
-            console.print("\n[yellow]Login cancelled.[/yellow]")
+            get_console().print("\n[yellow]Login cancelled.[/yellow]")
             sys.exit(0)
 
     if not client_secret:
         try:
             client_secret = getpass.getpass("Client Secret: ").strip()
         except (KeyboardInterrupt, EOFError):
-            console.print("\n[yellow]Login cancelled.[/yellow]")
+            get_console().print("\n[yellow]Login cancelled.[/yellow]")
             sys.exit(0)
 
     if not client_id or not client_secret:
-        console.print("[red]Client ID and Client Secret are required.[/red]")
+        get_console().print("[red]Client ID and Client Secret are required.[/red]")
         sys.exit(1)
 
     # Validate by fetching a token
-    with console.status("[bold cyan]Validating credentials..."):
+    with get_console().status("[bold cyan]Validating credentials..."):
         try:
             async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.post(
@@ -169,13 +168,13 @@ async def _cmd_login_agent(args: argparse.Namespace) -> None:
                 )
                 resp.raise_for_status()
         except httpx.HTTPStatusError as e:
-            console.print(
+            get_console().print(
                 f"[red]Authentication failed ({e.response.status_code}).[/red] "
                 "Check your Client ID and Secret."
             )
             sys.exit(1)
         except Exception as e:
-            console.print(f"[red]Connection error:[/red] {e}")
+            get_console().print(f"[red]Connection error:[/red] {e}")
             sys.exit(1)
 
     # Save to credentials.yml
@@ -186,11 +185,11 @@ async def _cmd_login_agent(args: argparse.Namespace) -> None:
                    "region": region}, default_flow_style=False)
     )
     CREDS_FILE.chmod(0o600)
-    console.print(
+    get_console().print(
         f"[bold green]✓ API client credentials saved.[/bold green] "
         f"[dim]{CREDS_FILE}[/dim]"
     )
-    console.print("[dim]Run any hpecom command — no Okta needed.[/dim]")
+    get_console().print("[dim]Run any hpecom command — no Okta needed.[/dim]")
 
 
 # ---------------------------------------------------------------------------
@@ -218,9 +217,9 @@ def _cmd_logout(_args: argparse.Namespace) -> None:
             removed.append(path.name)
 
     if removed:
-        console.print(f"[green]✓ Logged out.[/green] Removed: {', '.join(removed)}")
+        get_console().print(f"[green]✓ Logged out.[/green] Removed: {', '.join(removed)}")
     else:
-        console.print("[yellow]Not logged in (no credentials found).[/yellow]")
+        get_console().print("[yellow]Not logged in (no credentials found).[/yellow]")
 
 
 # ---------------------------------------------------------------------------
@@ -296,7 +295,7 @@ def print_devices_table(device_list: list, raw: bool = False,
         return
 
     if not device_list:
-        console.print("[yellow]No devices found.[/yellow]")
+        get_console().print("[yellow]No devices found.[/yellow]")
         return
 
     selected = _parse_fields(fields, _DEVICE_FIELDS, _DEVICE_DEFAULT_FIELDS)
@@ -322,7 +321,7 @@ def print_devices_table(device_list: list, raw: bool = False,
     for d in sorted_list:
         table.add_row(*[_DEVICE_FIELDS[key][3](d, uc) for key in selected])
 
-    console.print(table)
+    get_console().print(table)
 
 
 def print_workspaces_table(workspace_list: list, raw: bool = False) -> None:
@@ -331,7 +330,7 @@ def print_workspaces_table(workspace_list: list, raw: bool = False) -> None:
         return
 
     if not workspace_list:
-        console.print("[yellow]No workspaces found.[/yellow]")
+        get_console().print("[yellow]No workspaces found.[/yellow]")
         return
 
     table = Table(
@@ -359,8 +358,8 @@ def print_workspaces_table(workspace_list: list, raw: bool = False) -> None:
             w.description or "—",
         )
 
-    console.print(table)
-    console.print("[dim]  * = active workspace[/dim]")
+    get_console().print(table)
+    get_console().print("[dim]  * = active workspace[/dim]")
 
 
 # ---------------------------------------------------------------------------
@@ -387,7 +386,7 @@ async def _ensure_session(args: argparse.Namespace) -> COMSession:
         pass
 
     # No credentials — fail fast with a clear message (industry standard)
-    console.print(
+    get_console().print(
         "[bold red]Not logged in.[/bold red] "
         "Please run:\n\n"
         "  [bold cyan]pcli com login[/bold cyan]\n\n"
@@ -406,14 +405,14 @@ async def _cmd_show_devices(args: argparse.Namespace) -> None:
     fields = getattr(args, "fields", None)
     sort_by = getattr(args, "sort_by", None)
 
-    with console.status("[bold cyan]Fetching devices from GreenLake..."):
+    with get_console().status("[bold cyan]Fetching devices from GreenLake..."):
         try:
             device_list = await _devices.fetch_devices(session, device_type=device_type)
         except AuthError as e:
-            console.print(f"[red]Auth error:[/red] {e}")
+            get_console().print(f"[red]Auth error:[/red] {e}")
             sys.exit(1)
         except Exception as e:
-            console.print(f"[red]Error:[/red] {e}")
+            get_console().print(f"[red]Error:[/red] {e}")
             sys.exit(1)
 
     # Resolve user IDs → emails only when added-by column is requested
@@ -429,7 +428,7 @@ async def _cmd_show_devices(args: argparse.Namespace) -> None:
             token_data = load_token() or {}
             glp_token = token_data.get("glp_access_token", "")
             if glp_token:
-                with console.status("[dim]Resolving user names..."):
+                with get_console().status("[dim]Resolving user names..."):
                     user_cache = await _devices.resolve_user_ids(user_ids, glp_token)
 
     print_devices_table(device_list, raw=getattr(args, "raw", False),
@@ -439,14 +438,14 @@ async def _cmd_show_devices(args: argparse.Namespace) -> None:
 async def _cmd_show_workspaces(args: argparse.Namespace) -> None:
     session = await _ensure_session(args)
 
-    with console.status("[bold cyan]Fetching workspace info from GreenLake..."):
+    with get_console().status("[bold cyan]Fetching workspace info from GreenLake..."):
         try:
             workspace_list = await _workspaces.fetch_workspaces(session)
         except AuthError as e:
-            console.print(f"[red]Auth error:[/red] {e}")
+            get_console().print(f"[red]Auth error:[/red] {e}")
             sys.exit(1)
         except Exception as e:
-            console.print(f"[red]Error:[/red] {e}")
+            get_console().print(f"[red]Error:[/red] {e}")
             sys.exit(1)
 
     print_workspaces_table(workspace_list, raw=getattr(args, "raw", False))
@@ -459,7 +458,7 @@ def print_bundles_table(bundle_list: list, raw: bool = False) -> None:
         return
 
     if not bundle_list:
-        console.print("[yellow]No bundles found.[/yellow]")
+        get_console().print("[yellow]No bundles found.[/yellow]")
         return
 
     table = Table(
@@ -486,7 +485,7 @@ def print_bundles_table(bundle_list: list, raw: bool = False) -> None:
             b.display_name,
         )
 
-    console.print(table)
+    get_console().print(table)
 
 
 async def _cmd_show_bundles(args: argparse.Namespace) -> None:
@@ -495,7 +494,7 @@ async def _cmd_show_bundles(args: argparse.Namespace) -> None:
     gen = getattr(args, "gen", None)
     bundle_type = getattr(args, "bundle_type", None)
 
-    with console.status("[bold cyan]Fetching SPP bundles from COM..."):
+    with get_console().status("[bold cyan]Fetching SPP bundles from COM..."):
         try:
             bundle_list = await _firmware.fetch_bundles(
                 session,
@@ -504,10 +503,10 @@ async def _cmd_show_bundles(args: argparse.Namespace) -> None:
                 bundle_type=bundle_type,
             )
         except AuthError as e:
-            console.print(f"[red]Auth error:[/red] {e}")
+            get_console().print(f"[red]Auth error:[/red] {e}")
             sys.exit(1)
         except Exception as e:
-            console.print(f"[red]Error:[/red] {e}")
+            get_console().print(f"[red]Error:[/red] {e}")
             sys.exit(1)
 
     print_bundles_table(bundle_list, raw=getattr(args, "raw", False))
@@ -517,14 +516,14 @@ async def _cmd_use_workspace(args: argparse.Namespace) -> None:
     from pcli.com.login import switch_workspace
     name_or_id = args.workspace
     try:
-        with console.status(f"[bold cyan]Switching to workspace '{name_or_id}'..."):
+        with get_console().status(f"[bold cyan]Switching to workspace '{name_or_id}'..."):
             resolved_name = await switch_workspace(name_or_id)
-        console.print(f"[bold green]✓ Switched to workspace:[/bold green] {resolved_name}")
+        get_console().print(f"[bold green]✓ Switched to workspace:[/bold green] {resolved_name}")
     except (CredentialsError, ValueError) as e:
-        console.print(f"[red]Error:[/red] {e}")
+        get_console().print(f"[red]Error:[/red] {e}")
         sys.exit(1)
     except Exception as e:
-        console.print(f"[red]Error:[/red] {e}")
+        get_console().print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
 
@@ -534,25 +533,25 @@ async def _cmd_add_device(args: argparse.Namespace) -> None:
     serial = args.serial_number.strip()
     part   = (args.part_number or "").strip()
 
-    console.print(f"[cyan]Adding device[/cyan] {serial}" + (f" (part: {part})" if part else "") + "…")
+    get_console().print(f"[cyan]Adding device[/cyan] {serial}" + (f" (part: {part})" if part else "") + "…")
 
     try:
         results = await add_compute_devices([serial], [part])
     except PermissionError as e:
-        console.print(f"[red]Error:[/red] {e}")
+        get_console().print(f"[red]Error:[/red] {e}")
         sys.exit(1)
     except Exception as e:
-        console.print(f"[red]Error:[/red] {e}")
+        get_console().print(f"[red]Error:[/red] {e}")
         sys.exit(1)
 
     exit_code = 0
     for r in results:
         if r.status == "Complete":
-            console.print(f"[bold green]✓ {r.serial_number}[/bold green] — {r.detail}")
+            get_console().print(f"[bold green]✓ {r.serial_number}[/bold green] — {r.detail}")
         elif r.status == "Warning":
-            console.print(f"[yellow]⚠ {r.serial_number}[/yellow] — {r.detail}")
+            get_console().print(f"[yellow]⚠ {r.serial_number}[/yellow] — {r.detail}")
         else:
-            console.print(f"[red]✗ {r.serial_number}[/red] — {r.detail}")
+            get_console().print(f"[red]✗ {r.serial_number}[/red] — {r.detail}")
             exit_code = 1
 
     if exit_code:
@@ -569,20 +568,20 @@ async def _cmd_report_gpu(args: argparse.Namespace) -> None:
     session = await _ensure_session(args)
 
     async with COMClient(session) as client:
-        with console.status("[dim]Fetching GPU inventory across fleet…[/dim]"):
+        with get_console().status("[dim]Fetching GPU inventory across fleet…[/dim]"):
             try:
                 gpus = await get_fleet_gpus(client)
             except RuntimeError as e:
-                console.print(f"[red]Error:[/red] {e}")
+                get_console().print(f"[red]Error:[/red] {e}")
                 return
 
     if not gpus:
-        console.print("[yellow]No discrete GPUs found across fleet.[/yellow]")
+        get_console().print("[yellow]No discrete GPUs found across fleet.[/yellow]")
         return
 
     if getattr(args, "raw", False):
         import json
-        console.print(json.dumps(gpus, indent=2))
+        get_console().print(json.dumps(gpus, indent=2))
         return
 
     rows = aggregate_gpus_by_model(gpus)
@@ -605,7 +604,7 @@ async def _cmd_report_gpu(args: argparse.Namespace) -> None:
             ", ".join(sorted(r["servers"])),
         )
 
-    console.print(table)
+    get_console().print(table)
 
 
 # ── pcli com report memory ────────────────────────────────────────────────────
@@ -618,20 +617,20 @@ async def _cmd_report_memory(args: argparse.Namespace) -> None:
     session = await _ensure_session(args)
 
     async with COMClient(session) as client:
-        with console.status("[dim]Fetching memory inventory across fleet…[/dim]"):
+        with get_console().status("[dim]Fetching memory inventory across fleet…[/dim]"):
             try:
                 dimms = await get_fleet_memory(client)
             except RuntimeError as e:
-                console.print(f"[red]Error:[/red] {e}")
+                get_console().print(f"[red]Error:[/red] {e}")
                 return
 
     if not dimms:
-        console.print("[yellow]No memory inventory data returned.[/yellow]")
+        get_console().print("[yellow]No memory inventory data returned.[/yellow]")
         return
 
     if getattr(args, "raw", False):
         import json
-        console.print(json.dumps(dimms, indent=2))
+        get_console().print(json.dumps(dimms, indent=2))
         return
 
     rows = aggregate_by_part_number(dimms)
@@ -663,7 +662,7 @@ async def _cmd_describe_server(args: argparse.Namespace) -> None:
     target = args.server.upper()
 
     async with COMClient(session) as c:
-        with console.status("[dim]Fetching server list…[/dim]"):
+        with get_console().status("[dim]Fetching server list…[/dim]"):
             r = await c.get(session.com_url("/servers"), params={"limit": 1000})
     items = r.get("items", [])
 
@@ -688,7 +687,7 @@ async def _cmd_describe_server(args: argparse.Namespace) -> None:
                 break
 
     if not server:
-        console.print(f"[red]Server '{args.server}' not found.[/red]")
+        get_console().print(f"[red]Server '{args.server}' not found.[/red]")
         sys.exit(1)
 
     hw    = server.get("hardware", {})
@@ -697,7 +696,7 @@ async def _cmd_describe_server(args: argparse.Namespace) -> None:
     health = hw.get("health", {})
 
     # ── Header ────────────────────────────────────────────────────────────────
-    console.print(Panel(
+    get_console().print(Panel(
         f"[bold]{server.get('name')}[/bold]   [dim]{hw.get('model', '—')}[/dim]",
         expand=False,
     ))
@@ -712,10 +711,10 @@ async def _cmd_describe_server(args: argparse.Namespace) -> None:
     id_table.add_row("Power",       _h(hw.get("powerState", "—")))
     id_table.add_row("Connection",  _h("CONNECTED" if state.get("connected") else "DISCONNECTED"))
     id_table.add_row("Managed",     "Yes" if state.get("managed") else "No")
-    console.print(id_table)
+    get_console().print(id_table)
 
     # ── iLO ───────────────────────────────────────────────────────────────────
-    console.print("[bold]iLO[/bold]")
+    get_console().print("[bold]iLO[/bold]")
     ilo_table = Table(box=rich_box.SIMPLE, show_header=False, padding=(0, 2))
     ilo_table.add_column(style="dim", no_wrap=True)
     ilo_table.add_column()
@@ -724,10 +723,10 @@ async def _cmd_describe_server(args: argparse.Namespace) -> None:
     ilo_table.add_row("IP",       bmc.get("ip", "—"))
     ilo_table.add_row("Hostname", bmc.get("hostname", "—"))
     ilo_table.add_row("MAC",      bmc.get("mac", "—"))
-    console.print(ilo_table)
+    get_console().print(ilo_table)
 
     # ── Health ────────────────────────────────────────────────────────────────
-    console.print("[bold]Health[/bold]")
+    get_console().print("[bold]Health[/bold]")
     h_table = Table(box=rich_box.SIMPLE, show_header=False, padding=(0, 2))
     h_table.add_column(style="dim", no_wrap=True)
     h_table.add_column()
@@ -735,10 +734,10 @@ async def _cmd_describe_server(args: argparse.Namespace) -> None:
     for k, v in (health or {}).items():
         if k not in skip:
             h_table.add_row(k.replace("_", " ").title(), _h(v))
-    console.print(h_table)
+    get_console().print(h_table)
 
     # ── Subscription ──────────────────────────────────────────────────────────
-    console.print("[bold]Subscription[/bold]")
+    get_console().print("[bold]Subscription[/bold]")
     sub_table = Table(box=rich_box.SIMPLE, show_header=False, padding=(0, 2))
     sub_table.add_column(style="dim", no_wrap=True)
     sub_table.add_column()
@@ -746,7 +745,7 @@ async def _cmd_describe_server(args: argparse.Namespace) -> None:
     sub_table.add_row("Key",     state.get("subscriptionKey", "—"))
     expires = (state.get("subscriptionExpiresAt") or "—")[:10]
     sub_table.add_row("Expires", expires)
-    console.print(sub_table)
+    get_console().print(sub_table)
 
     # ── GPU ───────────────────────────────────────────────────────────────────
     _GPU_KEYWORDS = ("video controller", "gpu", "nvidia", "radeon", "gaudi",
@@ -757,7 +756,7 @@ async def _cmd_describe_server(args: argparse.Namespace) -> None:
         if any(kw in (fw.get("name") or "").lower() for kw in _GPU_KEYWORDS)
     ]
     if gpu_items:
-        console.print("[bold]GPU[/bold]")
+        get_console().print("[bold]GPU[/bold]")
         gpu_table = Table(box=rich_box.SIMPLE, show_header=True, header_style="bold cyan",
                           padding=(0, 2))
         gpu_table.add_column("Model", no_wrap=True)
@@ -766,7 +765,7 @@ async def _cmd_describe_server(args: argparse.Namespace) -> None:
         for fw in gpu_items:
             gpu_table.add_row(fw.get("name", ""), fw.get("version", ""),
                               fw.get("deviceContext", ""))
-        console.print(gpu_table)
+        get_console().print(gpu_table)
 
     # ── Memory population map (via iLO Redfish) ───────────────────────────────
     ilo_ip = bmc.get("ip")
@@ -798,7 +797,7 @@ async def _cmd_describe_server(args: argparse.Namespace) -> None:
                     dimms = await fetch_memory_population(ilo)
 
                 if dimms:
-                    console.print("[bold]Memory[/bold]")
+                    get_console().print("[bold]Memory[/bold]")
                     # Group by part number for summary
                     from collections import Counter
                     populated = [d for d in dimms if d["present"]]
@@ -820,25 +819,25 @@ async def _cmd_describe_server(args: argparse.Namespace) -> None:
                         else:
                             mem_table.add_row(f"[dim]{d['slot']}[/dim]", "[dim]empty[/dim]",
                                               "", "", "")
-                    console.print(mem_table)
+                    get_console().print(mem_table)
                     total_gb = sum(d["cap_gb"] for d in populated)
-                    console.print(f"  [dim]{len(populated)} DIMMs populated, "
+                    get_console().print(f"  [dim]{len(populated)} DIMMs populated, "
                                   f"{empty_count} empty — {total_gb} GB total[/dim]")
         except Exception:
             # iLO unreachable or no creds — show total from COM
             mem_mb = hw.get("memoryMb")
             if mem_mb:
-                console.print("[bold]Memory[/bold]")
-                console.print(f"  {mem_mb // 1024} GB total  [dim](slot detail requires iLO access)[/dim]")
+                get_console().print("[bold]Memory[/bold]")
+                get_console().print(f"  {mem_mb // 1024} GB total  [dim](slot detail requires iLO access)[/dim]")
     else:
         mem_mb = hw.get("memoryMb")
         if mem_mb:
-            console.print("[bold]Memory[/bold]")
-            console.print(f"  {mem_mb // 1024} GB total  [dim](slot detail requires iLO access)[/dim]")
+            get_console().print("[bold]Memory[/bold]")
+            get_console().print(f"  {mem_mb // 1024} GB total  [dim](slot detail requires iLO access)[/dim]")
 
     # ── Firmware inventory ────────────────────────────────────────────────────
     if fw_items:
-        console.print("[bold]Firmware[/bold]")
+        get_console().print("[bold]Firmware[/bold]")
         fw_table = Table(box=rich_box.SIMPLE, show_header=True, header_style="bold cyan",
                          padding=(0, 2))
         fw_table.add_column("Component", no_wrap=True)
@@ -847,7 +846,7 @@ async def _cmd_describe_server(args: argparse.Namespace) -> None:
         for fw in fw_items:
             fw_table.add_row(fw.get("name", ""), fw.get("version", ""),
                              fw.get("deviceContext", ""))
-        console.print(fw_table)
+        get_console().print(fw_table)
 
 
 def _build_parser() -> argparse.ArgumentParser:

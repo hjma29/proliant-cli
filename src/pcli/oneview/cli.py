@@ -121,13 +121,9 @@ async def _async_servers_list(fields: list[str] | None) -> None:
     get_console().print(table)
 
 
-def _cmd_servers_list(args: argparse.Namespace) -> None:
+async def _cmd_servers_list(args: argparse.Namespace) -> None:
     fields = [f.strip() for f in args.fields.split(",")] if args.fields else None
-    try:
-        run_sync(_async_servers_list(fields))
-    except Exception as exc:
-        get_console().print(f"[red]Error: {exc}[/red]")
-        sys.exit(1)
+    await _async_servers_list(fields)
 
 
 # ── pcli oneview firmware list ────────────────────────────────────────────────
@@ -197,15 +193,11 @@ async def _async_firmware_server(server_name: str) -> None:
     get_console().print(table)
 
 
-def _cmd_firmware_list(args: argparse.Namespace) -> None:
-    try:
-        if args.server:
-            run_sync(_async_firmware_server(args.server))
-        else:
-            run_sync(_async_firmware_fleet())
-    except Exception as exc:
-        get_console().print(f"[red]Error: {exc}[/red]")
-        sys.exit(1)
+async def _cmd_firmware_list(args: argparse.Namespace) -> None:
+    if args.server:
+        await _async_firmware_server(args.server)
+    else:
+        await _async_firmware_fleet()
 
 
 # ── pcli oneview list networks ────────────────────────────────────────────────
@@ -248,12 +240,8 @@ async def _async_networks_list() -> None:
     get_console().print(table)
 
 
-def _cmd_networks_list(args: argparse.Namespace) -> None:
-    try:
-        run_sync(_async_networks_list())
-    except Exception as exc:
-        get_console().print(f"[red]Error: {exc}[/red]")
-        sys.exit(1)
+async def _cmd_networks_list(args: argparse.Namespace) -> None:
+    await _async_networks_list()
 
 
 # ── pcli oneview list networksets ─────────────────────────────────────────────
@@ -293,12 +281,8 @@ async def _async_networksets_list() -> None:
     get_console().print(table)
 
 
-def _cmd_networksets_list(args: argparse.Namespace) -> None:
-    try:
-        run_sync(_async_networksets_list())
-    except Exception as exc:
-        get_console().print(f"[red]Error: {exc}[/red]")
-        sys.exit(1)
+async def _cmd_networksets_list(args: argparse.Namespace) -> None:
+    await _async_networksets_list()
 
 
 # ── pcli oneview list uplinksets ─────────────────────────────────────────────
@@ -343,12 +327,8 @@ async def _async_uplinksets_list() -> None:
     get_console().print(table)
 
 
-def _cmd_uplinksets_list(args: argparse.Namespace) -> None:
-    try:
-        run_sync(_async_uplinksets_list())
-    except Exception as exc:
-        get_console().print(f"[red]Error: {exc}[/red]")
-        sys.exit(1)
+async def _cmd_uplinksets_list(args: argparse.Namespace) -> None:
+    await _async_uplinksets_list()
 
 
 # ── pcli oneview list server-profiles ────────────────────────────────────────
@@ -387,12 +367,8 @@ async def _async_profiles_list() -> None:
     get_console().print(table)
 
 
-def _cmd_profiles_list(args: argparse.Namespace) -> None:
-    try:
-        run_sync(_async_profiles_list())
-    except Exception as exc:
-        get_console().print(f"[red]Error: {exc}[/red]")
-        sys.exit(1)
+async def _cmd_profiles_list(args: argparse.Namespace) -> None:
+    await _async_profiles_list()
 
 
 # ── pcli oneview describe ─────────────────────────────────────────────────────

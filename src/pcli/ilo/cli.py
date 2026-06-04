@@ -129,29 +129,8 @@ async def _run_parallel_async(hosts: list[dict], fetch_fn: FetchFn) -> list[tupl
 
 
 async def _run_report_memory(args: argparse.Namespace) -> None:
-    from pcli.com.inventory import aggregate_by_part_number
-
-    c = get_console()
     hosts = _load_hosts_or_exit(getattr(args, "host", None), getattr(args, "hosts_from", None))
-
-    with c.status("[dim]Fetching memory inventory across fleet…[/dim]"):
-        results = await _run_parallel_async(hosts, inventory.fetch_memory_report_data)
-
-    all_dimms: list[dict] = []
-    for server_name, error, dimms in results:
-        if error:
-            c.print(f"[yellow]  {server_name}: {error}[/yellow]")
-            continue
-        for d in dimms:
-            d["server"] = server_name
-            all_dimms.append(d)
-
-    if not all_dimms:
-        c.print("[yellow]No memory inventory data returned.[/yellow]")
-        return
-
-    rows = aggregate_by_part_number(all_dimms)
-    print_memory_report(rows, source="iLO")
+    await run_report_memory(hosts)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -570,98 +549,13 @@ async def _run_set_dhcp(args: argparse.Namespace) -> None:
 
 
 async def _run_report_cpu(args: argparse.Namespace) -> None:
-    from rich.console import Console
-    from rich.table import Table
-    from rich import box as rich_box
-
-    console = Console()
     hosts = _load_hosts_or_exit(getattr(args, "host", None))
-
-    with console.status("[dim]Fetching CPU inventory across fleet…[/dim]"):
-        results = await _run_parallel_async(hosts, inventory.fetch_cpu_report_data)
-
-    table = Table(
-        title="CPU Inventory",
-        box=rich_box.ROUNDED,
-        show_header=True,
-        header_style="bold cyan",
-    )
-    table.add_column("Server",  min_width=16, no_wrap=True)
-    table.add_column("Socket",  no_wrap=True)
-    table.add_column("Model",   min_width=30)
-    table.add_column("Cores",   justify="right", no_wrap=True)
-    table.add_column("Threads", justify="right", no_wrap=True)
-    table.add_column("Max GHz", justify="right", no_wrap=True)
-
-    for server_name, error, cpus in results:
-        if error:
-            table.add_row(server_name, "—", f"[yellow]{error}[/yellow]", "—", "—", "—")
-            continue
-        for i, cpu in enumerate(cpus):
-            mhz = cpu["speed_mhz"]
-            ghz = f"{mhz / 1000:.2f}" if isinstance(mhz, (int, float)) else "—"
-            table.add_row(
-                server_name if i == 0 else "",
-                str(cpu["socket"]),
-                cpu["model"],
-                str(cpu["cores"]),
-                str(cpu["threads"]),
-                ghz,
-            )
-
-    console.print(table)
+    await run_report_cpu(hosts)
 
 
 async def _run_report_gpu(args: argparse.Namespace) -> None:
-    from collections import defaultdict
-    from rich.console import Console
-    from rich.table import Table
-    from rich import box as rich_box
-
-    console = Console()
     hosts = _load_hosts_or_exit(getattr(args, "host", None))
-
-    with console.status("[dim]Fetching GPU inventory across fleet…[/dim]"):
-        results = await _run_parallel_async(hosts, inventory.fetch_gpu_report_data)
-
-    # Aggregate: gpu_name → {count, servers}
-    groups: dict[str, dict] = {}
-    for server_name, error, gpus in results:
-        if error or not gpus:
-            continue
-        for gpu in gpus:
-            key = gpu["name"]
-            if key not in groups:
-                groups[key] = {"count": 0, "servers": set()}
-            groups[key]["count"] += 1
-            groups[key]["servers"].add(server_name)
-
-    if not groups:
-        console.print("[yellow]No GPUs found across fleet.[/yellow]")
-        return
-
-    rows = sorted(groups.items(), key=lambda x: x[1]["count"], reverse=True)
-    total = sum(v["count"] for _, v in rows)
-    server_count = len({s for _, v in rows for s in v["servers"]})
-
-    table = Table(
-        title=f"GPU Inventory  ({total} GPUs across {server_count} servers)",
-        box=rich_box.ROUNDED,
-        show_header=True,
-        header_style="bold cyan",
-    )
-    table.add_column("GPU Model", min_width=28)
-    table.add_column("Count",     justify="right", no_wrap=True, style="bold")
-    table.add_column("Servers",   min_width=20)
-
-    for gpu_name, v in rows:
-        table.add_row(
-            gpu_name,
-            str(v["count"]),
-            ", ".join(sorted(v["servers"])),
-        )
-
-    console.print(table)
+    await run_report_gpu(hosts)
 
 
 async def _run_get(args: argparse.Namespace) -> None:
@@ -700,60 +594,25 @@ async def _run_get(args: argparse.Namespace) -> None:
 async def _run_upgrade(args: argparse.Namespace) -> None:
     action = args.upgrade_action
     dry_run = getattr(args, "dry_run", False)
+    host = _load_hosts_or_exit(args.host)[0]
 
     if action == "auto":
         if not args.host:
             print("ERROR: 'pcli ilo upgrade' requires --host <name>", file=sys.stderr)
             sys.exit(1)
-        host = _load_hosts_or_exit(args.host)[0]
-        await _run_fw_upgrade(
+        await run_fw_upgrade(
             host,
             dry_run=dry_run,
             reboot=getattr(args, "reboot", False),
             component=getattr(args, "component", "all"),
         )
-        return
-
-    host = _load_hosts_or_exit(args.host)[0]
-    try:
-        async with ilo_session(host) as client:
-            if action == "components":
-                _print_fw_components(host["name"], await firmware.get_component_repository(client))
-            elif action == "queue":
-                _print_fw_queue(host["name"], await firmware.get_task_queue(client))
-            elif action == "stage":
-                result = await firmware.stage_from_uri(client, args.url, dry_run=dry_run)
-                if dry_run:
-                    print(f"[dry-run] Would POST to: {result['target']}")
-                    print(f"[dry-run] Payload: {json.dumps(result['payload'], indent=2)}")
-                else:
-                    print(f"Staging initiated on {host['name']}:")
-                    print(json.dumps(result, indent=2))
-            elif action == "flash":
-                result = await firmware.add_to_task_queue(client, args.filename, dry_run=dry_run)
-                if dry_run:
-                    print(f"[dry-run] Would POST to: {result['target']}")
-                    print(f"[dry-run] Payload: {json.dumps(result['payload'], indent=2)}")
-                else:
-                    print(f"Queued '{args.filename}' for flash on next reboot ({host['name']}):")
-                    print(json.dumps(result, indent=2))
-            elif action == "clear":
-                uris = await firmware.clear_task_queue(client, dry_run=dry_run)
-                if dry_run:
-                    if uris:
-                        print(f"[dry-run] Would delete {len(uris)} task queue entries:")
-                        for uri in uris:
-                            print(f"  {uri}")
-                    else:
-                        print("[dry-run] Task queue is already empty.")
-                else:
-                    print(f"Cleared {len(uris)} task queue entries from {host['name']}.")
-    except ServerDownOrUnreachableError as exc:
-        print(f"ERROR: {host['name']} unreachable: {exc}", file=sys.stderr)
-        sys.exit(1)
-    except (RuntimeError, TimeoutError) as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        sys.exit(1)
+    else:
+        await run_upgrade_action(
+            host, action,
+            dry_run=dry_run,
+            url=getattr(args, "url", None),
+            filename=getattr(args, "filename", None),
+        )
 
 
 async def _run_fw_upgrade(host: dict, *, dry_run: bool = False, reboot: bool = False, component: str = "all") -> None:

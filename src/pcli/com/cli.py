@@ -693,7 +693,11 @@ async def _cmd_describe_server(args: argparse.Namespace) -> None:
     state = server.get("state", {})
     health = hw.get("health", {})
 
-    # ── Header ────────────────────────────────────────────────────────────────
+    # ── JSON early return ─────────────────────────────────────────────────────
+    if get_output_mode() == OutputMode.JSON:
+        print_json(server)
+        return
+
     get_console().print(Panel(
         f"[bold]{server.get('name')}[/bold]   [dim]{hw.get('model', '—')}[/dim]",
         expand=False,

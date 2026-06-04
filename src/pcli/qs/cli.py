@@ -14,7 +14,7 @@ import argparse
 import re
 import sys
 
-from rich.console import Console
+from pcli.common.display import get_console, make_table
 from rich.table import Table
 from rich.markdown import Markdown
 from rich.rule import Rule
@@ -22,7 +22,6 @@ from rich import box
 
 from pcli.qs.client import QSEntry, search_quickspecs, fetch_quickspec_markdown, fetch_quickspec_versions, filter_section
 
-console = Console()
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -53,18 +52,18 @@ def _render_md_table(table_lines: list[str]) -> None:
         if not _SEP_RE.match(ln)
     ]
     col_count = len(header_row)
-    t = Table(
-        box=box.SIMPLE_HEAD,
+    t = make_table(
+        "",
+        *[(h, {}) for h in header_row],
+        box_style=box.SIMPLE_HEAD,
         show_header=bool(any(header_row)),
         header_style="bold",
         padding=(0, 1),
     )
-    for h in header_row:
-        t.add_column(h)
     for row in data_rows:
         padded = (row + [""] * col_count)[:col_count]
         t.add_row(*padded)
-    console.print(t)
+    get_console().print(t)
 
 
 def _render_section_body(body: str) -> None:
@@ -77,7 +76,7 @@ def _render_section_body(body: str) -> None:
             if pending:
                 text_block = "\n".join(pending).strip()
                 if text_block:
-                    console.print(Markdown(text_block))
+                    get_console().print(Markdown(text_block))
                 pending = []
             table_lines = []
             while i < len(lines) and lines[i].startswith("|"):
@@ -90,7 +89,7 @@ def _render_section_body(body: str) -> None:
     if pending:
         text_block = "\n".join(pending).strip()
         if text_block:
-            console.print(Markdown(text_block))
+            get_console().print(Markdown(text_block))
 
 
 # Matches a date-leading plain-text version header from PDF conversion:
@@ -196,16 +195,16 @@ def _take_n_versions(rows: list[list[str]], n: int) -> list[list[str]]:
 
 def _cmd_list(args: argparse.Namespace) -> None:
     model = args.model
-    console.print(f"[dim]Searching QuickSpecs for: {model}…[/dim]")
+    get_console().print(f"[dim]Searching QuickSpecs for: {model}…[/dim]")
 
     try:
         entries = search_quickspecs(model, count=args.count)
     except Exception as exc:
-        console.print(f"[red]Error:[/red] {exc}", highlight=False)
+        get_console().print(f"[red]Error:[/red] {exc}", highlight=False)
         sys.exit(1)
 
     if not entries:
-        console.print("[yellow]No results found.[/yellow]")
+        get_console().print("[yellow]No results found.[/yellow]")
         return
 
     # Deduplicate by doc_id — Coveo can index the same document multiple times
@@ -217,22 +216,22 @@ def _cmd_list(args: argparse.Namespace) -> None:
             unique.append(e)
 
     top = unique[0]
-    console.print(f"[dim]Fetching QuickSpec {top.doc_id}…[/dim]")
+    get_console().print(f"[dim]Fetching QuickSpec {top.doc_id}…[/dim]")
     try:
         markdown, sections = fetch_quickspec_markdown(top.doc_id)
     except Exception as exc:
-        console.print(f"[red]Error:[/red] {exc}", highlight=False)
+        get_console().print(f"[red]Error:[/red] {exc}", highlight=False)
         sys.exit(1)
 
     # Header
-    console.print()
-    console.print(Rule(f"[bold]{top.title}[/bold]  [dim]{top.doc_id}[/dim]"))
+    get_console().print()
+    get_console().print(Rule(f"[bold]{top.title}[/bold]  [dim]{top.doc_id}[/dim]"))
 
     # Find and render Summary of Changes
     matched = next((s for s in sections if "summary of changes" in s.lower()), None)
     if not matched:
-        console.print("[yellow]No 'Summary of Changes' section found in this QuickSpec.[/yellow]")
-        console.print(f"[dim]Use 'pcli qs describe {top.doc_id}' to browse all sections.[/dim]")
+        get_console().print("[yellow]No 'Summary of Changes' section found in this QuickSpec.[/yellow]")
+        get_console().print(f"[dim]Use 'pcli qs describe {top.doc_id}' to browse all sections.[/dim]")
         return
 
     text = filter_section(markdown, matched)
@@ -242,22 +241,23 @@ def _cmd_list(args: argparse.Namespace) -> None:
     rows = _parse_change_rows(body)
     rows = _take_n_versions(rows, args.count)
 
-    t = Table(
-        box=box.SIMPLE_HEAD,
+    t = make_table(
+        "",
+        ("Date",                  {"no_wrap": True, "style": "cyan"}),
+        ("Version",               {"no_wrap": True, "style": "green"}),
+        ("Action",                {"no_wrap": True}),
+        ("Description of Change", {}),
+        box_style=box.SIMPLE_HEAD,
         show_header=True,
         header_style="bold",
         padding=(0, 1),
     )
-    t.add_column("Date", no_wrap=True, style="cyan")
-    t.add_column("Version", no_wrap=True, style="green")
-    t.add_column("Action", no_wrap=True)
-    t.add_column("Description of Change")
 
     for row in rows:
         t.add_row(*row)
 
-    console.print(t)
-    console.print(
+    get_console().print(t)
+    get_console().print(
         f"[dim]Use 'pcli qs describe {top.doc_id}' to read the full QuickSpec.[/dim]"
     )
 
@@ -267,36 +267,36 @@ def _cmd_describe(args: argparse.Namespace) -> None:
     doc_id = args.doc_id if args.doc_id else None
     if not doc_id:
         if not args.model:
-            console.print(
+            get_console().print(
                 "[red]Error:[/red] provide a doc ID or --model <model>",
                 highlight=False,
             )
             sys.exit(1)
-        console.print(f"[dim]Looking up latest QuickSpec for: {args.model}…[/dim]")
+        get_console().print(f"[dim]Looking up latest QuickSpec for: {args.model}…[/dim]")
         try:
             entries = search_quickspecs(args.model, count=1)
         except Exception as exc:
-            console.print(f"[red]Error:[/red] {exc}", highlight=False)
+            get_console().print(f"[red]Error:[/red] {exc}", highlight=False)
             sys.exit(1)
         if not entries:
-            console.print("[yellow]No QuickSpec found for that model.[/yellow]")
+            get_console().print("[yellow]No QuickSpec found for that model.[/yellow]")
             sys.exit(1)
         doc_id = entries[0].doc_id
-        console.print(
+        get_console().print(
             f"[dim]Using latest: {doc_id} ({entries[0].title})[/dim]"
         )
 
-    console.print(f"[dim]Fetching QuickSpec {doc_id}…[/dim]")
+    get_console().print(f"[dim]Fetching QuickSpec {doc_id}…[/dim]")
     try:
         markdown, sections = fetch_quickspec_markdown(doc_id)
     except Exception as exc:
-        console.print(f"[red]Error:[/red] {exc}", highlight=False)
+        get_console().print(f"[red]Error:[/red] {exc}", highlight=False)
         sys.exit(1)
 
     if args.list_sections:
-        console.print("[bold]Available sections:[/bold]")
+        get_console().print("[bold]Available sections:[/bold]")
         for s in sections:
-            console.print(f"  • {s}")
+            get_console().print(f"  • {s}")
         return
 
     if args.section:
@@ -305,7 +305,7 @@ def _cmd_describe(args: argparse.Namespace) -> None:
         target = resolved.lower()
         matched = next((s for s in sections if target in s.lower()), None)
         if not matched:
-            console.print(
+            get_console().print(
                 f"[yellow]Section '{resolved}' not found.[/yellow]\n"
                 f"Available sections: {', '.join(sections)}"
             )
@@ -314,12 +314,12 @@ def _cmd_describe(args: argparse.Namespace) -> None:
         lines = text.splitlines()
         heading = lines[0].lstrip("#").strip() if lines else matched
         body = "\n".join(lines[1:]).lstrip("\n")
-        console.print(Rule(f"[bold]{heading}[/bold]"))
+        get_console().print(Rule(f"[bold]{heading}[/bold]"))
         _render_section_body(body)
         return
 
     # Full document
-    console.print(Markdown(markdown))
+    get_console().print(Markdown(markdown))
 
 
 # ── diff ──────────────────────────────────────────────────────────────────────
@@ -360,14 +360,14 @@ def _section_map(markdown: str, sections: list[str]) -> dict[str, str]:
 def _cmd_diff(args: argparse.Namespace) -> None:
     import difflib
 
-    console.print(f"[dim]Looking up QuickSpec for: {args.model}…[/dim]")
+    get_console().print(f"[dim]Looking up QuickSpec for: {args.model}…[/dim]")
     try:
         entries = search_quickspecs(args.model, count=1)
     except Exception as exc:
-        console.print(f"[red]Error:[/red] {exc}", highlight=False)
+        get_console().print(f"[red]Error:[/red] {exc}", highlight=False)
         sys.exit(1)
     if not entries:
-        console.print("[yellow]No QuickSpec found for that model.[/yellow]")
+        get_console().print("[yellow]No QuickSpec found for that model.[/yellow]")
         sys.exit(1)
 
     doc_id = entries[0].doc_id
@@ -376,18 +376,18 @@ def _cmd_diff(args: argparse.Namespace) -> None:
     try:
         versions = fetch_quickspec_versions(doc_id, title=title, n=20)
     except Exception as exc:
-        console.print(f"[red]Error fetching version list:[/red] {exc}", highlight=False)
+        get_console().print(f"[red]Error fetching version list:[/red] {exc}", highlight=False)
         sys.exit(1)
 
     if len(versions) < 2:
-        console.print("[yellow]Only one version available — nothing to diff.[/yellow]")
+        get_console().print("[yellow]Only one version available — nothing to diff.[/yellow]")
         sys.exit(0)
 
     ver_map = {v.version_num: v for v in versions}
     if args.v1 and args.v2:
         if args.v1 not in ver_map or args.v2 not in ver_map:
             available = ", ".join(f"v{v.version_num} ({v.date})" for v in versions)
-            console.print(f"[red]Version not found.[/red] Available: {available}")
+            get_console().print(f"[red]Version not found.[/red] Available: {available}")
             sys.exit(1)
         v_old = ver_map[args.v1]
         v_new = ver_map[args.v2]
@@ -397,18 +397,18 @@ def _cmd_diff(args: argparse.Namespace) -> None:
         v_new = versions[0]
         v_old = versions[1]
 
-    console.print(
+    get_console().print(
         f"[dim]Comparing v{v_old.version_num} ({v_old.date}) → "
         f"v{v_new.version_num} ({v_new.date})  [{title}][/dim]"
     )
 
     try:
-        with console.status(f"[dim]Fetching v{v_new.version_num}…[/dim]"):
+        with get_console().status(f"[dim]Fetching v{v_new.version_num}…[/dim]"):
             md_new, secs_new = fetch_quickspec_markdown(doc_id, ver=v_new.version_num)
-        with console.status(f"[dim]Fetching v{v_old.version_num}…[/dim]"):
+        with get_console().status(f"[dim]Fetching v{v_old.version_num}…[/dim]"):
             md_old, secs_old = fetch_quickspec_markdown(doc_id, ver=v_old.version_num)
     except Exception as exc:
-        console.print(f"[red]Error fetching content:[/red] {exc}", highlight=False)
+        get_console().print(f"[red]Error fetching content:[/red] {exc}", highlight=False)
         sys.exit(1)
 
     sec_map_new = _section_map(md_new, secs_new)
@@ -421,24 +421,24 @@ def _cmd_diff(args: argparse.Namespace) -> None:
         target = resolved.lower()
         matched = next((s for s in all_sections if target in s.lower()), None)
         if not matched:
-            console.print(f"[yellow]Section '{resolved}' not found.[/yellow]")
-            console.print(f"Available: {', '.join(all_sections)}")
+            get_console().print(f"[yellow]Section '{resolved}' not found.[/yellow]")
+            get_console().print(f"Available: {', '.join(all_sections)}")
             sys.exit(1)
 
         old_lines = sec_map_old.get(matched, "").splitlines()
         new_lines = sec_map_new.get(matched, "").splitlines()
 
-        console.print(Rule(f"[bold]{matched}[/bold]  v{v_old.version_num} → v{v_new.version_num}"))
+        get_console().print(Rule(f"[bold]{matched}[/bold]  v{v_old.version_num} → v{v_new.version_num}"))
         diff = list(difflib.unified_diff(old_lines, new_lines, lineterm="", n=0))
         real = _real_changes(diff)
         if not real:
-            console.print("[green]No changes in this section.[/green]")
+            get_console().print("[green]No changes in this section.[/green]")
             return
         for line in real:
             if line.startswith("+"):
-                console.print(f"[green]{line[1:]}[/green]")
+                get_console().print(f"[green]{line[1:]}[/green]")
             else:
-                console.print(f"[red]{line[1:]}[/red]")
+                get_console().print(f"[red]{line[1:]}[/red]")
         return
 
     # ── Full diff: all changed sections ──────────────────────────────────────
@@ -459,20 +459,20 @@ def _cmd_diff(args: argparse.Namespace) -> None:
 
         any_change = True
         if not old_text:
-            console.print(Rule(f"[bold green]{sec}[/bold green]  [green](new section)[/green]"))
+            get_console().print(Rule(f"[bold green]{sec}[/bold green]  [green](new section)[/green]"))
         elif not new_text:
-            console.print(Rule(f"[bold red]{sec}[/bold red]  [red](removed)[/red]"))
+            get_console().print(Rule(f"[bold red]{sec}[/bold red]  [red](removed)[/red]"))
         else:
-            console.print(Rule(f"[bold]{sec}[/bold]"))
+            get_console().print(Rule(f"[bold]{sec}[/bold]"))
 
         for line in real:
             if line.startswith("+"):
-                console.print(f"[green]{line[1:]}[/green]")
+                get_console().print(f"[green]{line[1:]}[/green]")
             else:
-                console.print(f"[red]{line[1:]}[/red]")
+                get_console().print(f"[red]{line[1:]}[/red]")
 
     if not any_change:
-        console.print("[green]No differences found between these two versions.[/green]")
+        get_console().print("[green]No differences found between these two versions.[/green]")
 
 
 # ── Argument parser ────────────────────────────────────────────────────────────

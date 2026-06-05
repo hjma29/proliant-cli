@@ -357,6 +357,8 @@ def _build_parser() -> argparse.ArgumentParser:
     set_route.add_argument("--confirm", action="store_true", help="Skip confirmation prompt")
     set_route.add_argument("--no-reset", action="store_true", dest="no_reset",
                            help="Do not reset iLO even if ResetRequired (change may not take effect immediately)")
+
+    desc_p = subparsers.add_parser(
         "describe",
         help="Show full details for a single server (identity, iLO, CPU, GPU, memory, firmware)",
     )
@@ -726,6 +728,82 @@ async def _run_set_static(args: argparse.Namespace) -> None:
                     print(f"[{name}] iLO reset triggered. It will come up at {target_ip}.")
                 else:
                     print(f"[{name}] ✓ Static IP {target_ip} staged (--no-reset). WARNING: change will revert on next iLO reboot.")
+        except Exception as exc:
+            print(f"[{name}] ERROR: {exc}", file=sys.stderr)
+
+
+async def _run_set_route(args: argparse.Namespace) -> None:
+    hosts = _load_hosts_or_exit(getattr(args, "host", None))
+    dest    = args.destination.strip()
+    mask    = args.mask.strip()
+    gateway = args.gateway.strip()
+
+    for host in hosts:
+        name = host["name"]
+        try:
+            async with ilo_session(host) as client:
+                interface_uri, reset_target = await _manager_network_targets(client)
+                data    = await client.get(interface_uri)
+                oem_hpe = (data.get("Oem") or {}).get("Hpe", {})
+
+                # Warn if DHCP is active — routes are locked out on iLO when DHCP is enabled
+                dhcp_on = (data.get("DHCPv4") or {}).get("DHCPEnabled", False)
+                if dhcp_on:
+                    print(f"[{name}] WARNING: DHCP is enabled — iLO does not allow static routes in DHCP mode.")
+                    continue
+
+                # Read existing routes (3 fixed slots)
+                existing: list[dict] = (oem_hpe.get("IPv4") or {}).get("StaticRoutes") or []
+                # Normalise to exactly 3 slots, filling missing with empty
+                _empty = {"Destination": "0.0.0.0", "SubnetMask": "0.0.0.0", "Gateway": "0.0.0.0"}
+                slots: list[dict] = [dict(r) for r in existing[:3]]
+                while len(slots) < 3:
+                    slots.append(dict(_empty))
+
+                # Check duplicate
+                for r in slots:
+                    if r.get("Destination") == dest and r.get("SubnetMask") == mask:
+                        print(f"[{name}] Route to {dest}/{mask} already exists (gateway {r.get('Gateway')}) — skipping.")
+                        break
+                else:
+                    # Find first empty slot
+                    slot_idx = next(
+                        (i for i, r in enumerate(slots) if r.get("Destination") in (None, "", "0.0.0.0")),
+                        None,
+                    )
+                    if slot_idx is None:
+                        print(f"[{name}] All 3 static route slots are occupied. Remove one before adding.", file=sys.stderr)
+                        continue
+
+                    if not getattr(args, "confirm", False):
+                        ans = input(f"[{name}] Add route {dest}/{mask} via {gateway} (slot {slot_idx + 1}/3)? [y/N] ")
+                        if ans.strip().lower() != "y":
+                            print(f"[{name}] Skipped.")
+                            continue
+
+                    slots[slot_idx] = {"Destination": dest, "SubnetMask": mask, "Gateway": gateway}
+                    payload = {"Oem": {"Hpe": {"IPv4": {"StaticRoutes": slots}}}}
+                    result  = await client.patch(interface_uri, payload)
+                    ext     = result.get("error", {})
+                    msgs    = ext.get("@Message.ExtendedInfo", [])
+                    _OK     = ("Success", "ResetRequired", "SystemResetRequired")
+                    is_success = not ext or any(
+                        any(s in m.get("MessageId", "") for s in _OK) for m in msgs
+                    )
+                    if not is_success:
+                        details = "; ".join(m.get("MessageId", "") for m in msgs)
+                        print(f"[{name}] ERROR from iLO: {ext.get('message', str(result))} ({details})", file=sys.stderr)
+                        continue
+
+                    needs_reset = any("ResetRequired" in m.get("MessageId", "") for m in msgs)
+                    if needs_reset and not getattr(args, "no_reset", False):
+                        print(f"[{name}] ✓ Route added. iLO requires reset — resetting now...")
+                        await client.post(reset_target, {"ResetType": "GracefulRestart"})
+                        print(f"[{name}] iLO reset triggered.")
+                    elif needs_reset:
+                        print(f"[{name}] ✓ Route added (--no-reset). Run without --no-reset to apply immediately.")
+                    else:
+                        print(f"[{name}] ✓ Route {dest}/{mask} via {gateway} added.")
         except Exception as exc:
             print(f"[{name}] ERROR: {exc}", file=sys.stderr)
 

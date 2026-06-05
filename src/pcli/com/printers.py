@@ -18,40 +18,103 @@ from pcli.common.display import get_console, get_output_mode, OutputMode, print_
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+_TIER_MAP = {
+    "STANDARD_PROLIANT":  "Standard-ProLiant",
+    "ENHANCED_PROLIANT":  "Enhanced-ProLiant",
+    "BASIC_PROLIANT":     "Basic-ProLiant",
+    "FOUNDATION_PROLIANT": "Foundation-ProLiant",
+}
+
+_REGION_MAP = {
+    "us-west":    "US West",
+    "us-east":    "US East",
+    "eu-central": "EU Central",
+    "ap-northeast": "AP Northeast",
+    "ap-southeast": "AP Southeast",
+}
+
+
+def _fmt_tier(raw: dict) -> str:
+    subs = raw.get("subscription") or []
+    tier = (subs[0].get("tier") or "") if subs else ""
+    return _TIER_MAP.get(tier) or (tier.replace("_", "-").title() if tier else "—")
+
+
+def _fmt_region(raw: dict) -> str:
+    region = raw.get("region") or ""
+    return _REGION_MAP.get(region.lower(), region)
+
+
+def _fmt_device_cell(d) -> str:
+    """Serial (primary) + iLO hostname (secondary, dim)."""
+    hostname = d.raw.get("deviceName") or d.raw.get("secondaryName") or ""
+    if hostname:
+        return f"[bold]{d.serial_number}[/bold]\n[dim]{hostname}[/dim]"
+    return f"[bold]{d.serial_number}[/bold]"
+
+
+def _fmt_service(d) -> str:
+    svc  = d.service_name or ""
+    region = _fmt_region(d.raw)
+    if svc and region:
+        return f"{svc}\n[dim]{region}[/dim]"
+    if region:
+        return region
+    return "—"
+
+
+def _fmt_type(d) -> str:
+    dtype = (d.device_type or "").title()
+    cat   = (d.raw.get("category") or "").title()
+    if cat and cat.lower() != dtype.lower():
+        return f"{dtype}\n[dim]{cat}[/dim]"
+    return dtype
+
+
+# ---------------------------------------------------------------------------
 # Device field registry
 # ---------------------------------------------------------------------------
 
 _DEVICE_FIELDS: dict = {
-    "name":     ("Name",     "bold cyan", {"no_wrap": True, "ratio": 4},
+    "device":   ("Device",    "default",   {"no_wrap": True, "min_width": 14, "ratio": 3},
+                 lambda d, _u: _fmt_device_cell(d)),
+    "name":     ("Name",      "bold cyan", {"no_wrap": True, "ratio": 4},
                  lambda d, _u: d.display_name),
-    "ilo-name": ("iLO Name", "cyan",      {"no_wrap": True, "ratio": 3},
+    "ilo-name": ("iLO Name",  "cyan",      {"no_wrap": True, "ratio": 3},
                  lambda d, _u: d.raw.get("deviceName") or d.raw.get("secondaryName") or "—"),
-    "type":     ("Type",     "dim",       {"no_wrap": True, "min_width": 7, "max_width": 8},
-                 lambda d, _u: d.device_type),
-    "model":    ("Model",    "white",     {"no_wrap": True, "ratio": 2},
+    "type":     ("Type",      "dim",       {"no_wrap": True, "min_width": 9},
+                 lambda d, _u: _fmt_type(d)),
+    "model":    ("Model",     "white",     {"no_wrap": True, "ratio": 2},
                  lambda d, _u: d.model),
-    "serial":   ("Serial",   "green",     {"no_wrap": True, "min_width": 13},
+    "serial":   ("Serial",    "green",     {"no_wrap": True, "min_width": 13},
                  lambda d, _u: d.serial_number),
-    "part":     ("Part #",   "dim",       {"no_wrap": True, "min_width": 11},
+    "part":     ("Part #",    "dim",       {"no_wrap": True, "min_width": 11},
                  lambda d, _u: d.product_id or "—"),
-    "service":  ("Service",  "yellow",    {"no_wrap": True, "ratio": 2},
-                 lambda d, _u: d.service_name or "—"),
-    "sub-key":  ("Sub Key",  "dim",       {"no_wrap": True, "min_width": 9, "max_width": 10},
+    "service":  ("Service",   "yellow",    {"no_wrap": True, "ratio": 2},
+                 lambda d, _u: _fmt_service(d)),
+    "tier":     ("Subscription Tier", "cyan", {"no_wrap": True, "min_width": 12},
+                 lambda d, _u: _fmt_tier(d.raw)),
+    "flex":     ("Flex",      "dim",       {"no_wrap": True, "min_width": 4},
+                 lambda d, _u: "Yes" if d.raw.get("isFlex") else "No"),
+    "sub-key":  ("Sub Key",   "dim",       {"no_wrap": True, "min_width": 9, "max_width": 10},
                  lambda d, _u: (d.subscription_key[:8] + "…") if d.subscription_key else "—"),
-    "location": ("Location", "dim",       {"no_wrap": True, "ratio": 2},
+    "location": ("Location",  "dim",       {"no_wrap": True, "ratio": 2},
                  lambda d, _u: (d.raw.get("location") or {}).get("locationName") or "—"),
-    "added":    ("Added",    "dim",       {"no_wrap": True, "min_width": 10},
+    "added":    ("Added",     "dim",       {"no_wrap": True, "min_width": 10},
                  lambda d, _u: (d.raw.get("createdAt") or "")[:10] or "—"),
-    "updated":  ("Updated",  "dim",       {"no_wrap": True, "min_width": 10},
+    "updated":  ("Updated",   "dim",       {"no_wrap": True, "min_width": 10},
                  lambda d, _u: (d.raw.get("updatedAt") or "")[:10] or "—"),
-    "added-by": ("Added By", "dim",       {"no_wrap": True, "ratio": 2},
+    "added-by": ("Added By",  "dim",       {"no_wrap": True, "ratio": 2},
                  lambda d, u: u.get(
                      ((d.raw.get("contact") or {}).get("workspaceUser") or {}).get("id", ""),
                      "—"
                  )),
 }
 
-_DEVICE_DEFAULT_FIELDS = ("name", "type", "model", "serial", "service", "sub-key")
+_DEVICE_DEFAULT_FIELDS = ("device", "model", "type", "service", "tier", "flex", "location")
 
 DEVICE_FIELD_NAMES = tuple(_DEVICE_FIELDS.keys())
 
@@ -92,8 +155,8 @@ def print_devices_table(device_list: list, raw: bool = False,
     selected = parse_fields(fields, _DEVICE_FIELDS, _DEVICE_DEFAULT_FIELDS)
     uc = user_cache or {}
 
-    # Sorting
-    sort_key = (sort_by or "name").lower()
+    # Sorting — default to serial for the new "device" column layout
+    sort_key = (sort_by or "serial").lower()
     if sort_key not in _DEVICE_FIELDS:
         raise SystemExit(f"Unknown sort field: {sort_key}\nAvailable: {', '.join(_DEVICE_FIELDS)}")
     sorted_list = sorted(device_list,
@@ -101,8 +164,8 @@ def print_devices_table(device_list: list, raw: bool = False,
 
     table = Table(
         title=f"GreenLake Devices ({len(device_list)} total)",
-        box=box.ROUNDED,
-        show_lines=False,
+        box=box.SIMPLE_HEAD,
+        show_lines=True,
         expand=True,
     )
     for key in selected:

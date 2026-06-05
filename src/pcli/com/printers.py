@@ -125,7 +125,7 @@ def _fmt_type(d) -> str:
 _DEVICE_FIELDS: dict = {
     "device":   ("Device",    "default",    {"no_wrap": True, "min_width": 14, "ratio": 3},
                  lambda d, _u: _fmt_device_cell(d)),
-    "os-name":  ("OS Name",   "default",    {"ratio": 3, "overflow": "fold"},
+    "os-name":  ("OS Name",   "default",    {"ratio": 4, "overflow": "fold"},
                  lambda d, _u: _fmt_os_name(d)),
     "ilo-name": ("iLO Name",  "green",      {"ratio": 4, "overflow": "fold"},
                  lambda d, _u: d.raw.get("deviceName") or "—"),
@@ -135,7 +135,7 @@ _DEVICE_FIELDS: dict = {
                  lambda d, _u: d.serial_number),
     "type":     ("Type",      "default",    {"no_wrap": True, "min_width": 4},
                  lambda d, _u: _fmt_type(d)),
-    "model":    ("Model",     "grey70",     {"no_wrap": True, "ratio": 2},
+    "model":    ("Model",     "grey70",     {"no_wrap": True, "max_width": 13},
                  lambda d, _u: d.model),
     "part":     ("Part #",    "grey70",     {"no_wrap": True, "min_width": 11},
                  lambda d, _u: d.product_id or "—"),

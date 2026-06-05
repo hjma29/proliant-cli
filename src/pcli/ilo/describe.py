@@ -30,8 +30,8 @@ async def run_describe(host: dict) -> None:
                 cpus    = await inventory.fetch_cpu_report_data(c)
                 gpus    = await inventory.fetch_gpu_report_data(c)
                 dimms   = await inventory.fetch_memory_population(c)
-        except ServerDownOrUnreachableError:
-            console.print(f"[red]Cannot connect to iLO at {host['url']}[/red]")
+        except Exception as exc:
+            console.print(f"[red]{type(exc).__name__}: {exc}[/red]")
             sys.exit(1)
 
     model      = system.get("Model", "—")

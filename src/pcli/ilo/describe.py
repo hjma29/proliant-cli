@@ -188,31 +188,47 @@ async def run_describe_ilo_nic(host: dict) -> None:
     gen_t = _kv_table()
     speed = nic.get("speed_mbps")
     speed_str = f"{speed} Mbps" if speed else "—"
-    gen_t.add_row("MAC",        nic.get("mac", "—"))
-    gen_t.add_row("Link",       nic.get("link_status", "—"))
-    gen_t.add_row("Speed",      speed_str)
+    gen_t.add_row("MAC",           nic.get("mac", "—"))
+    gen_t.add_row("Link",          nic.get("link_status", "—"))
+    gen_t.add_row("Speed",         speed_str)
+    gen_t.add_row("Connected via", nic.get("connected_via", "—"))
     console.print(gen_t)
 
     # ── IPv4 ──────────────────────────────────────────────────────────────────
     console.print("[bold]IPv4[/bold]")
     ipv4_t = _kv_table()
-    mode = "DHCP" if nic.get("dhcp_enabled") else "Static"
-    ipv4_t.add_row("Mode", f"[green]{mode}[/green]" if mode == "DHCP" else f"[cyan]{mode}[/cyan]")
+    dhcp_on = nic.get("dhcp_enabled")
+    mode = "DHCP" if dhcp_on else "Static"
+    ipv4_t.add_row("Mode", f"[green]{mode}[/green]" if dhcp_on else f"[cyan]{mode}[/cyan]")
 
     cur = nic.get("current_ipv4")
+    # Detect stale data: DHCP is on but API returned a Static-origin address
+    cur_origin = (cur or {}).get("origin", "")
+    stale = dhcp_on and cur and cur_origin.lower() not in ("dhcp", "")
+
     if cur:
-        ipv4_t.add_row("Address",         cur["address"])
+        addr_label = f"[dim]Address (stale — DHCP active)[/dim]" if stale else "Address"
+        ipv4_t.add_row(addr_label,        cur["address"])
         ipv4_t.add_row("Subnet Mask",     cur["subnet"])
         ipv4_t.add_row("Default Gateway", cur["gateway"])
+        if cur_origin:
+            ipv4_t.add_row("[dim]Origin[/dim]", f"[dim]{cur_origin}[/dim]")
+
+    if stale:
+        connected_url = nic.get("connected_via", "")
+        ipv4_t.add_row("", "")
+        ipv4_t.add_row("[yellow]⚠ Note[/yellow]",
+                       f"[yellow]iLO API may show stale static address after DHCP change.\n"
+                       f"  Actual DHCP address is in 'Connected via' above.[/yellow]")
 
     # Show configured static values when DHCP is active (so user knows the fallback)
     sta = nic.get("static_ipv4")
-    if sta and nic.get("dhcp_enabled"):
+    if sta and dhcp_on and not stale:
         ipv4_t.add_row("", "")
         ipv4_t.add_row("[dim]Configured Static Address[/dim]",  f"[dim]{sta['address']}[/dim]")
         ipv4_t.add_row("[dim]Configured Static Subnet[/dim]",   f"[dim]{sta['subnet']}[/dim]")
         ipv4_t.add_row("[dim]Configured Static Gateway[/dim]",  f"[dim]{sta['gateway']}[/dim]")
-    elif sta and not nic.get("dhcp_enabled") and not cur:
+    elif sta and not dhcp_on and not cur:
         ipv4_t.add_row("Address",         sta["address"])
         ipv4_t.add_row("Subnet Mask",     sta["subnet"])
         ipv4_t.add_row("Default Gateway", sta["gateway"])

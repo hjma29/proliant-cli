@@ -887,4 +887,5 @@ async def fetch_ilo_nic_details(client: ILOClient) -> dict[str, Any]:
         "static_routes":  static_routes,
         "lldp_enabled":   lldp_enabled,
         "selection_note": selection_note,
+        "connected_via":  client.base_url,
     }

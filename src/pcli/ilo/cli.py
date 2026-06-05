@@ -561,10 +561,15 @@ async def _run_set_dhcp(args: argparse.Namespace) -> None:
                         },
                     }
                     result = await client.patch(interface_uri, payload)
-                    # iLO wraps success in an "error" envelope with MessageId containing "Success"
+                    # iLO wraps responses in an "error" envelope.
+                    # "Success" = accepted. "ResetRequired" = accepted, reset needed (also a success).
+                    # Any other MessageId is a real error.
                     ext = result.get("error", {})
                     msgs = ext.get("@Message.ExtendedInfo", [])
-                    is_success = not ext or any("Success" in m.get("MessageId", "") for m in msgs)
+                    _OK = ("Success", "ResetRequired", "SystemResetRequired")
+                    is_success = not ext or any(
+                        any(s in m.get("MessageId", "") for s in _OK) for m in msgs
+                    )
                     if not is_success:
                         msg = ext.get("message", str(result))
                         details = "; ".join(m.get("MessageId", "") for m in msgs)

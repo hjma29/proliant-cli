@@ -8,6 +8,7 @@ and command dispatch.
 """
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from rich.table import Table
@@ -45,7 +46,7 @@ def _fmt_tier(raw: dict) -> str:
 
 def _fmt_region(raw: dict) -> str:
     region = raw.get("region") or ""
-    return _REGION_MAP.get(region.lower(), region)
+    return _REGION_MAP.get(region.lower(), region) or "—"
 
 
 def _fmt_device_cell(d) -> str:
@@ -56,14 +57,27 @@ def _fmt_device_cell(d) -> str:
     return f"[bold green]{d.serial_number}[/bold green]"
 
 
+def _fmt_os_name(d) -> str:
+    """OS hostname (secondaryName); fall back to serial if absent."""
+    name = (d.raw.get("secondaryName") or "").strip()
+    if name:
+        return f"[bold white]{name}[/bold white]"
+    return f"[grey70]{d.serial_number}[/grey70]"
+
+
 def _fmt_service(d) -> str:
-    svc  = d.service_name or ""
+    svc    = d.service_name or ""
     region = _fmt_region(d.raw)
     if svc and region:
         return f"{svc}\n[dim]{region}[/dim]"
     if region:
         return region
     return "—"
+
+
+def _strip_markup(s: str) -> str:
+    """Strip Rich markup tags for sort-key comparison."""
+    return re.sub(r'\[/?[^\]]*\]', '', s)
 
 
 _TYPE_COLORS = {

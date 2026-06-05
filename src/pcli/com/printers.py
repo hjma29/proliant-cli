@@ -79,7 +79,7 @@ def _fmt_os_name(d) -> str:
     """OS hostname (secondaryName); fall back to serial if absent or placeholder."""
     name = (d.raw.get("secondaryName") or "").strip()
     if name and name.lower() not in _UNNAMED_OS:
-        return f"[bold blue]{name}[/bold blue]"
+        return f"[bold cyan]{name}[/bold cyan]"
     return f"[grey70]{d.serial_number}[/grey70]"
 
 
@@ -125,9 +125,9 @@ def _fmt_type(d) -> str:
 _DEVICE_FIELDS: dict = {
     "device":   ("Device",    "default",    {"no_wrap": True, "min_width": 14, "ratio": 3},
                  lambda d, _u: _fmt_device_cell(d)),
-    "os-name":  ("OS Name",   "default",    {"ratio": 4, "overflow": "fold"},
+    "os-name":  ("OS Name",   "default",    {"ratio": 3, "overflow": "fold"},
                  lambda d, _u: _fmt_os_name(d)),
-    "ilo-name": ("iLO Name",  "green",      {"ratio": 3, "overflow": "fold"},
+    "ilo-name": ("iLO Name",  "green",      {"ratio": 4, "overflow": "fold"},
                  lambda d, _u: d.raw.get("deviceName") or "—"),
     "name":     ("Name",      "bold cyan",  {"no_wrap": True, "ratio": 4},
                  lambda d, _u: d.display_name),

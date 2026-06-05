@@ -87,7 +87,7 @@ def _fmt_os_name(d) -> str:
     name = (d.raw.get("secondaryName") or "").strip()
     if name and name.lower() not in _UNNAMED_OS:
         return f"[cyan]{name}[/cyan]"
-    return "[dim cyan]—[/dim cyan]" if _is_compute(d) else "[grey70]—[/grey70]"
+    return "[cyan]—[/cyan]" if _is_compute(d) else "[grey70]—[/grey70]"
 
 
 def _fmt_ilo_name(d) -> str:
@@ -95,7 +95,7 @@ def _fmt_ilo_name(d) -> str:
     name = d.raw.get("deviceName") or ""
     if name:
         return name
-    return "[dim green]—[/dim green]" if _is_compute(d) else "[grey70]—[/grey70]"
+    return "—" if _is_compute(d) else "[grey70]—[/grey70]"
 
 
 def _fmt_service(d) -> str:

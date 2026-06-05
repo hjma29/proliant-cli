@@ -35,13 +35,19 @@ async def _collection_members(client: ILOClient, collection_uri: str) -> list[di
 
 async def _member_resources(client: ILOClient, collection_uri: str) -> list[dict[str, Any]]:
     members = await _collection_members(client, collection_uri)
-    coros = [client.get(item["@odata.id"]) for item in members if "@odata.id" in item]
-    return list(await asyncio.gather(*coros)) if coros else []
+    results = []
+    for item in members:
+        if "@odata.id" in item:
+            results.append(await client.get(item["@odata.id"]))
+    return results
 
 
 async def _resource_list(client: ILOClient, links: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    coros = [client.get(item["@odata.id"]) for item in links if "@odata.id" in item]
-    return list(await asyncio.gather(*coros)) if coros else []
+    results = []
+    for item in links:
+        if "@odata.id" in item:
+            results.append(await client.get(item["@odata.id"]))
+    return results
 
 
 async def fetch_all_firmware(client: ILOClient) -> list[tuple[str, str]]:

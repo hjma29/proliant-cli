@@ -31,9 +31,7 @@ async def run_describe(host: dict) -> None:
                 gpus    = await inventory.fetch_gpu_report_data(c)
                 dimms   = await inventory.fetch_memory_population(c)
         except Exception as exc:
-            import traceback
-            traceback.print_exc()
-            console.print(f"[red]{type(exc).__name__}: {exc}[/red]")
+            console.print(f"[red]Error fetching server details: {type(exc).__name__}: {exc}[/red]")
             sys.exit(1)
 
     model      = system.get("Model", "—")

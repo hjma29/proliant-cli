@@ -66,12 +66,23 @@ def _fmt_service(d) -> str:
     return "—"
 
 
+_TYPE_COLORS = {
+    "compute":    "cyan",
+    "storage":    "yellow",
+    "networking": "magenta",
+    "switch":     "magenta",
+    "server":     "cyan",
+}
+
+
 def _fmt_type(d) -> str:
     dtype = (d.device_type or "").title()
     cat   = (d.raw.get("category") or "").title()
+    color = _TYPE_COLORS.get(dtype.lower(), "white")
     if cat and cat.lower() != dtype.lower():
-        return f"{dtype}\n[dim]{cat}[/dim]"
-    return dtype
+        cat_color = _TYPE_COLORS.get(cat.lower(), "dim")
+        return f"[{color}]{dtype}[/{color}]\n[{cat_color}]{cat}[/{cat_color}]"
+    return f"[{color}]{dtype}[/{color}]"
 
 
 # ---------------------------------------------------------------------------
@@ -79,35 +90,35 @@ def _fmt_type(d) -> str:
 # ---------------------------------------------------------------------------
 
 _DEVICE_FIELDS: dict = {
-    "device":   ("Device",    "default",   {"no_wrap": True, "min_width": 14, "ratio": 3},
+    "device":   ("Device",    "default",    {"no_wrap": True, "min_width": 14, "ratio": 3},
                  lambda d, _u: _fmt_device_cell(d)),
-    "name":     ("Name",      "bold cyan", {"no_wrap": True, "ratio": 4},
+    "name":     ("Name",      "bold cyan",  {"no_wrap": True, "ratio": 4},
                  lambda d, _u: d.display_name),
-    "ilo-name": ("iLO Name",  "cyan",      {"no_wrap": True, "ratio": 3},
+    "ilo-name": ("iLO Name",  "cyan",       {"no_wrap": True, "ratio": 3},
                  lambda d, _u: d.raw.get("deviceName") or d.raw.get("secondaryName") or "—"),
-    "type":     ("Type",      "cyan",      {"no_wrap": True, "min_width": 9},
+    "type":     ("Type",      "default",    {"no_wrap": True, "min_width": 9},
                  lambda d, _u: _fmt_type(d)),
-    "model":    ("Model",     "default",   {"no_wrap": True, "ratio": 2},
+    "model":    ("Model",     "grey70",     {"no_wrap": True, "ratio": 2},
                  lambda d, _u: d.model),
-    "serial":   ("Serial",    "green",     {"no_wrap": True, "min_width": 13},
+    "serial":   ("Serial",    "green",      {"no_wrap": True, "min_width": 13},
                  lambda d, _u: d.serial_number),
-    "part":     ("Part #",    "default",   {"no_wrap": True, "min_width": 11},
+    "part":     ("Part #",    "grey70",     {"no_wrap": True, "min_width": 11},
                  lambda d, _u: d.product_id or "—"),
-    "service":  ("Service",   "default",   {"no_wrap": True, "ratio": 2},
+    "service":  ("Service",   "grey70",     {"no_wrap": True, "ratio": 2},
                  lambda d, _u: _fmt_service(d)),
-    "tier":     ("Subscription Tier", "default", {"no_wrap": True, "min_width": 12},
+    "tier":     ("Subscription Tier", "grey70", {"no_wrap": True, "min_width": 12},
                  lambda d, _u: _fmt_tier(d.raw)),
-    "flex":     ("Flex",      "default",   {"no_wrap": True, "min_width": 4},
+    "flex":     ("Flex",      "grey70",     {"no_wrap": True, "min_width": 4},
                  lambda d, _u: "Yes" if d.raw.get("isFlex") else "No"),
-    "sub-key":  ("Sub Key",   "default",   {"no_wrap": True, "min_width": 9, "max_width": 10},
+    "sub-key":  ("Sub Key",   "grey70",     {"no_wrap": True, "min_width": 9, "max_width": 10},
                  lambda d, _u: (d.subscription_key[:8] + "…") if d.subscription_key else "—"),
-    "location": ("Location",  "default",   {"no_wrap": True, "ratio": 2},
+    "location": ("Location",  "grey70",     {"no_wrap": True, "ratio": 2},
                  lambda d, _u: (d.raw.get("location") or {}).get("locationName") or "—"),
-    "added":    ("Added",     "default",   {"no_wrap": True, "min_width": 10},
+    "added":    ("Added",     "grey70",     {"no_wrap": True, "min_width": 10},
                  lambda d, _u: (d.raw.get("createdAt") or "")[:10] or "—"),
-    "updated":  ("Updated",   "default",   {"no_wrap": True, "min_width": 10},
+    "updated":  ("Updated",   "grey70",     {"no_wrap": True, "min_width": 10},
                  lambda d, _u: (d.raw.get("updatedAt") or "")[:10] or "—"),
-    "added-by": ("Added By",  "default",   {"no_wrap": True, "ratio": 2},
+    "added-by": ("Added By",  "grey70",     {"no_wrap": True, "ratio": 2},
                  lambda d, u: u.get(
                      ((d.raw.get("contact") or {}).get("workspaceUser") or {}).get("id", ""),
                      "—"

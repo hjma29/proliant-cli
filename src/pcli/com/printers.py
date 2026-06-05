@@ -106,20 +106,24 @@ def _fmt_type(d) -> str:
 _DEVICE_FIELDS: dict = {
     "device":   ("Device",    "default",    {"no_wrap": True, "min_width": 14, "ratio": 3},
                  lambda d, _u: _fmt_device_cell(d)),
+    "os-name":  ("OS Name",   "default",    {"no_wrap": True, "ratio": 4},
+                 lambda d, _u: _fmt_os_name(d)),
+    "ilo-name": ("iLO Name",  "cyan",       {"no_wrap": True, "ratio": 3},
+                 lambda d, _u: d.raw.get("deviceName") or "—"),
     "name":     ("Name",      "bold cyan",  {"no_wrap": True, "ratio": 4},
                  lambda d, _u: d.display_name),
-    "ilo-name": ("iLO Name",  "cyan",       {"no_wrap": True, "ratio": 3},
-                 lambda d, _u: d.raw.get("deviceName") or d.raw.get("secondaryName") or "—"),
+    "serial":   ("Serial",    "green",      {"no_wrap": True, "min_width": 13},
+                 lambda d, _u: d.serial_number),
     "type":     ("Type",      "default",    {"no_wrap": True, "min_width": 9},
                  lambda d, _u: _fmt_type(d)),
     "model":    ("Model",     "grey70",     {"no_wrap": True, "ratio": 2},
                  lambda d, _u: d.model),
-    "serial":   ("Serial",    "green",      {"no_wrap": True, "min_width": 13},
-                 lambda d, _u: d.serial_number),
     "part":     ("Part #",    "grey70",     {"no_wrap": True, "min_width": 11},
                  lambda d, _u: d.product_id or "—"),
     "service":  ("Service",   "grey70",     {"no_wrap": True, "ratio": 2},
-                 lambda d, _u: _fmt_service(d)),
+                 lambda d, _u: d.service_name or "—"),
+    "region":   ("Region",    "grey70",     {"no_wrap": True, "min_width": 9},
+                 lambda d, _u: _fmt_region(d.raw)),
     "tier":     ("Subscription Tier", "grey70", {"no_wrap": True, "min_width": 12},
                  lambda d, _u: _fmt_tier(d.raw)),
     "flex":     ("Flex",      "grey70",     {"no_wrap": True, "min_width": 4},
@@ -139,7 +143,8 @@ _DEVICE_FIELDS: dict = {
                  )),
 }
 
-_DEVICE_DEFAULT_FIELDS = ("device", "model", "type", "service", "tier", "flex", "location")
+_DEVICE_DEFAULT_FIELDS  = ("device", "model", "type", "service", "tier", "flex", "location")
+_SERVER_DEFAULT_FIELDS  = ("os-name", "ilo-name", "serial", "model", "type", "service", "region", "location")
 
 DEVICE_FIELD_NAMES = tuple(_DEVICE_FIELDS.keys())
 
@@ -168,7 +173,8 @@ def parse_fields(fields_str: Optional[str], available: dict, defaults: tuple) ->
 def print_devices_table(device_list: list, raw: bool = False,
                         fields: Optional[str] = None,
                         sort_by: Optional[str] = None,
-                        user_cache: Optional[dict] = None) -> None:
+                        user_cache: Optional[dict] = None,
+                        default_fields: Optional[tuple] = None) -> None:
     if raw or get_output_mode() == OutputMode.JSON:
         print_json([d.raw for d in device_list])
         return
@@ -177,15 +183,16 @@ def print_devices_table(device_list: list, raw: bool = False,
         get_console().print("[yellow]No devices found.[/yellow]")
         return
 
-    selected = parse_fields(fields, _DEVICE_FIELDS, _DEVICE_DEFAULT_FIELDS)
+    effective_defaults = default_fields or _DEVICE_DEFAULT_FIELDS
+    selected = parse_fields(fields, _DEVICE_FIELDS, effective_defaults)
     uc = user_cache or {}
 
-    # Sorting — default to serial for the new "device" column layout
+    # Sorting — default to serial for stable ordering
     sort_key = (sort_by or "serial").lower()
     if sort_key not in _DEVICE_FIELDS:
         raise SystemExit(f"Unknown sort field: {sort_key}\nAvailable: {', '.join(_DEVICE_FIELDS)}")
     sorted_list = sorted(device_list,
-                         key=lambda d: _DEVICE_FIELDS[sort_key][3](d, uc).lower())
+                         key=lambda d: _strip_markup(_DEVICE_FIELDS[sort_key][3](d, uc)).lower())
 
     table = Table(
         title=f"GreenLake Devices ({len(device_list)} total)",

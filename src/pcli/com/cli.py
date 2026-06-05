@@ -62,6 +62,7 @@ from pcli.com.reports import run_report_gpu as _run_report_gpu, run_report_memor
 from pcli.com.printers import (
     _DEVICE_FIELDS,
     _DEVICE_DEFAULT_FIELDS,
+    _SERVER_DEFAULT_FIELDS,
     DEVICE_FIELD_NAMES,
     make_field_completer,
     parse_fields,
@@ -305,7 +306,8 @@ async def _cmd_show_devices(args: argparse.Namespace) -> None:
 
     # Resolve user IDs → emails only when added-by column is requested
     user_cache: dict = {}
-    requested_fields = [f.strip().lower() for f in fields.split(",")] if fields else list(_DEVICE_DEFAULT_FIELDS)
+    effective_defaults = _SERVER_DEFAULT_FIELDS if getattr(args, "what", None) == "servers" else _DEVICE_DEFAULT_FIELDS
+    requested_fields = [f.strip().lower() for f in fields.split(",")] if fields else list(effective_defaults)
     if "added-by" in requested_fields:
         user_ids = {
             ((d.raw.get("contact") or {}).get("workspaceUser") or {}).get("id", "")
@@ -320,7 +322,8 @@ async def _cmd_show_devices(args: argparse.Namespace) -> None:
                     user_cache = await _devices.resolve_user_ids(user_ids, glp_token)
 
     print_devices_table(device_list, raw=getattr(args, "raw", False),
-                        fields=fields, sort_by=sort_by, user_cache=user_cache)
+                        fields=fields, sort_by=sort_by, user_cache=user_cache,
+                        default_fields=effective_defaults)
 
 
 async def _cmd_show_workspaces(args: argparse.Namespace) -> None:

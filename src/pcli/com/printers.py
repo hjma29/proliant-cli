@@ -23,10 +23,19 @@ from pcli.common.display import get_console, get_output_mode, OutputMode, print_
 # ---------------------------------------------------------------------------
 
 _TIER_MAP = {
-    "STANDARD_PROLIANT":  "Standard-ProLiant",
-    "ENHANCED_PROLIANT":  "Enhanced-ProLiant",
-    "BASIC_PROLIANT":     "Basic-ProLiant",
+    "STANDARD_PROLIANT":   "Standard-ProLiant",
+    "ENHANCED_PROLIANT":   "Enhanced-ProLiant",
+    "BASIC_PROLIANT":      "Basic-ProLiant",
     "FOUNDATION_PROLIANT": "Foundation-ProLiant",
+    "FOUNDATION_STORAGE":  "Foundation-Storage",
+}
+
+_TIER_SHORT_MAP = {
+    "STANDARD_PROLIANT":   "Standard",
+    "ENHANCED_PROLIANT":   "Enhanced",
+    "BASIC_PROLIANT":      "Basic",
+    "FOUNDATION_PROLIANT": "Foundation",
+    "FOUNDATION_STORAGE":  "Fnd-Storage",
 }
 
 _REGION_MAP = {
@@ -44,6 +53,12 @@ def _fmt_tier(raw: dict) -> str:
     return _TIER_MAP.get(tier) or (tier.replace("_", "-").title() if tier else "—")
 
 
+def _fmt_tier_short(raw: dict) -> str:
+    subs = raw.get("subscription") or []
+    tier = (subs[0].get("tier") or "") if subs else ""
+    return _TIER_SHORT_MAP.get(tier) or (tier.split("_")[0].title() if tier else "—")
+
+
 def _fmt_region(raw: dict) -> str:
     region = raw.get("region") or ""
     return _REGION_MAP.get(region.lower(), region) or "—"
@@ -57,10 +72,13 @@ def _fmt_device_cell(d) -> str:
     return f"[bold green]{d.serial_number}[/bold green]"
 
 
+_UNNAMED_OS = {"host is unnamed", "unnamed", "localhost"}
+
+
 def _fmt_os_name(d) -> str:
-    """OS hostname (secondaryName); fall back to serial if absent."""
+    """OS hostname (secondaryName); fall back to serial if absent or placeholder."""
     name = (d.raw.get("secondaryName") or "").strip()
-    if name:
+    if name and name.lower() not in _UNNAMED_OS:
         return f"[bold white]{name}[/bold white]"
     return f"[grey70]{d.serial_number}[/grey70]"
 

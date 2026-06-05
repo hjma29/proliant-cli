@@ -31,11 +31,11 @@ _TIER_MAP = {
 }
 
 _TIER_SHORT_MAP = {
-    "STANDARD_PROLIANT":   "Standard",
-    "ENHANCED_PROLIANT":   "Enhanced",
-    "BASIC_PROLIANT":      "Basic",
-    "FOUNDATION_PROLIANT": "Foundation",
-    "FOUNDATION_STORAGE":  "Fnd-Storage",
+    "STANDARD_PROLIANT":   "Std",
+    "ENHANCED_PROLIANT":   "Enh",
+    "BASIC_PROLIANT":      "Bas",
+    "FOUNDATION_PROLIANT": "Fnd",
+    "FOUNDATION_STORAGE":  "Fnd",
 }
 
 _REGION_MAP = {
@@ -98,13 +98,13 @@ def _strip_markup(s: str) -> str:
     return re.sub(r'\[/?[^\]]*\]', '', s)
 
 
-_TYPE_COLORS = {
-    "compute":    "cyan",
-    "storage":    "yellow",
-    "networking": "magenta",
-    "switch":     "magenta",
-    "network":    "magenta",
-    "server":     "cyan",
+_TYPE_ABBREV = {
+    "compute":    ("Comp", "cyan"),
+    "server":     ("Comp", "cyan"),
+    "storage":    ("Stor", "yellow"),
+    "networking": ("Net",  "magenta"),
+    "switch":     ("Net",  "magenta"),
+    "network":    ("Net",  "magenta"),
 }
 
 _NETWORKING_TYPES = {"networking", "switch", "network"}
@@ -113,12 +113,9 @@ _NETWORKING_TYPES = {"networking", "switch", "network"}
 def _fmt_type(d) -> str:
     dtype = (d.device_type or "").lower()
     cat   = (d.raw.get("category") or "").lower()
-    # Consolidate all networking/switch variants to a single "Network" label
-    if dtype in _NETWORKING_TYPES or cat in _NETWORKING_TYPES:
-        return "[magenta]Network[/magenta]"
-    label = (d.device_type or "").title()
-    color = _TYPE_COLORS.get(dtype, "white")
-    return f"[{color}]{label}[/{color}]"
+    key   = dtype if dtype in _TYPE_ABBREV else cat
+    abbrev, color = _TYPE_ABBREV.get(key, ((d.device_type or "?")[:4].title(), "white"))
+    return f"[{color}]{abbrev}[/{color}]"
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +133,7 @@ _DEVICE_FIELDS: dict = {
                  lambda d, _u: d.display_name),
     "serial":   ("Serial",    "green",      {"no_wrap": True, "min_width": 13},
                  lambda d, _u: d.serial_number),
-    "type":     ("Type",      "default",    {"no_wrap": True, "min_width": 9},
+    "type":     ("Type",      "default",    {"no_wrap": True, "min_width": 4},
                  lambda d, _u: _fmt_type(d)),
     "model":    ("Model",     "grey70",     {"no_wrap": True, "ratio": 2},
                  lambda d, _u: d.model),
@@ -148,13 +145,13 @@ _DEVICE_FIELDS: dict = {
                  lambda d, _u: _fmt_region(d.raw)),
     "tier":     ("Subscription Tier", "grey70", {"no_wrap": True, "min_width": 12},
                  lambda d, _u: _fmt_tier(d.raw)),
-    "sub":      ("Sub",       "grey70",     {"no_wrap": True, "min_width": 8},
+    "sub":      ("Sub",       "grey70",     {"no_wrap": True, "min_width": 3},
                  lambda d, _u: _fmt_tier_short(d.raw)),
     "flex":     ("Flex",      "grey70",     {"no_wrap": True, "min_width": 4},
                  lambda d, _u: "Yes" if d.raw.get("isFlex") else "No"),
     "sub-key":  ("Sub Key",   "grey70",     {"no_wrap": True, "min_width": 9, "max_width": 10},
                  lambda d, _u: (d.subscription_key[:8] + "…") if d.subscription_key else "—"),
-    "location": ("Location",  "grey70",     {"no_wrap": True, "ratio": 2},
+    "location": ("Location",  "grey70",     {"no_wrap": True, "max_width": 10},
                  lambda d, _u: (d.raw.get("location") or {}).get("locationName") or "—"),
     "added":    ("Added",     "grey70",     {"no_wrap": True, "min_width": 10},
                  lambda d, _u: (d.raw.get("createdAt") or "")[:10] or "—"),

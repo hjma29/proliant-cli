@@ -73,14 +73,29 @@ def _fmt_device_cell(d) -> str:
 
 
 _UNNAMED_OS = {"host is unnamed", "unnamed", "localhost"}
+_COMPUTE_TYPES = {"compute", "server"}
+
+
+def _is_compute(d) -> bool:
+    dtype = (d.device_type or "").lower()
+    cat   = (d.raw.get("category") or "").lower()
+    return dtype in _COMPUTE_TYPES or cat in _COMPUTE_TYPES
 
 
 def _fmt_os_name(d) -> str:
-    """OS hostname (secondaryName); show — if absent or placeholder."""
+    """OS hostname (secondaryName); — colored by device type if absent."""
     name = (d.raw.get("secondaryName") or "").strip()
     if name and name.lower() not in _UNNAMED_OS:
         return f"[cyan]{name}[/cyan]"
-    return "—"
+    return "[dim cyan]—[/dim cyan]" if _is_compute(d) else "[grey70]—[/grey70]"
+
+
+def _fmt_ilo_name(d) -> str:
+    """iLO hostname (deviceName); — colored by device type if absent."""
+    name = d.raw.get("deviceName") or ""
+    if name:
+        return name
+    return "[dim green]—[/dim green]" if _is_compute(d) else "[grey70]—[/grey70]"
 
 
 def _fmt_service(d) -> str:
@@ -128,7 +143,7 @@ _DEVICE_FIELDS: dict = {
     "os-name":  ("OS Name",   "default",    {"ratio": 4, "overflow": "fold"},
                  lambda d, _u: _fmt_os_name(d)),
     "ilo-name": ("iLO Name",  "green",      {"ratio": 4, "overflow": "fold"},
-                 lambda d, _u: d.raw.get("deviceName") or "—"),
+                 lambda d, _u: _fmt_ilo_name(d)),
     "name":     ("Name",      "bold cyan",  {"no_wrap": True, "ratio": 4},
                  lambda d, _u: d.display_name),
     "serial":   ("Serial",    "grey70",     {"no_wrap": True, "min_width": 13},

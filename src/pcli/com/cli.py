@@ -271,6 +271,8 @@ async def _cmd_show_devices(args: argparse.Namespace) -> None:
     device_type = getattr(args, "type", None)
     fields = getattr(args, "fields", None)
     sort_by = getattr(args, "sort_by", None)
+    filter_text = (getattr(args, "filter_text", None) or "").strip().lower()
+    filter_model = (getattr(args, "filter_model", None) or "").strip().lower()
 
     with get_console().status("[bold cyan]Fetching devices from GreenLake..."):
         try:
@@ -281,6 +283,25 @@ async def _cmd_show_devices(args: argparse.Namespace) -> None:
         except Exception as e:
             get_console().print(f"[red]Error:[/red] {e}")
             sys.exit(1)
+
+    # --filter: substring match across serial, hostname, model, location
+    if filter_text:
+        def _matches_filter(d) -> bool:
+            haystack = " ".join([
+                d.serial_number or "",
+                d.raw.get("deviceName") or "",
+                d.raw.get("secondaryName") or "",
+                d.model or "",
+                (d.raw.get("location") or {}).get("locationName") or "",
+            ]).lower()
+            return filter_text in haystack
+        device_list = [d for d in device_list if _matches_filter(d)]
+
+    # --model: normalize hyphens/spaces/case for fuzzy model match (dl380-gen11 → DL380 GEN11)
+    if filter_model:
+        normalized_query = filter_model.replace("-", " ").replace("gen", "gen").upper()
+        device_list = [d for d in device_list
+                       if normalized_query in (d.model or "").upper()]
 
     # Resolve user IDs → emails only when added-by column is requested
     user_cache: dict = {}
@@ -496,6 +517,10 @@ def _build_parser() -> argparse.ArgumentParser:
     dev_p.add_argument("--type", metavar="TYPE",
                        choices=["COMPUTE", "NETWORK", "STORAGE"],
                        help="Filter by device type")
+    dev_p.add_argument("--filter", metavar="TEXT", dest="filter_text",
+                       help="Case-insensitive substring filter across serial, hostname, model, location")
+    dev_p.add_argument("--model", metavar="MODEL", dest="filter_model",
+                       help="Filter by model (e.g. dl380-gen11, dl325-gen12)")
     dev_p.add_argument("--raw", action="store_true", help="Dump unprocessed API response (bypasses pcli field parsing)")
     fields_arg = dev_p.add_argument(
         "--fields", metavar="FIELDS",
@@ -511,6 +536,10 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=list(DEVICE_FIELD_NAMES),
         help=f"Sort by field (case-insensitive). Available: {', '.join(DEVICE_FIELD_NAMES)}. Default: name",
     )
+
+    # "servers" as alias for "devices"
+    get_sub.add_parser("servers", help="Alias for 'devices' — list all devices in workspace",
+                       parents=[dev_p], add_help=False)
 
     # pcli com list workspaces
     ws_p = get_sub.add_parser("workspaces", help="List all workspaces (* = active)")
@@ -615,7 +644,7 @@ async def _async_main(args: argparse.Namespace) -> None:
     elif args.command == "logout":
         await _cmd_logout(args)
     elif args.command == "list":
-        if args.what == "devices":
+        if args.what in ("devices", "servers"):
             await _cmd_show_devices(args)
         elif args.what == "workspaces":
             await _cmd_show_workspaces(args)

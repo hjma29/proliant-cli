@@ -674,6 +674,8 @@ async def _run_set_static(args: argparse.Namespace) -> None:
                             continue
 
                     # Dual-layer PATCH: disable DHCP + set static address (all three fields required)
+                    # Pad DNS list to 3 entries with "0.0.0.0" as iLO expects exactly 3 slots
+                    dns_padded = (dns_servers + ["0.0.0.0", "0.0.0.0", "0.0.0.0"])[:3]
                     payload = {
                         "DHCPv4": {
                             "DHCPEnabled":    False,
@@ -688,7 +690,8 @@ async def _run_set_static(args: argparse.Namespace) -> None:
                         ],
                         "Oem": {
                             "Hpe": {
-                                "DHCPv4": {"Enabled": False}
+                                "DHCPv4": {"Enabled": False},
+                                "IPv4":   {"DNSServers": dns_padded},
                             }
                         },
                     }

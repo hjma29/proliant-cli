@@ -148,3 +148,111 @@ async def run_describe(host: dict) -> None:
             loc = (fw.get("Oem") or {}).get("Hpe", {}).get("DeviceContext", "")
             fw_t.add_row(fw.get("Name", ""), fw.get("Version", ""), loc)
         console.print(fw_t)
+
+
+async def run_describe_ilo_nic(host: dict) -> None:
+    """Show iLO dedicated NIC details: DHCP/static, IP, DNS, routes, LLDP, MAC."""
+    from rich import box as rich_box
+    from rich.panel import Panel
+    from rich.table import Table
+
+    console = get_console()
+
+    async with ILOClient(host["url"], host["username"], host["password"]) as c:
+        try:
+            with console.status("[dim]Fetching iLO NIC details…[/dim]"):
+                nic = await inventory.fetch_ilo_nic_details(c)
+        except Exception as exc:
+            console.print(f"[red]Error fetching iLO NIC details: {type(exc).__name__}: {exc}[/red]")
+            sys.exit(1)
+
+    if not nic:
+        console.print("[red]No iLO EthernetInterface data found.[/red]")
+        sys.exit(1)
+
+    if "not identified" in nic.get("selection_note", ""):
+        console.print(f"[yellow]Warning: {nic['selection_note']}[/yellow]")
+
+    console.print(Panel(
+        f"[bold]{host['name']}[/bold]   [dim]iLO Dedicated Network Port[/dim]",
+        expand=False,
+    ))
+
+    def _kv_table() -> Table:
+        t = Table(box=rich_box.SIMPLE, show_header=False, padding=(0, 2))
+        t.add_column(style="dim", no_wrap=True)
+        t.add_column()
+        return t
+
+    # ── General ───────────────────────────────────────────────────────────────
+    gen_t = _kv_table()
+    speed = nic.get("speed_mbps")
+    speed_str = f"{speed} Mbps" if speed else "—"
+    gen_t.add_row("MAC",        nic.get("mac", "—"))
+    gen_t.add_row("Link",       nic.get("link_status", "—"))
+    gen_t.add_row("Speed",      speed_str)
+    console.print(gen_t)
+
+    # ── IPv4 ──────────────────────────────────────────────────────────────────
+    console.print("[bold]IPv4[/bold]")
+    ipv4_t = _kv_table()
+    mode = "DHCP" if nic.get("dhcp_enabled") else "Static"
+    ipv4_t.add_row("Mode", f"[green]{mode}[/green]" if mode == "DHCP" else f"[cyan]{mode}[/cyan]")
+
+    cur = nic.get("current_ipv4")
+    if cur:
+        ipv4_t.add_row("Address",         cur["address"])
+        ipv4_t.add_row("Subnet Mask",     cur["subnet"])
+        ipv4_t.add_row("Default Gateway", cur["gateway"])
+
+    # Show configured static values when DHCP is active (so user knows the fallback)
+    sta = nic.get("static_ipv4")
+    if sta and nic.get("dhcp_enabled"):
+        ipv4_t.add_row("", "")
+        ipv4_t.add_row("[dim]Configured Static Address[/dim]",  f"[dim]{sta['address']}[/dim]")
+        ipv4_t.add_row("[dim]Configured Static Subnet[/dim]",   f"[dim]{sta['subnet']}[/dim]")
+        ipv4_t.add_row("[dim]Configured Static Gateway[/dim]",  f"[dim]{sta['gateway']}[/dim]")
+    elif sta and not nic.get("dhcp_enabled") and not cur:
+        ipv4_t.add_row("Address",         sta["address"])
+        ipv4_t.add_row("Subnet Mask",     sta["subnet"])
+        ipv4_t.add_row("Default Gateway", sta["gateway"])
+
+    console.print(ipv4_t)
+
+    # ── DNS ───────────────────────────────────────────────────────────────────
+    dns = nic.get("dns_servers", [])
+    console.print("[bold]DNS[/bold]")
+    dns_t = _kv_table()
+    if dns:
+        labels = ["Primary", "Secondary", "Tertiary"]
+        for i, server in enumerate(dns):
+            label = labels[i] if i < len(labels) else f"DNS {i + 1}"
+            dns_t.add_row(label, server)
+    else:
+        dns_t.add_row("", "[dim]None configured[/dim]")
+    console.print(dns_t)
+
+    # ── Static Routes ─────────────────────────────────────────────────────────
+    routes = nic.get("static_routes", [])
+    if routes:
+        console.print("[bold]Static Routes[/bold]")
+        rt_t = Table(box=rich_box.SIMPLE, show_header=True, header_style="bold cyan", padding=(0, 2))
+        rt_t.add_column("Destination", no_wrap=True)
+        rt_t.add_column("Subnet Mask", no_wrap=True)
+        rt_t.add_column("Gateway",     no_wrap=True)
+        for r in routes:
+            rt_t.add_row(r["destination"], r["subnet"], r["gateway"])
+        console.print(rt_t)
+
+    # ── LLDP ──────────────────────────────────────────────────────────────────
+    lldp = nic.get("lldp_enabled")
+    console.print("[bold]LLDP[/bold]")
+    lldp_t = _kv_table()
+    if lldp is None:
+        lldp_t.add_row("Status", "[dim]Not exposed by iLO[/dim]")
+    elif lldp:
+        lldp_t.add_row("Status", "[green]Enabled[/green]")
+    else:
+        lldp_t.add_row("Status", "Disabled")
+    console.print(lldp_t)
+

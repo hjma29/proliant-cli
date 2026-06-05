@@ -56,7 +56,7 @@ from pcli.ilo.config import (
     MAX_WORKERS,
     load_hosts,
 )
-from pcli.ilo.describe import run_describe
+from pcli.ilo.describe import run_describe, run_describe_ilo_nic
 from pcli.ilo.printers import (
     _print_json_results,
     _header_line,
@@ -330,6 +330,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     desc_p.add_argument("name", metavar="NAME",
                         help="Server name from hosts-ilo.ini").completer = _host_completer
+    desc_p.add_argument("--ilo-nic", action="store_true", dest="ilo_nic",
+                        help="Show iLO dedicated NIC details (DHCP/static, IP, DNS, routes, LLDP, MAC)")
 
     return parser
 
@@ -647,7 +649,10 @@ async def _cmd_describe(args: argparse.Namespace) -> None:
     if not hosts:
         get_console().print("[red]No host found.[/red]")
         sys.exit(1)
-    await run_describe(hosts[0])
+    if getattr(args, "ilo_nic", False):
+        await run_describe_ilo_nic(hosts[0])
+    else:
+        await run_describe(hosts[0])
 
 
 if __name__ == "__main__":

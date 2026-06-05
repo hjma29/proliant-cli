@@ -336,6 +336,8 @@ def _build_parser() -> argparse.ArgumentParser:
     set_static.add_argument("--ip",      metavar="ADDR",    required=True, help="Static IPv4 address")
     set_static.add_argument("--mask",    metavar="MASK",    required=True, help="Subnet mask (e.g. 255.255.252.0)")
     set_static.add_argument("--gateway", metavar="GW",      required=True, help="Default gateway")
+    set_static.add_argument("--dns",     metavar="DNS",     action="append", dest="dns",
+                            help="DNS server (repeat for multiple, e.g. --dns 8.8.8.8 --dns 8.8.4.4)")
     set_static.add_argument("--confirm", action="store_true", help="Skip confirmation prompt")
     set_static.add_argument(
         "--no-reset",
@@ -620,6 +622,9 @@ async def _run_set_static(args: argparse.Namespace) -> None:
     target_ip   = args.ip.strip()
     target_mask = args.mask.strip()
     target_gw   = args.gateway.strip()
+    dns_servers = [s.strip() for s in (args.dns or [])]
+    if not dns_servers:
+        print("Warning: no --dns specified. iLO will have no DNS servers after switching to static.")
 
     for host in hosts:
         name = host["name"]

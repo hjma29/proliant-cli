@@ -346,7 +346,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Stage the static-IP change without resetting iLO (change will NOT persist across iLO reboots)",
     )
 
-    desc_p = subparsers.add_parser(
+    set_route = set_sub.add_parser(
+        "route",
+        help="Add a static route to the iLO dedicated NIC (static IP mode only)",
+    )
+    _add_host(set_route)
+    set_route.add_argument("--destination", metavar="DEST",    required=True, help="Destination network (e.g. 192.168.10.0)")
+    set_route.add_argument("--mask",        metavar="MASK",    required=True, help="Subnet mask (e.g. 255.255.255.0)")
+    set_route.add_argument("--gateway",     metavar="GW",      required=True, help="Gateway for this route")
+    set_route.add_argument("--confirm", action="store_true", help="Skip confirmation prompt")
+    set_route.add_argument("--no-reset", action="store_true", dest="no_reset",
+                           help="Do not reset iLO even if ResetRequired (change may not take effect immediately)")
         "describe",
         help="Show full details for a single server (identity, iLO, CPU, GPU, memory, firmware)",
     )
@@ -391,6 +401,8 @@ async def _async_main(args: argparse.Namespace) -> None:
             await _run_set_dhcp(args)
         elif args.set_action == "static":
             await _run_set_static(args)
+        elif args.set_action == "route":
+            await _run_set_route(args)
 
 
 def _load_hosts_or_exit(name: str | None, hosts_from: str | None = None) -> list[dict]:

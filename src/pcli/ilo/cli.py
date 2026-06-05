@@ -313,15 +313,17 @@ def _build_parser() -> argparse.ArgumentParser:
     set_dhcp = set_sub.add_parser(
         "dhcp",
         help="Switch iLO management NIC from static IP to DHCP",
-        description="Patch the iLO EthernetInterface to enable DHCPv4. "
-                    "The iLO will reboot its network stack and obtain a new IP from DHCP.",
+        description="Patch the iLO EthernetInterface to enable DHCPv4 and reset iLO. "
+                    "The iLO will reboot its network stack and obtain a new IP from DHCP. "
+                    "The current static IP will be unreachable after reset.",
     )
     _add_host(set_dhcp)
     set_dhcp.add_argument("--confirm", action="store_true", help="Skip confirmation prompt")
     set_dhcp.add_argument(
-        "--reset",
+        "--no-reset",
         action="store_true",
-        help="Reset iLO after enabling DHCP so the change takes effect immediately (current IP will be lost)",
+        dest="no_reset",
+        help="Stage the DHCP change without resetting iLO (change will NOT persist across iLO reboots)",
     )
 
     desc_p = subparsers.add_parser(
@@ -505,7 +507,7 @@ async def _run_set_dhcp(args: argparse.Namespace) -> None:
         print("Re-run with --confirm to proceed, or use --host <name> to target one server.")
         sys.exit(1)
 
-    do_reset = getattr(args, "reset", False)
+    do_reset = not getattr(args, "no_reset", False)
 
     for host in hosts:
         name = host["name"]
@@ -532,7 +534,7 @@ async def _run_set_dhcp(args: argparse.Namespace) -> None:
                     # Skip re-PATCH, go straight to reset
                 else:
                     reset_note = " iLO will reset and the current IP will be lost." if do_reset else \
-                                 " Run with --reset to apply immediately (requires iLO restart)."
+                                 " WARNING: --no-reset specified; change will NOT persist across iLO reboots."
                     if not getattr(args, "confirm", False):
                         ans = input(
                             f"[{name}] Current IP: {current_ip} (Static). "
@@ -574,7 +576,7 @@ async def _run_set_dhcp(args: argparse.Namespace) -> None:
                     await client.post(reset_target, {"ResetType": "GracefulRestart"})
                     print(f"[{name}] iLO reset triggered. It will come up with a DHCP-assigned IP.")
                 else:
-                    print(f"[{name}] ✓ DHCP staged. Run with --reset to apply (requires iLO restart).")
+                    print(f"[{name}] ✓ DHCP staged (--no-reset). WARNING: change will revert on next iLO reboot.")
         except Exception as exc:
             print(f"[{name}] ERROR: {exc}", file=sys.stderr)
 

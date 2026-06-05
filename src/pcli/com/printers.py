@@ -103,18 +103,22 @@ _TYPE_COLORS = {
     "storage":    "yellow",
     "networking": "magenta",
     "switch":     "magenta",
+    "network":    "magenta",
     "server":     "cyan",
 }
 
+_NETWORKING_TYPES = {"networking", "switch", "network"}
+
 
 def _fmt_type(d) -> str:
-    dtype = (d.device_type or "").title()
-    cat   = (d.raw.get("category") or "").title()
-    color = _TYPE_COLORS.get(dtype.lower(), "white")
-    if cat and cat.lower() != dtype.lower():
-        cat_color = _TYPE_COLORS.get(cat.lower(), "dim")
-        return f"[{color}]{dtype}[/{color}]\n[{cat_color}]{cat}[/{cat_color}]"
-    return f"[{color}]{dtype}[/{color}]"
+    dtype = (d.device_type or "").lower()
+    cat   = (d.raw.get("category") or "").lower()
+    # Consolidate all networking/switch variants to a single "Network" label
+    if dtype in _NETWORKING_TYPES or cat in _NETWORKING_TYPES:
+        return "[magenta]Network[/magenta]"
+    label = (d.device_type or "").title()
+    color = _TYPE_COLORS.get(dtype, "white")
+    return f"[{color}]{label}[/{color}]"
 
 
 # ---------------------------------------------------------------------------
@@ -124,9 +128,9 @@ def _fmt_type(d) -> str:
 _DEVICE_FIELDS: dict = {
     "device":   ("Device",    "default",    {"no_wrap": True, "min_width": 14, "ratio": 3},
                  lambda d, _u: _fmt_device_cell(d)),
-    "os-name":  ("OS Name",   "default",    {"no_wrap": True, "ratio": 4},
+    "os-name":  ("OS Name",   "default",    {"ratio": 4},
                  lambda d, _u: _fmt_os_name(d)),
-    "ilo-name": ("iLO Name",  "cyan",       {"no_wrap": True, "ratio": 3},
+    "ilo-name": ("iLO Name",  "cyan",       {"ratio": 3},
                  lambda d, _u: d.raw.get("deviceName") or "—"),
     "name":     ("Name",      "bold cyan",  {"no_wrap": True, "ratio": 4},
                  lambda d, _u: d.display_name),
@@ -144,6 +148,8 @@ _DEVICE_FIELDS: dict = {
                  lambda d, _u: _fmt_region(d.raw)),
     "tier":     ("Subscription Tier", "grey70", {"no_wrap": True, "min_width": 12},
                  lambda d, _u: _fmt_tier(d.raw)),
+    "sub":      ("Sub",       "grey70",     {"no_wrap": True, "min_width": 8},
+                 lambda d, _u: _fmt_tier_short(d.raw)),
     "flex":     ("Flex",      "grey70",     {"no_wrap": True, "min_width": 4},
                  lambda d, _u: "Yes" if d.raw.get("isFlex") else "No"),
     "sub-key":  ("Sub Key",   "grey70",     {"no_wrap": True, "min_width": 9, "max_width": 10},
@@ -162,7 +168,7 @@ _DEVICE_FIELDS: dict = {
 }
 
 _DEVICE_DEFAULT_FIELDS  = ("device", "model", "type", "service", "tier", "flex", "location")
-_SERVER_DEFAULT_FIELDS  = ("os-name", "ilo-name", "serial", "model", "type", "service", "region", "location")
+_SERVER_DEFAULT_FIELDS  = ("os-name", "ilo-name", "serial", "model", "type", "sub", "region", "location")
 
 DEVICE_FIELD_NAMES = tuple(_DEVICE_FIELDS.keys())
 
@@ -215,7 +221,7 @@ def print_devices_table(device_list: list, raw: bool = False,
     table = Table(
         title=f"GreenLake Devices ({len(device_list)} total)",
         box=box.SIMPLE_HEAD,
-        show_lines=True,
+        show_lines=(effective_defaults is _DEVICE_DEFAULT_FIELDS),
         expand=True,
     )
     for key in selected:

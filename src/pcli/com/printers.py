@@ -49,11 +49,11 @@ def _fmt_region(raw: dict) -> str:
 
 
 def _fmt_device_cell(d) -> str:
-    """Serial (primary) + iLO hostname (secondary, dim)."""
+    """Serial (green bold primary) + iLO hostname (white secondary)."""
     hostname = d.raw.get("deviceName") or d.raw.get("secondaryName") or ""
     if hostname:
-        return f"[bold]{d.serial_number}[/bold]\n[dim]{hostname}[/dim]"
-    return f"[bold]{d.serial_number}[/bold]"
+        return f"[bold green]{d.serial_number}[/bold green]\n{hostname}"
+    return f"[bold green]{d.serial_number}[/bold green]"
 
 
 def _fmt_service(d) -> str:
@@ -85,29 +85,29 @@ _DEVICE_FIELDS: dict = {
                  lambda d, _u: d.display_name),
     "ilo-name": ("iLO Name",  "cyan",      {"no_wrap": True, "ratio": 3},
                  lambda d, _u: d.raw.get("deviceName") or d.raw.get("secondaryName") or "—"),
-    "type":     ("Type",      "dim",       {"no_wrap": True, "min_width": 9},
+    "type":     ("Type",      "cyan",      {"no_wrap": True, "min_width": 9},
                  lambda d, _u: _fmt_type(d)),
-    "model":    ("Model",     "white",     {"no_wrap": True, "ratio": 2},
+    "model":    ("Model",     "default",   {"no_wrap": True, "ratio": 2},
                  lambda d, _u: d.model),
     "serial":   ("Serial",    "green",     {"no_wrap": True, "min_width": 13},
                  lambda d, _u: d.serial_number),
-    "part":     ("Part #",    "dim",       {"no_wrap": True, "min_width": 11},
+    "part":     ("Part #",    "default",   {"no_wrap": True, "min_width": 11},
                  lambda d, _u: d.product_id or "—"),
-    "service":  ("Service",   "yellow",    {"no_wrap": True, "ratio": 2},
+    "service":  ("Service",   "default",   {"no_wrap": True, "ratio": 2},
                  lambda d, _u: _fmt_service(d)),
-    "tier":     ("Subscription Tier", "cyan", {"no_wrap": True, "min_width": 12},
+    "tier":     ("Subscription Tier", "default", {"no_wrap": True, "min_width": 12},
                  lambda d, _u: _fmt_tier(d.raw)),
-    "flex":     ("Flex",      "dim",       {"no_wrap": True, "min_width": 4},
+    "flex":     ("Flex",      "default",   {"no_wrap": True, "min_width": 4},
                  lambda d, _u: "Yes" if d.raw.get("isFlex") else "No"),
-    "sub-key":  ("Sub Key",   "dim",       {"no_wrap": True, "min_width": 9, "max_width": 10},
+    "sub-key":  ("Sub Key",   "default",   {"no_wrap": True, "min_width": 9, "max_width": 10},
                  lambda d, _u: (d.subscription_key[:8] + "…") if d.subscription_key else "—"),
-    "location": ("Location",  "dim",       {"no_wrap": True, "ratio": 2},
+    "location": ("Location",  "default",   {"no_wrap": True, "ratio": 2},
                  lambda d, _u: (d.raw.get("location") or {}).get("locationName") or "—"),
-    "added":    ("Added",     "dim",       {"no_wrap": True, "min_width": 10},
+    "added":    ("Added",     "default",   {"no_wrap": True, "min_width": 10},
                  lambda d, _u: (d.raw.get("createdAt") or "")[:10] or "—"),
-    "updated":  ("Updated",   "dim",       {"no_wrap": True, "min_width": 10},
+    "updated":  ("Updated",   "default",   {"no_wrap": True, "min_width": 10},
                  lambda d, _u: (d.raw.get("updatedAt") or "")[:10] or "—"),
-    "added-by": ("Added By",  "dim",       {"no_wrap": True, "ratio": 2},
+    "added-by": ("Added By",  "default",   {"no_wrap": True, "ratio": 2},
                  lambda d, u: u.get(
                      ((d.raw.get("contact") or {}).get("workspaceUser") or {}).get("id", ""),
                      "—"

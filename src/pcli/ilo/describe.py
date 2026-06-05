@@ -21,13 +21,12 @@ async def run_describe(host: dict) -> None:
     async with ILOClient(host["url"], host["username"], host["password"]) as c:
         try:
             with console.status("[dim]Fetching server details…[/dim]"):
-                sys_uri, mgr_uri = await asyncio.gather(
-                    c.get_system_uri(), c.get_manager_uri()
-                )
-                system, manager = await asyncio.gather(
-                    c.get(sys_uri), c.get(mgr_uri)
-                )
-                # Fetch detailed resources sequentially to avoid overwhelming iLO
+                # Sequential requests — iLO 6 (Gen11) does not handle concurrent
+                # requests per session reliably; gather caused ConnectError on Gen11.
+                sys_uri = await c.get_system_uri()
+                mgr_uri = await c.get_manager_uri()
+                system  = await c.get(sys_uri)
+                manager = await c.get(mgr_uri)
                 fw_list = await inventory.fetch_firmware_inventory_full(c)
                 cpus    = await inventory.fetch_cpu_report_data(c)
                 gpus    = await inventory.fetch_gpu_report_data(c)

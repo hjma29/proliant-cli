@@ -519,19 +519,22 @@ async def _run_set_dhcp(args: argparse.Namespace) -> None:
                 ni = (data.get("IPv4Addresses") or [{}])[0]
                 origin = ni.get("AddressOrigin", "Unknown")
                 current_ip = ni.get("Address", "?")
+                oem_hpe = (data.get("Oem") or {}).get("Hpe", {})
+                config_state = oem_hpe.get("ConfigurationSettings", "Current")
 
-                if origin == "DHCP" and current_ip != "0.0.0.0":
+                # "SomePendingReset" means PATCH was already applied, just needs reset
+                pending_reset = config_state == "SomePendingReset"
+
+                if origin == "DHCP" and current_ip != "0.0.0.0" and not pending_reset:
                     print(f"[{name}] Already using DHCP (current IP: {current_ip}) — skipping.")
                     continue
 
-                # DHCP staged but iLO not yet reset (IP is 0.0.0.0) — or static and needs switching
-                already_staged = origin == "DHCP" and current_ip == "0.0.0.0"
-                if already_staged:
-                    print(f"[{name}] DHCP is staged but iLO hasn't been reset yet (IP: 0.0.0.0).")
+                if pending_reset:
+                    # PATCH already done (e.g. from a previous run), skip straight to reset
+                    print(f"[{name}] DHCP change is already staged (ConfigurationSettings: SomePendingReset).")
                     if not do_reset:
-                        print(f"[{name}] Run with --reset to apply.")
+                        print(f"[{name}] Run without --no-reset to complete the change.")
                         continue
-                    # Skip re-PATCH, go straight to reset
                 else:
                     reset_note = " iLO will reset and the current IP will be lost." if do_reset else \
                                  " WARNING: --no-reset specified; change will NOT persist across iLO reboots."

@@ -652,7 +652,11 @@ async def _cmd_describe(args: argparse.Namespace) -> None:
         get_console().print("[red]No host found.[/red]")
         sys.exit(1)
     if getattr(args, "ilo_nic", False):
-        await run_describe_ilo_nic(hosts[0])
+        if getattr(args, "raw", False):
+            results = await _run_parallel_async(hosts[:1], inventory.fetch_ilo_nic_raw)
+            _print_raw_table(results)
+        else:
+            await run_describe_ilo_nic(hosts[0])
     else:
         await run_describe(hosts[0])
 

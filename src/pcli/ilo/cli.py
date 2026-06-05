@@ -332,6 +332,8 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Server name from hosts-ilo.ini").completer = _host_completer
     desc_p.add_argument("--ilo-nic", action="store_true", dest="ilo_nic",
                         help="Show iLO dedicated NIC details (DHCP/static, IP, DNS, routes, LLDP, MAC)")
+    desc_p.add_argument("--raw", action="store_true",
+                        help="With --ilo-nic: dump unprocessed Redfish JSON for Manager EthernetInterfaces")
 
     return parser
 

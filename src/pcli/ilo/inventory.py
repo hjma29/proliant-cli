@@ -792,6 +792,15 @@ def _ipv4_entry(addresses: list[dict]) -> dict[str, str] | None:
     return None
 
 
+async def fetch_ilo_nic_raw(client: ILOClient) -> list[tuple[str, str]]:
+    """Dump raw Redfish JSON for all Manager EthernetInterfaces."""
+    manager = await client.get(await client.get_manager_uri())
+    eth_col_uri = (manager.get("EthernetInterfaces") or {}).get("@odata.id")
+    if not eth_col_uri:
+        return _EMPTY
+    return await _fetch_members_raw(client, eth_col_uri)
+
+
 async def fetch_ilo_nic_details(client: ILOClient) -> dict[str, Any]:
     """Fetch iLO dedicated network port details from Manager EthernetInterfaces.
 

@@ -326,6 +326,24 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Stage the DHCP change without resetting iLO (change will NOT persist across iLO reboots)",
     )
 
+    set_static = set_sub.add_parser(
+        "static",
+        help="Switch iLO management NIC from DHCP to a static IP",
+        description="Patch the iLO EthernetInterface to disable DHCPv4 and assign a static IP, "
+                    "then reset iLO. The current DHCP-assigned IP will be unreachable after reset.",
+    )
+    _add_host(set_static)
+    set_static.add_argument("--ip",      metavar="ADDR",    required=True, help="Static IPv4 address")
+    set_static.add_argument("--mask",    metavar="MASK",    required=True, help="Subnet mask (e.g. 255.255.252.0)")
+    set_static.add_argument("--gateway", metavar="GW",      required=True, help="Default gateway")
+    set_static.add_argument("--confirm", action="store_true", help="Skip confirmation prompt")
+    set_static.add_argument(
+        "--no-reset",
+        action="store_true",
+        dest="no_reset",
+        help="Stage the static-IP change without resetting iLO (change will NOT persist across iLO reboots)",
+    )
+
     desc_p = subparsers.add_parser(
         "describe",
         help="Show full details for a single server (identity, iLO, CPU, GPU, memory, firmware)",
@@ -369,6 +387,8 @@ async def _async_main(args: argparse.Namespace) -> None:
     elif args.command == "set":
         if args.set_action == "dhcp":
             await _run_set_dhcp(args)
+        elif args.set_action == "static":
+            await _run_set_static(args)
 
 
 def _load_hosts_or_exit(name: str | None, hosts_from: str | None = None) -> list[dict]:
@@ -585,6 +605,107 @@ async def _run_set_dhcp(args: argparse.Namespace) -> None:
                     print(f"[{name}] iLO reset triggered. It will come up with a DHCP-assigned IP.")
                 else:
                     print(f"[{name}] ✓ DHCP staged (--no-reset). WARNING: change will revert on next iLO reboot.")
+        except Exception as exc:
+            print(f"[{name}] ERROR: {exc}", file=sys.stderr)
+
+
+async def _run_set_static(args: argparse.Namespace) -> None:
+    hosts = _load_hosts_or_exit(getattr(args, "host", None))
+    if len(hosts) > 1 and not getattr(args, "confirm", False):
+        print(f"This will switch {len(hosts)} iLO(s) to static IP {args.ip}.")
+        print("Re-run with --confirm to proceed, or use --host <name> to target one server.")
+        sys.exit(1)
+
+    do_reset = not getattr(args, "no_reset", False)
+    target_ip   = args.ip.strip()
+    target_mask = args.mask.strip()
+    target_gw   = args.gateway.strip()
+
+    for host in hosts:
+        name = host["name"]
+        try:
+            async with ilo_session(host) as client:
+                interface_uri, reset_target = await _manager_network_targets(client)
+                data = await client.get(interface_uri)
+
+                ni = (data.get("IPv4Addresses") or [{}])[0]
+                origin     = ni.get("AddressOrigin", "Unknown")
+                current_ip = ni.get("Address", "?")
+                oem_hpe    = (data.get("Oem") or {}).get("Hpe", {})
+                config_state = oem_hpe.get("ConfigurationSettings", "Current")
+                pending_reset = config_state == "SomePendingReset"
+
+                # Check if already static at the target IP
+                sta = (data.get("IPv4StaticAddresses") or [{}])[0]
+                already_static_target = (
+                    origin != "DHCP"
+                    and sta.get("Address") == target_ip
+                    and not pending_reset
+                )
+                if already_static_target:
+                    print(f"[{name}] Already using static IP {target_ip} — skipping.")
+                    continue
+
+                # Previous run staged this exact static IP — skip PATCH, just reset
+                staged_this_ip = (
+                    pending_reset
+                    and sta.get("Address") == target_ip
+                )
+                if staged_this_ip:
+                    print(f"[{name}] Static IP {target_ip} already staged (ConfigurationSettings: SomePendingReset).")
+                    if not do_reset:
+                        print(f"[{name}] Run without --no-reset to complete the change.")
+                        continue
+                else:
+                    reset_note = f" iLO will reset — current IP {current_ip} will be unreachable." if do_reset else \
+                                 " WARNING: --no-reset specified; change will NOT persist across iLO reboots."
+                    if not getattr(args, "confirm", False):
+                        ans = input(
+                            f"[{name}] Current IP: {current_ip} ({origin}). "
+                            f"Switch to static {target_ip}?{reset_note} [y/N] "
+                        )
+                        if ans.strip().lower() != "y":
+                            print(f"[{name}] Skipped.")
+                            continue
+
+                    # Dual-layer PATCH: disable DHCP + set static address (all three fields required)
+                    payload = {
+                        "DHCPv4": {
+                            "DHCPEnabled":    False,
+                            "UseDNSServers":  False,
+                            "UseDomainName":  False,
+                            "UseGateway":     False,
+                            "UseNTPServers":  False,
+                            "UseStaticRoutes": False,
+                        },
+                        "IPv4StaticAddresses": [
+                            {"Address": target_ip, "SubnetMask": target_mask, "Gateway": target_gw}
+                        ],
+                        "Oem": {
+                            "Hpe": {
+                                "DHCPv4": {"Enabled": False}
+                            }
+                        },
+                    }
+                    result = await client.patch(interface_uri, payload)
+                    ext  = result.get("error", {})
+                    msgs = ext.get("@Message.ExtendedInfo", [])
+                    _OK  = ("Success", "ResetRequired", "SystemResetRequired")
+                    is_success = not ext or any(
+                        any(s in m.get("MessageId", "") for s in _OK) for m in msgs
+                    )
+                    if not is_success:
+                        msg     = ext.get("message", str(result))
+                        details = "; ".join(m.get("MessageId", "") for m in msgs)
+                        print(f"[{name}] ERROR from iLO: {msg} ({details})", file=sys.stderr)
+                        continue
+
+                if do_reset:
+                    print(f"[{name}] ✓ Static IP {target_ip} staged. Resetting iLO — current IP {current_ip} will be lost...")
+                    await client.post(reset_target, {"ResetType": "GracefulRestart"})
+                    print(f"[{name}] iLO reset triggered. It will come up at {target_ip}.")
+                else:
+                    print(f"[{name}] ✓ Static IP {target_ip} staged (--no-reset). WARNING: change will revert on next iLO reboot.")
         except Exception as exc:
             print(f"[{name}] ERROR: {exc}", file=sys.stderr)
 

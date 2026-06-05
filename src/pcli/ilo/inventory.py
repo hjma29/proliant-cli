@@ -787,6 +787,7 @@ def _ipv4_entry(addresses: list[dict]) -> dict[str, str] | None:
                 "address": addr,
                 "subnet":  (a.get("SubnetMask") or "").strip() or "—",
                 "gateway": (a.get("Gateway") or a.get("GatewayIPv4Address") or "").strip() or "—",
+                "origin":  (a.get("AddressOrigin") or "").strip(),
             }
     return None
 

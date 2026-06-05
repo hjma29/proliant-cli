@@ -76,11 +76,11 @@ _UNNAMED_OS = {"host is unnamed", "unnamed", "localhost"}
 
 
 def _fmt_os_name(d) -> str:
-    """OS hostname (secondaryName); fall back to serial if absent or placeholder."""
+    """OS hostname (secondaryName); show — if absent or placeholder."""
     name = (d.raw.get("secondaryName") or "").strip()
     if name and name.lower() not in _UNNAMED_OS:
         return f"[cyan]{name}[/cyan]"
-    return f"[grey70]{d.serial_number}[/grey70]"
+    return "—"
 
 
 def _fmt_service(d) -> str:
@@ -165,7 +165,7 @@ _DEVICE_FIELDS: dict = {
 }
 
 _DEVICE_DEFAULT_FIELDS  = ("device", "model", "type", "service", "tier", "flex", "location")
-_SERVER_DEFAULT_FIELDS  = ("os-name", "ilo-name", "serial", "model", "type", "sub", "region", "location")
+_SERVER_DEFAULT_FIELDS  = ("serial", "os-name", "ilo-name", "model", "type", "sub", "region", "location")
 
 DEVICE_FIELD_NAMES = tuple(_DEVICE_FIELDS.keys())
 

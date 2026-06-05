@@ -79,7 +79,7 @@ def _fmt_os_name(d) -> str:
     """OS hostname (secondaryName); fall back to serial if absent or placeholder."""
     name = (d.raw.get("secondaryName") or "").strip()
     if name and name.lower() not in _UNNAMED_OS:
-        return f"[bold cyan]{name}[/bold cyan]"
+        return f"[cyan]{name}[/cyan]"
     return f"[grey70]{d.serial_number}[/grey70]"
 
 

@@ -776,3 +776,114 @@ async def fetch_fleet_summary(client: ILOClient) -> list[tuple[str, str]]:
         ("NIC-FW",     nic_ver),
         ("Storage-FW", storage_ver),
     ]
+
+
+def _ipv4_entry(addresses: list[dict]) -> dict[str, str] | None:
+    """Return first non-empty, non-all-zeros IPv4 entry as {address, subnet, gateway}."""
+    for a in addresses:
+        addr = (a.get("Address") or a.get("IPv4Address") or "").strip()
+        if addr and addr != "0.0.0.0":
+            return {
+                "address": addr,
+                "subnet":  (a.get("SubnetMask") or "").strip() or "—",
+                "gateway": (a.get("Gateway") or a.get("GatewayIPv4Address") or "").strip() or "—",
+            }
+    return None
+
+
+async def fetch_ilo_nic_details(client: ILOClient) -> dict[str, Any]:
+    """Fetch iLO dedicated network port details from Manager EthernetInterfaces.
+
+    Returns a normalized dict:
+        mac, link_status, speed_mbps,
+        dhcp_enabled, current_ipv4, static_ipv4,
+        dns_servers, static_routes, lldp_enabled,
+        selection_note
+    """
+    manager = await client.get(await client.get_manager_uri())
+    eth_col_uri = (manager.get("EthernetInterfaces") or {}).get("@odata.id")
+    if not eth_col_uri:
+        return {}
+
+    members = await _collection_members(client, eth_col_uri)
+    if not members:
+        return {}
+
+    dedicated: dict[str, Any] | None = None
+    selection_note = ""
+    for item in members:
+        uri = item.get("@odata.id")
+        if not uri:
+            continue
+        iface = await client.get(uri)
+        iface_type = ((iface.get("Oem") or {}).get("Hpe") or {}).get("InterfaceType", "")
+        if iface_type == "Dedicated":
+            dedicated = iface
+            selection_note = "Dedicated"
+            break
+        if dedicated is None:
+            dedicated = iface  # tentative fallback
+
+    if dedicated is None:
+        return {}
+    if not selection_note:
+        selection_note = "first interface (Dedicated type not identified)"
+
+    oem_hpe = ((dedicated.get("Oem") or {}).get("Hpe") or {})
+    oem_ipv4 = (oem_hpe.get("IPv4") or {})
+
+    # DHCP
+    dhcp_block = dedicated.get("DHCPv4") or {}
+    dhcp_enabled: bool = bool(dhcp_block.get("DHCPEnabled", False))
+
+    # Current effective IPv4 (DHCP-assigned if DHCP on, otherwise static)
+    current_ipv4 = _ipv4_entry(dedicated.get("IPv4Addresses") or [])
+
+    # Configured static IPv4 (what would be used if DHCP is turned off)
+    static_ipv4 = _ipv4_entry(dedicated.get("IPv4StaticAddresses") or [])
+
+    # DNS servers — standard field first, then OEM fallback
+    raw_dns: list[str] = dedicated.get("NameServers") or oem_ipv4.get("DNSServers") or []
+    dns_servers = [s for s in raw_dns if s and s != "0.0.0.0"]
+
+    # Static routes — OEM field (standard Redfish has no static routes on Manager NICs)
+    raw_routes: list[dict] = oem_ipv4.get("StaticRoutes") or []
+    static_routes = [
+        {
+            "destination": r.get("Destination", ""),
+            "subnet":      r.get("SubnetMask", ""),
+            "gateway":     r.get("Gateway", ""),
+        }
+        for r in raw_routes
+        if r.get("Destination") not in (None, "", "0.0.0.0")
+    ]
+
+    # LLDP — try a few known OEM paths gracefully
+    lldp_enabled: bool | None = None
+    lldp_block = oem_hpe.get("LLDPData") or oem_hpe.get("LLDP") or {}
+    if isinstance(lldp_block, dict):
+        for key in ("LLDPEnabled", "Enabled", "Status"):
+            val = lldp_block.get(key)
+            if val is not None:
+                if isinstance(val, bool):
+                    lldp_enabled = val
+                elif isinstance(val, str):
+                    lldp_enabled = val.lower() in ("enabled", "true", "yes")
+                break
+    # iLO 7.1+ may expose LLDP directly on the interface
+    if lldp_enabled is None and "LLDPEnabled" in dedicated:
+        v = dedicated["LLDPEnabled"]
+        lldp_enabled = bool(v) if isinstance(v, bool) else str(v).lower() in ("enabled", "true", "yes")
+
+    return {
+        "mac":            (dedicated.get("MACAddress") or "—").lower(),
+        "link_status":    dedicated.get("LinkStatus") or "—",
+        "speed_mbps":     dedicated.get("SpeedMbps"),
+        "dhcp_enabled":   dhcp_enabled,
+        "current_ipv4":   current_ipv4,
+        "static_ipv4":    static_ipv4,
+        "dns_servers":    dns_servers,
+        "static_routes":  static_routes,
+        "lldp_enabled":   lldp_enabled,
+        "selection_note": selection_note,
+    }

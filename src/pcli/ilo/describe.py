@@ -29,7 +29,6 @@ async def run_describe(host: dict) -> None:
                 manager = await c.get(mgr_uri)
                 upd_svc = await c.get("/redfish/v1/UpdateService")
                 fw_list = await inventory.fetch_firmware_inventory_full(c)
-                comp_repo = await inventory.fetch_component_repo_activates(c)
                 cpus    = await inventory.fetch_cpu_report_data(c)
                 gpus    = await inventory.fetch_gpu_report_data(c)
                 dimms   = await inventory.fetch_memory_population(c)
@@ -175,42 +174,144 @@ async def run_describe(host: dict) -> None:
 
     # ── Firmware ──────────────────────────────────────────────────────────────
     if fw_list:
-        _ACT_STYLE = {
-            "AfterReboot":       "[bold yellow]AfterReboot[/bold yellow]",
-            "AfterDeviceReset":  "[cyan]DeviceReset[/cyan]",
-            "Immediately":       "[green]Immediately[/green]",
-        }
-        has_repo = bool(comp_repo)
-
-        # Update state header line
         if upd_state == "Complete":
-            state_str = "[bold yellow]Complete[/bold yellow]  [dim](firmware updated — some components may need restart)[/dim]"
+            state_str = "[bold yellow]Complete[/bold yellow]  [dim](use --firmware-update for details)[/dim]"
         elif upd_state == "Idle":
             state_str = "[dim]Idle[/dim]"
         else:
             state_str = f"[dim]{upd_state}[/dim]" if upd_state else "[dim]—[/dim]"
         console.print(f"[bold]Firmware[/bold]   Update State: {state_str}")
-
         fw_t = Table(box=rich_box.SIMPLE, show_header=True, header_style="bold cyan", padding=(0, 2))
         fw_t.add_column("Component", no_wrap=True)
         fw_t.add_column("Version")
         fw_t.add_column("Location", style="dim")
-        if has_repo:
-            fw_t.add_column("Activates", no_wrap=True)
         for fw in fw_list:
-            oem      = (fw.get("Oem") or {}).get("Hpe", {})
-            loc      = oem.get("DeviceContext", "")
-            dc       = oem.get("DeviceClass", "")
-            in_repo  = bool(dc and dc in comp_repo)
-            name     = fw.get("Name", "")
-            name_str = f"[yellow]*[/yellow] {name}" if in_repo else f"  {name}"
-            if has_repo:
-                act_raw  = comp_repo.get(dc, "") if dc else ""
-                act_str  = _ACT_STYLE.get(act_raw, "") if act_raw else ""
-                fw_t.add_row(name_str, fw.get("Version", ""), loc, act_str)
-            else:
-                fw_t.add_row(name_str, fw.get("Version", ""), loc)
+            loc = (fw.get("Oem") or {}).get("Hpe", {}).get("DeviceContext", "")
+            fw_t.add_row(fw.get("Name", ""), fw.get("Version", ""), loc)
         console.print(fw_t)
+
+
+async def run_describe_fw_update(host: dict) -> None:
+    """Show firmware update status: UpdateService state, last bundle report, component repository."""
+    from rich import box as rich_box
+    from rich.table import Table
+
+    console = get_console()
+
+    async with ILOClient(host["url"], host["username"], host["password"]) as c:
+        try:
+            with console.status("[dim]Fetching firmware update details…[/dim]"):
+                upd_svc    = await c.get("/redfish/v1/UpdateService")
+                fw_list    = await inventory.fetch_firmware_inventory_full(c)
+                comp_repo  = await inventory.fetch_component_repo_activates(c)
+                # Last bundle completed report
+                try:
+                    bundle_meta    = await c.get("/redfish/v1/UpdateService/BundleUpdateReport/Completed")
+                    bundle_entries = await c.get("/redfish/v1/UpdateService/BundleUpdateReport/Completed/Entries")
+                    bundle_members = bundle_entries.get("Members", [])
+                    bundle_items   = [await c.get(m["@odata.id"]) for m in bundle_members]
+                except Exception:
+                    bundle_meta, bundle_items = {}, []
+                # Full component repository
+                try:
+                    repo_col    = await c.get("/redfish/v1/UpdateService/ComponentRepository")
+                    repo_items  = [await c.get(m["@odata.id"]) for m in repo_col.get("Members", [])]
+                except Exception:
+                    repo_items = []
+        except Exception as exc:
+            console.print(f"[red]Error: {type(exc).__name__}: {exc}[/red]")
+            return
+
+    oem_upd    = (upd_svc.get("Oem") or {}).get("Hpe", {})
+    upd_state  = oem_upd.get("State", "—")
+    upd_pct    = oem_upd.get("FlashProgressPercent")
+    upd_result = (oem_upd.get("Result") or {}).get("MessageId", "—")
+
+    _ACT_STYLE = {
+        "AfterReboot":      "[bold yellow]AfterReboot[/bold yellow]",
+        "AfterDeviceReset": "[cyan]DeviceReset[/cyan]",
+        "Immediately":      "[green]Immediately[/green]",
+    }
+
+    # ── UpdateService state ────────────────────────────────────────────────────
+    console.print(f"\n[bold]UpdateService[/bold]")
+    us_t = Table(box=rich_box.SIMPLE, show_header=False, padding=(0, 2))
+    us_t.add_column(style="dim", no_wrap=True)
+    us_t.add_column()
+    state_disp = f"[bold yellow]{upd_state}[/bold yellow]" if upd_state == "Complete" else f"[dim]{upd_state}[/dim]"
+    us_t.add_row("State",    state_disp)
+    if upd_pct is not None:
+        us_t.add_row("Progress", f"{upd_pct}%")
+    us_t.add_row("Result",   upd_result)
+    console.print(us_t)
+
+    # ── Last bundle report ─────────────────────────────────────────────────────
+    console.print("[bold]Last Bundle Report[/bold]")
+    if bundle_items:
+        bundle_name  = bundle_meta.get("Name", "—")
+        bundle_dur   = bundle_meta.get("TotalInstallDurationInSec")
+        dur_str      = f"  [dim]Duration: {bundle_dur}s[/dim]" if bundle_dur else ""
+        console.print(f"  [dim]{bundle_name}[/dim]{dur_str}")
+        lb_t = Table(box=rich_box.SIMPLE, show_header=True, header_style="bold cyan", padding=(0, 2))
+        lb_t.add_column("Component", no_wrap=True)
+        lb_t.add_column("Version")
+        lb_t.add_column("Method", style="dim")
+        lb_t.add_column("Operation", style="dim")
+        lb_t.add_column("Status")
+        for e in bundle_items:
+            status = e.get("ComponentStatus", "—")
+            status_str = f"[green]{status}[/green]" if status == "Completed" else f"[yellow]{status}[/yellow]"
+            lb_t.add_row(
+                e.get("DeviceName", e.get("Name", "—")),
+                e.get("Version", "—"),
+                e.get("BundleUpdateMethod", "—"),
+                e.get("BundleUpdateOperation", "—"),
+                status_str,
+            )
+        console.print(lb_t)
+    else:
+        console.print("  [dim]No completed bundle report.[/dim]")
+
+    # ── Component repository ───────────────────────────────────────────────────
+    console.print("[bold]Component Repository[/bold]")
+    if repo_items:
+        cr_t = Table(box=rich_box.SIMPLE, show_header=True, header_style="bold cyan", padding=(0, 2))
+        cr_t.add_column("Name")
+        cr_t.add_column("Version")
+        cr_t.add_column("Activates", no_wrap=True)
+        cr_t.add_column("Criticality", style="dim")
+        cr_t.add_column("Staged", style="dim")
+        for r in repo_items:
+            act_raw = r.get("Activates", "")
+            cr_t.add_row(
+                r.get("Name", "—"),
+                r.get("Version", "—"),
+                _ACT_STYLE.get(act_raw, act_raw or "—"),
+                r.get("Criticality", "—"),
+                (r.get("Created") or "—")[:10],
+            )
+        console.print(cr_t)
+    else:
+        console.print("  [dim]Component repository is empty.[/dim]")
+
+    # ── Firmware inventory with repo markers ───────────────────────────────────
+    if fw_list:
+        console.print("[bold]Firmware Inventory[/bold]")
+        fi_t = Table(box=rich_box.SIMPLE, show_header=True, header_style="bold cyan", padding=(0, 2))
+        fi_t.add_column("Component", no_wrap=True)
+        fi_t.add_column("Version")
+        fi_t.add_column("Location", style="dim")
+        fi_t.add_column("Activates", no_wrap=True)
+        for fw in fw_list:
+            oem     = (fw.get("Oem") or {}).get("Hpe", {})
+            loc     = oem.get("DeviceContext", "")
+            dc      = oem.get("DeviceClass", "")
+            act_raw = comp_repo.get(dc, "") if dc else ""
+            act_str = _ACT_STYLE.get(act_raw, "") if act_raw else ""
+            name    = fw.get("Name", "")
+            name_str = f"[yellow]*[/yellow] {name}" if act_raw else f"  {name}"
+            fi_t.add_row(name_str, fw.get("Version", ""), loc, act_str)
+        console.print(fi_t)
 
 
 async def run_describe_ilo_nic(host: dict) -> None:

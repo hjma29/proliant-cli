@@ -55,10 +55,10 @@ def test_all_printers_exist():
     """Every printer used in _run_show() must exist in cli."""
     import pcli.ilo.cli as cli
     expected = [
-        "print_ilo_table",
         "print_full_table",
         "print_fleet_table",
         "print_network_table",
+        "print_nic_ilo_table",
         "print_disk_map_table",
         "_print_component_table",
         "_print_raw_table",
@@ -77,7 +77,7 @@ def test_parser_show_subcommands():
     """All 'list' subcommands must be recognised."""
     from pcli.ilo.cli import _build_parser
     parser = _build_parser()
-    for what in ["firmwares", "ilo", "network", "nic", "storage",
+    for what in ["firmwares", "nic-host", "nic-ilo", "nic", "storage",
                  "cpu", "memory", "com", "full", "disk-map"]:
         args = parser.parse_args(["list", what])
         assert args.command == "list"

@@ -982,45 +982,56 @@ async def fetch_ilo_nic_summary(client: ILOClient) -> list[dict[str, Any]]:
     """Fetch iLO dedicated NIC summary row for the list nic-ilo table.
 
     Returns a list with a single dict containing LLDP and IP info.
-    Neighbor fields are populated from Oem.Hpe.LLDPData if available.
+    LLDP neighbor data comes from DedicatedNetworkPorts/1 Ethernet.LLDPReceive
+    (iLO 7+). PortId is hex-encoded IfName — decoded to ASCII.
     """
     details = await fetch_ilo_nic_details(client)
     if not details:
         return []
 
-    # Try to extract LLDP neighbor data from the raw interface (re-fetch for neighbor fields)
-    manager = await client.get(await client.get_manager_uri())
-    eth_col_uri = (manager.get("EthernetInterfaces") or {}).get("@odata.id")
+    # Fetch LLDP data from the dedicated port resource (iLO 7 path)
+    lldp_enabled_str = "—"
     neighbor_system = "—"
     neighbor_port = "—"
-    if eth_col_uri:
-        members = await _collection_members(client, eth_col_uri)
-        for item in members:
-            uri = item.get("@odata.id")
-            if not uri:
-                continue
-            iface = await client.get(uri)
-            oem_hpe = ((iface.get("Oem") or {}).get("Hpe") or {})
-            if oem_hpe.get("InterfaceType") == "Dedicated":
-                lldp_block = oem_hpe.get("LLDPData") or oem_hpe.get("LLDP") or {}
-                if isinstance(lldp_block, dict):
-                    neighbor_system = lldp_block.get("NeighborSystemName") or lldp_block.get("SystemName") or "—"
-                    neighbor_port = lldp_block.get("NeighborPortID") or lldp_block.get("PortID") or "—"
-                break
+    neighbor_ipv4 = "—"
+    try:
+        port = await client.get("/redfish/v1/Managers/1/DedicatedNetworkPorts/1/")
+        eth = port.get("Ethernet") or {}
+        lldp_on = eth.get("LLDPEnabled")
+        if lldp_on is True:
+            lldp_enabled_str = "Enabled"
+        elif lldp_on is False:
+            lldp_enabled_str = "Disabled"
+        recv = eth.get("LLDPReceive") or {}
+        if recv:
+            neighbor_system = recv.get("SystemName") or "—"
+            # PortId is hex-encoded ASCII (e.g. "47:69:31:2F:30:2F:34:35" = "Gi1/0/45")
+            raw_port_id = recv.get("PortId") or ""
+            if ":" in raw_port_id:
+                try:
+                    neighbor_port = bytes.fromhex(raw_port_id.replace(":", "")).decode("ascii")
+                except Exception:
+                    neighbor_port = raw_port_id
+            else:
+                neighbor_port = raw_port_id or "—"
+            neighbor_ipv4 = recv.get("ManagementAddressIPv4") or "—"
+    except Exception:
+        pass
+
+    # Fall back to EthernetInterface LLDPEnabled if DedicatedNetworkPorts not available
+    if lldp_enabled_str == "—":
+        lldp_val = details.get("lldp_enabled")
+        if lldp_val is True:
+            lldp_enabled_str = "Enabled"
+        elif lldp_val is False:
+            lldp_enabled_str = "Disabled"
 
     ipv4 = details.get("current_ipv4") or {}
-    lldp_val = details.get("lldp_enabled")
-    if lldp_val is True:
-        lldp_str = "Enabled"
-    elif lldp_val is False:
-        lldp_str = "Disabled"
-    else:
-        lldp_str = "—"
-
     return [{
-        "lldp_enabled":     lldp_str,
+        "lldp_enabled":     lldp_enabled_str,
         "neighbor_system":  neighbor_system,
         "neighbor_port":    neighbor_port,
+        "neighbor_ipv4":    neighbor_ipv4,
         "ipv4":             ipv4.get("address") or "—",
         "mac":              details.get("mac") or "—",
         "link_status":      details.get("link_status") or "—",

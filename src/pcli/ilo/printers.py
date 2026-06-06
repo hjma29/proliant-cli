@@ -199,7 +199,8 @@ def print_nic_ilo_table(results: list[tuple[str, str | None, list]]) -> None:
     lldp_w = len("LLDP")
     sys_w = len("Neighbor System")
     port_w = len("Neighbor Port")
-    ip_w = len("IPv4")
+    nb_ip_w = len("Neighbor IPv4")
+    ip_w = len("iLO IPv4")
     mac_w = len("MAC")
     link_w = len("Link")
 
@@ -210,22 +211,24 @@ def print_nic_ilo_table(results: list[tuple[str, str | None, list]]) -> None:
             rows_out.append((host_name, error, {}))
             continue
         row = rows[0] if rows else {}
-        lldp_w   = max(lldp_w,   len(str(row.get("lldp_enabled", "—"))))
-        sys_w    = max(sys_w,    len(str(row.get("neighbor_system", "—"))))
-        port_w   = max(port_w,   len(str(row.get("neighbor_port", "—"))))
-        ip_w     = max(ip_w,     len(str(row.get("ipv4", "—"))))
-        mac_w    = max(mac_w,    len(str(row.get("mac", "—"))))
-        link_w   = max(link_w,   len(str(row.get("link_status", "—"))))
+        lldp_w   = max(lldp_w,   len(str(row.get("lldp_enabled",    "—"))))
+        sys_w    = max(sys_w,    len(str(row.get("neighbor_system",  "—"))))
+        port_w   = max(port_w,   len(str(row.get("neighbor_port",    "—"))))
+        nb_ip_w  = max(nb_ip_w,  len(str(row.get("neighbor_ipv4",   "—"))))
+        ip_w     = max(ip_w,     len(str(row.get("ipv4",             "—"))))
+        mac_w    = max(mac_w,    len(str(row.get("mac",              "—"))))
+        link_w   = max(link_w,   len(str(row.get("link_status",      "—"))))
         rows_out.append((host_name, None, row))
 
-    total_w = server_w + lldp_w + sys_w + port_w + ip_w + mac_w + link_w + 18
+    total_w = server_w + lldp_w + sys_w + port_w + nb_ip_w + ip_w + mac_w + link_w + 21
     print("--- iLO NIC ---")
     print(
         f"{'Server':<{server_w}}   "
         f"{'LLDP':<{lldp_w}}   "
         f"{'Neighbor System':<{sys_w}}   "
         f"{'Neighbor Port':<{port_w}}   "
-        f"{'IPv4':<{ip_w}}   "
+        f"{'Neighbor IPv4':<{nb_ip_w}}   "
+        f"{'iLO IPv4':<{ip_w}}   "
         f"{'MAC':<{mac_w}}   "
         f"{'Link':<{link_w}}"
     )
@@ -237,6 +240,7 @@ def print_nic_ilo_table(results: list[tuple[str, str | None, list]]) -> None:
         lldp      = str(row.get("lldp_enabled",    "—"))
         neighbor  = str(row.get("neighbor_system",  "—"))
         nb_port   = str(row.get("neighbor_port",    "—"))
+        nb_ip     = str(row.get("neighbor_ipv4",    "—"))
         ipv4      = str(row.get("ipv4",             "—"))
         mac       = str(row.get("mac",              "—"))
         link      = str(row.get("link_status",      "—"))
@@ -245,6 +249,7 @@ def print_nic_ilo_table(results: list[tuple[str, str | None, list]]) -> None:
             f"{lldp:<{lldp_w}}   "
             f"{neighbor:<{sys_w}}   "
             f"{nb_port:<{port_w}}   "
+            f"{nb_ip:<{nb_ip_w}}   "
             f"{ipv4:<{ip_w}}   "
             f"{mac:<{mac_w}}   "
             f"{link:<{link_w}}"

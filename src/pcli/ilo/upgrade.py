@@ -256,8 +256,38 @@ async def run_fw_upgrade(
                 await firmware.clear_task_queue(client)
                 console.print(f"  [dim]Cleared {len(stale)} stale task(s) from queue.[/dim]")
     else:
-        console.print(
-            f"\n[bold yellow]Updates queued.[/bold yellow] Reboot [bold]{host['name']}[/bold] to apply.\n"
-            f"  • Use [bold]--reboot[/bold] flag to reboot automatically\n"
-            f"  • Run [bold]pcli ilo upgrade queue --host {host['name']}[/bold] to check queue status"
+        # Check if any non-iLO component was updated — those need a host restart
+        needs_host_restart = any(
+            not candidate.name.lower().startswith("ilo") for candidate in updates
         )
+        if needs_host_restart:
+            console.print(
+                f"\n[bold yellow]⚠  Firmware update completed.[/bold yellow] "
+                f"Some components require a [bold]host restart[/bold] to activate."
+            )
+            try:
+                answer = console.input(
+                    f"  Restart [bold]{host['name']}[/bold] now? [[bold]y[/bold]/N] "
+                ).strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                answer = ""
+            if answer == "y":
+                console.print(f"\n[bold yellow]Rebooting {host['name']}...[/bold yellow]")
+                try:
+                    async with ilo_session(host) as client:
+                        await reset_server(client, reset_type="GracefulRestart")
+                    console.print("[green]✓ Reboot initiated.[/green]")
+                except Exception as exc:  # noqa: BLE001
+                    console.print(f"[red]ERROR: reboot failed: {exc}[/red]")
+            else:
+                console.print(
+                    f"\n[bold yellow]Updates queued.[/bold yellow] Reboot [bold]{host['name']}[/bold] to apply.\n"
+                    f"  • Use [bold]--reboot[/bold] flag to reboot automatically\n"
+                    f"  • Run [bold]pcli ilo upgrade queue --host {host['name']}[/bold] to check queue status"
+                )
+        else:
+            console.print(
+                f"\n[bold yellow]Updates queued.[/bold yellow] Reboot [bold]{host['name']}[/bold] to apply.\n"
+                f"  • Use [bold]--reboot[/bold] flag to reboot automatically\n"
+                f"  • Run [bold]pcli ilo upgrade queue --host {host['name']}[/bold] to check queue status"
+            )

@@ -137,13 +137,13 @@ def _cmd_list_cli_tree() -> None:
     # Build one Tree per namespace
     trees = []
     for ns, builder, desc in namespaces:
-        t = Tree(f"[bold yellow]{ns}[/bold yellow]  [dim]{desc}[/dim]")
+        t = Tree(f"[bold yellow]{ns}[/bold yellow]")
         if builder is not None:
             _add_tree_nodes(t, builder())
         trees.append(t)
 
     # Lay out as a single-row table — forces true side-by-side rendering
-    tbl = Table(box=None, show_header=False, padding=(0, 2), expand=False)
+    tbl = Table(box=None, show_header=False, padding=(0, 1), expand=False)
     for _ in trees:
         tbl.add_column(no_wrap=False)
     tbl.add_row(*trees)

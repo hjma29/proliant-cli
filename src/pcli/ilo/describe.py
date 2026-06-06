@@ -9,6 +9,20 @@ from pcli.ilo import inventory
 from pcli.ilo.client import ILOClient, ServerDownOrUnreachableError
 
 
+async def _fetch_com_server(serial: str) -> dict | None:
+    """Try to fetch COM state for this server by serial. Returns None on any error."""
+    try:
+        from pcli.com.auth import COMSession, CredentialsError
+        from pcli.com.client import COMClient
+        session = COMSession.load()
+        async with COMClient(session) as c:
+            r = await c.get(session.com_url("/servers"), params={"filter": f"hardware/serialNumber eq '{serial}'", "limit": 1})
+            items = r.get("items", [])
+            return items[0] if items else None
+    except Exception:
+        return None
+
+
 async def run_describe(host: dict) -> None:
     """Show full details for a single server: identity, iLO, CPU, GPU, memory, firmware."""
     from rich import box as rich_box
@@ -37,6 +51,14 @@ async def run_describe(host: dict) -> None:
     model      = system.get("Model", "—")
     serial     = system.get("SerialNumber", "—")
     sku        = system.get("SKU", "—")
+    bios_ver   = system.get("BiosVersion", "—")
+    power      = system.get("PowerState", "—")
+    health_obj = (system.get("Status") or {})
+    health_str = health_obj.get("Health", "—")
+    uuid       = system.get("UUID", "—")
+
+    # Fetch COM status independently — skipped silently if not configured
+    com_server = await _fetch_com_server(serial)
     bios_ver   = system.get("BiosVersion", "—")
     power      = system.get("PowerState", "—")
     health_obj = (system.get("Status") or {})
@@ -82,6 +104,31 @@ async def run_describe(host: dict) -> None:
     ilo_t.add_row("Hostname", mgr_host)
     ilo_t.add_row("Health",   _h(ilo_status))
     console.print(ilo_t)
+
+    # ── COM ───────────────────────────────────────────────────────────────────
+    if com_server is not None:
+        com_state = com_server.get("state") or {}
+        connected   = com_state.get("connected", False)
+        managed     = com_state.get("managed", False)
+        sub_state   = com_state.get("subscriptionState") or "—"
+        sub_tier    = com_state.get("subscriptionTier") or "—"
+        sub_key     = com_state.get("subscriptionKey") or "—"
+        sub_expires = (com_state.get("subscriptionExpiresAt") or "—")[:10]
+
+        conn_str = "[green]CONNECTED[/green]" if connected else "[yellow]DISCONNECTED[/yellow]"
+        mgd_str  = "Yes" if managed else "No"
+
+        console.print("[bold]COM[/bold]")
+        com_t = Table(box=rich_box.SIMPLE, show_header=False, padding=(0, 2))
+        com_t.add_column(style="dim", no_wrap=True)
+        com_t.add_column()
+        com_t.add_row("Connection",   conn_str)
+        com_t.add_row("Managed",      mgd_str)
+        com_t.add_row("Sub State",    sub_state)
+        com_t.add_row("Sub Tier",     sub_tier)
+        com_t.add_row("Sub Key",      sub_key)
+        com_t.add_row("Sub Expires",  sub_expires)
+        console.print(com_t)
 
     # ── CPU ───────────────────────────────────────────────────────────────────
     if cpus:

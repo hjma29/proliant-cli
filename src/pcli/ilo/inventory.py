@@ -732,6 +732,56 @@ async def fetch_serial_info(client: ILOClient) -> list[tuple[str, str]]:
     return [("Model", model), ("Serial", serial), ("ProductID", sku)]
 
 
+async def fetch_server_list_info(client: ILOClient) -> list[tuple[str, str]]:
+    """Fetch server identity + iLO IP for the 'pcli ilo list servers' table."""
+    sys_uri, mgr_uri = await asyncio.gather(
+        client.get_system_uri(),
+        client.get_manager_uri(),
+    )
+    system, manager = await asyncio.gather(
+        client.get(sys_uri),
+        client.get(mgr_uri),
+    )
+
+    raw_model = system.get("Model", "N/A")
+    model  = _MODEL_STRIP_RE.sub("", raw_model).strip() or raw_model
+    serial = system.get("SerialNumber", "N/A") or "N/A"
+    os_name  = system.get("HostName") or ""
+    ilo_name = manager.get("HostName") or ""
+
+    # Get current iLO IP from dedicated EthernetInterface
+    ip_addr = "—"
+    eth_col_uri = (manager.get("EthernetInterfaces") or {}).get("@odata.id")
+    if eth_col_uri:
+        members = await _collection_members(client, eth_col_uri)
+        dedicated = None
+        for item in members:
+            uri = item.get("@odata.id")
+            if not uri:
+                continue
+            iface = await client.get(uri)
+            iface_type = ((iface.get("Oem") or {}).get("Hpe") or {}).get("InterfaceType", "")
+            if iface_type == "Dedicated":
+                dedicated = iface
+                break
+            if dedicated is None:
+                dedicated = iface
+        if dedicated:
+            for a in (dedicated.get("IPv4Addresses") or []):
+                addr = (a.get("Address") or "").strip()
+                if addr and addr != "0.0.0.0":
+                    ip_addr = addr
+                    break
+
+    return [
+        ("Serial",   serial),
+        ("OS_Name",  os_name),
+        ("iLO_Name", ilo_name),
+        ("Model",    model),
+        ("IP",       ip_addr),
+    ]
+
+
 async def fetch_fleet_summary(client: ILOClient) -> list[tuple[str, str]]:
     # Fetch system + manager in parallel — both are available without hitting
     # firmware inventory (which can be slow on some iLOs)

@@ -181,7 +181,16 @@ async def run_describe(host: dict) -> None:
             "Immediately":       "[green]Immediately[/green]",
         }
         has_repo = bool(comp_repo)
-        console.print("[bold]Firmware[/bold]")
+
+        # Update state header line
+        if upd_state == "Complete":
+            state_str = "[bold yellow]Complete[/bold yellow]  [dim](firmware updated — some components may need restart)[/dim]"
+        elif upd_state == "Idle":
+            state_str = "[dim]Idle[/dim]"
+        else:
+            state_str = f"[dim]{upd_state}[/dim]" if upd_state else "[dim]—[/dim]"
+        console.print(f"[bold]Firmware[/bold]   Update State: {state_str}")
+
         fw_t = Table(box=rich_box.SIMPLE, show_header=True, header_style="bold cyan", padding=(0, 2))
         fw_t.add_column("Component", no_wrap=True)
         fw_t.add_column("Version")
@@ -189,15 +198,18 @@ async def run_describe(host: dict) -> None:
         if has_repo:
             fw_t.add_column("Activates", no_wrap=True)
         for fw in fw_list:
-            oem = (fw.get("Oem") or {}).get("Hpe", {})
-            loc = oem.get("DeviceContext", "")
+            oem      = (fw.get("Oem") or {}).get("Hpe", {})
+            loc      = oem.get("DeviceContext", "")
+            dc       = oem.get("DeviceClass", "")
+            in_repo  = bool(dc and dc in comp_repo)
+            name     = fw.get("Name", "")
+            name_str = f"[yellow]*[/yellow] {name}" if in_repo else f"  {name}"
             if has_repo:
-                dc       = oem.get("DeviceClass", "")
-                act_raw  = comp_repo.get(dc, "")
+                act_raw  = comp_repo.get(dc, "") if dc else ""
                 act_str  = _ACT_STYLE.get(act_raw, "") if act_raw else ""
-                fw_t.add_row(fw.get("Name", ""), fw.get("Version", ""), loc, act_str)
+                fw_t.add_row(name_str, fw.get("Version", ""), loc, act_str)
             else:
-                fw_t.add_row(fw.get("Name", ""), fw.get("Version", ""), loc)
+                fw_t.add_row(name_str, fw.get("Version", ""), loc)
         console.print(fw_t)
 
 

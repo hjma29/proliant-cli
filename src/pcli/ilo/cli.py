@@ -56,7 +56,7 @@ from pcli.ilo.config import (
     MAX_WORKERS,
     load_hosts,
 )
-from pcli.ilo.describe import run_describe, run_describe_ilo_nic
+from pcli.ilo.describe import run_describe, run_describe_ilo_nic, run_describe_fw_update
 from pcli.ilo.printers import (
     _print_json_results,
     _header_line,
@@ -372,6 +372,8 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Show iLO dedicated NIC details (DHCP/static, IP, DNS, routes, LLDP, MAC)")
     desc_p.add_argument("--raw", action="store_true",
                         help="With --ilo-nic: dump unprocessed Redfish JSON for Manager EthernetInterfaces")
+    desc_p.add_argument("--firmware-update", action="store_true", dest="firmware_update",
+                        help="Show firmware update status: UpdateService state, last bundle report, component repository")
 
     return parser
 
@@ -891,6 +893,8 @@ async def _cmd_describe(args: argparse.Namespace) -> None:
             _print_raw_table(results)
         else:
             await run_describe_ilo_nic(hosts[0])
+    elif getattr(args, "firmware_update", False):
+        await run_describe_fw_update(hosts[0])
     else:
         await run_describe(hosts[0])
 

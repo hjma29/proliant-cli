@@ -110,52 +110,46 @@ def _add_tree_nodes(branch: Tree, parser: argparse.ArgumentParser, depth: int = 
     if depth > 3:
         return
     for name, sub in _get_subparsers(parser).items():
-        help_text = ""
-        # Get help from the parent's subparser choices
-        for action in parser._actions:
-            if isinstance(action, argparse._SubParsersAction):
-                choice_action = action._name_parser_map.get(name)
-                if choice_action:
-                    # help is stored on the parent's _choices_actions
-                    pass
-        # Get help text from the subparser's description or prog
-        desc = (sub.description or "").split("\n")[0].strip()
-        # Try to get help from _defaults or _option_string_actions
-        label = f"[bold cyan]{name}[/bold cyan]"
-        if desc:
-            label += f"  [dim]{desc[:60]}[/dim]"
-        node = branch.add(label)
+        node = branch.add(f"[cyan]{name}[/cyan]")
         _add_tree_nodes(node, sub, depth + 1)
 
 
 def _cmd_list_cli_tree() -> None:
     """Print the full pcli command hierarchy as a tree."""
-    from rich.columns import Columns
+    from rich.table import Table
+    from rich import box as rich_box
     from pcli.ilo.cli      import _build_parser as ilo_parser
     from pcli.com.cli      import _build_parser as com_parser
     from pcli.spp.cli      import _build_parser as spp_parser
     from pcli.oneview.cli  import _build_parser as ov_parser
     from pcli.qs.cli       import _build_parser as qs_parser
 
-    namespaces = {
-        "ilo":     (ilo_parser,    "Direct iLO Redfish management"),
-        "com":     (com_parser,    "HPE GreenLake / COM"),
-        "spp":     (spp_parser,    "Service Pack for ProLiant"),
-        "oneview": (ov_parser,     "HPE OneView"),
-        "qs":      (qs_parser,     "HPE QuickSpecs browser"),
-        "config":  (_build_parser, "pcli configuration"),
-        "update":  (None,          "Upgrade pcli"),
-    }
+    namespaces = [
+        ("ilo",     ilo_parser,    "Direct iLO Redfish"),
+        ("com",     com_parser,    "GreenLake / COM"),
+        ("spp",     spp_parser,    "Service Pack"),
+        ("oneview", ov_parser,     "OneView"),
+        ("qs",      qs_parser,     "QuickSpecs"),
+        ("config",  _build_parser, "Configuration"),
+        ("update",  None,          "Upgrade pcli"),
+    ]
 
+    # Build one Tree per namespace
     trees = []
-    for ns, (builder, desc) in namespaces.items():
-        t = Tree(f"[bold yellow]{ns}[/bold yellow]\n[dim]{desc}[/dim]")
+    for ns, builder, desc in namespaces:
+        t = Tree(f"[bold yellow]{ns}[/bold yellow]  [dim]{desc}[/dim]")
         if builder is not None:
             _add_tree_nodes(t, builder())
         trees.append(t)
 
+    # Lay out as a single-row table — forces true side-by-side rendering
+    tbl = Table(box=None, show_header=False, padding=(0, 2), expand=False)
+    for _ in trees:
+        tbl.add_column(no_wrap=False)
+    tbl.add_row(*trees)
+
     console.print("[bold green]pcli[/bold green]\n")
-    console.print(Columns(trees, equal=False, expand=False, padding=(0, 2)))
+    console.print(tbl)
 
 
 # ── Argument parser ────────────────────────────────────────────────────────────

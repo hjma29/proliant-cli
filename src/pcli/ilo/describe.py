@@ -105,28 +105,50 @@ async def run_describe(host: dict) -> None:
     console.print(ilo_t)
 
     # ── COM ───────────────────────────────────────────────────────────────────
-    if com_server is not None:
-        com_state = com_server.get("state") or {}
-        connected   = com_state.get("connected", False)
-        managed     = com_state.get("managed", False)
-        sub_state   = com_state.get("subscriptionState") or "—"
-        sub_tier    = com_state.get("subscriptionTier") or "—"
-        sub_key     = com_state.get("subscriptionKey") or "—"
-        sub_expires = (com_state.get("subscriptionExpiresAt") or "—")[:10]
-
-        conn_str = "[green]CONNECTED[/green]" if connected else "[yellow]DISCONNECTED[/yellow]"
-        mgd_str  = "Yes" if managed else "No"
-
+    # Always show if iLO has CloudConnect data OR server is in COM
+    has_cloud = bool(cloud)
+    has_com   = com_server is not None
+    if has_cloud or has_com:
         console.print("[bold]COM[/bold]")
         com_t = Table(box=rich_box.SIMPLE, show_header=False, padding=(0, 2))
         com_t.add_column(style="dim", no_wrap=True)
         com_t.add_column()
-        com_t.add_row("Connection",   conn_str)
-        com_t.add_row("Managed",      mgd_str)
-        com_t.add_row("Sub State",    sub_state)
-        com_t.add_row("Sub Tier",     sub_tier)
-        com_t.add_row("Sub Key",      sub_key)
-        com_t.add_row("Sub Expires",  sub_expires)
+
+        # iLO-side fields
+        if has_cloud:
+            cc_status = cloud.get("CloudConnectStatus", "N/A")
+            cc_type   = cloud.get("ConnectionType", "N/A")
+            cc_ws     = cloud.get("WorkspaceId") or "(not registered)"
+            cc_net    = cloud_ext.get("NetworkConfig", "N/A")
+            cc_web    = cloud_ext.get("WebConnectivity", "N/A")
+            cc_cfg    = cloud_ext.get("iLOConfigForCloudConnect", "N/A")
+            com_t.add_row("iLO Status",    cc_status)
+            com_t.add_row("Type",          cc_type)
+            com_t.add_row("Workspace ID",  cc_ws)
+            com_t.add_row("Network",       cc_net)
+            com_t.add_row("Web",           cc_web)
+            com_t.add_row("iLO Config",    cc_cfg)
+
+        # COM API fields
+        if has_com:
+            com_state   = com_server.get("state") or {}
+            connected   = com_state.get("connected", False)
+            managed     = com_state.get("managed", False)
+            sub_state   = com_state.get("subscriptionState") or "—"
+            sub_tier    = com_state.get("subscriptionTier") or "—"
+            sub_key     = com_state.get("subscriptionKey") or "—"
+            sub_expires = (com_state.get("subscriptionExpiresAt") or "—")[:10]
+            conn_str    = "[green]CONNECTED[/green]" if connected else "[yellow]DISCONNECTED[/yellow]"
+
+            if has_cloud:
+                com_t.add_row("", "")  # spacer between iLO-side and COM-side
+            com_t.add_row("COM Status",   conn_str)
+            com_t.add_row("Managed",      "Yes" if managed else "No")
+            com_t.add_row("Sub State",    sub_state)
+            com_t.add_row("Sub Tier",     sub_tier)
+            com_t.add_row("Sub Key",      sub_key)
+            com_t.add_row("Sub Expires",  sub_expires)
+
         console.print(com_t)
 
     # ── CPU ───────────────────────────────────────────────────────────────────

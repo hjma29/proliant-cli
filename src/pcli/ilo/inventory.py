@@ -749,8 +749,9 @@ async def fetch_server_list_info(client: ILOClient) -> list[tuple[str, str]]:
     os_name  = system.get("HostName") or ""
     ilo_name = manager.get("HostName") or ""
 
-    # Get current iLO IP from dedicated EthernetInterface
-    ip_addr = "—"
+    # Get current iLO IP and hostname from dedicated EthernetInterface
+    ip_addr  = "—"
+    ilo_name = ""
     eth_col_uri = (manager.get("EthernetInterfaces") or {}).get("@odata.id")
     if eth_col_uri:
         members = await _collection_members(client, eth_col_uri)
@@ -767,6 +768,13 @@ async def fetch_server_list_info(client: ILOClient) -> list[tuple[str, str]]:
             if dedicated is None:
                 dedicated = iface
         if dedicated:
+            # FQDN is the best iLO hostname; fall back to short HostName
+            ilo_name = (
+                dedicated.get("FQDN")
+                or dedicated.get("HostName")
+                or ((dedicated.get("Oem") or {}).get("Hpe") or {}).get("HostName")
+                or ""
+            )
             for a in (dedicated.get("IPv4Addresses") or []):
                 addr = (a.get("Address") or "").strip()
                 if addr and addr != "0.0.0.0":

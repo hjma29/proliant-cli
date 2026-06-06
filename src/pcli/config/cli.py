@@ -130,7 +130,7 @@ def _add_tree_nodes(branch: Tree, parser: argparse.ArgumentParser, depth: int = 
 
 def _cmd_list_cli_tree() -> None:
     """Print the full pcli command hierarchy as a tree."""
-    # Lazy imports to avoid circular deps and slow startup
+    from rich.columns import Columns
     from pcli.ilo.cli      import _build_parser as ilo_parser
     from pcli.com.cli      import _build_parser as com_parser
     from pcli.spp.cli      import _build_parser as spp_parser
@@ -138,22 +138,24 @@ def _cmd_list_cli_tree() -> None:
     from pcli.qs.cli       import _build_parser as qs_parser
 
     namespaces = {
-        "ilo":     (ilo_parser,  "Direct iLO Redfish management"),
-        "com":     (com_parser,  "HPE GreenLake / Compute Ops Management"),
-        "spp":     (spp_parser,  "HPE Service Pack for ProLiant analysis"),
-        "oneview": (ov_parser,   "HPE OneView fleet management"),
-        "qs":      (qs_parser,   "HPE QuickSpecs browser"),
-        "config":  (_build_parser, "View and manage pcli configuration"),
-        "update":  (None,        "Upgrade pcli to the latest release"),
+        "ilo":     (ilo_parser,    "Direct iLO Redfish management"),
+        "com":     (com_parser,    "HPE GreenLake / COM"),
+        "spp":     (spp_parser,    "Service Pack for ProLiant"),
+        "oneview": (ov_parser,     "HPE OneView"),
+        "qs":      (qs_parser,     "HPE QuickSpecs browser"),
+        "config":  (_build_parser, "pcli configuration"),
+        "update":  (None,          "Upgrade pcli"),
     }
 
-    root = Tree("[bold green]pcli[/bold green]")
+    trees = []
     for ns, (builder, desc) in namespaces.items():
-        branch = root.add(f"[bold yellow]{ns}[/bold yellow]  [dim]{desc}[/dim]")
+        t = Tree(f"[bold yellow]{ns}[/bold yellow]\n[dim]{desc}[/dim]")
         if builder is not None:
-            _add_tree_nodes(branch, builder())
+            _add_tree_nodes(t, builder())
+        trees.append(t)
 
-    console.print(root)
+    console.print("[bold green]pcli[/bold green]\n")
+    console.print(Columns(trees, equal=False, expand=False, padding=(0, 2)))
 
 
 # ── Argument parser ────────────────────────────────────────────────────────────

@@ -267,6 +267,46 @@ def print_fleet_table(results: list[tuple[str, str | None, list]],
             print(f"  {'':>{srv_w}}   {vals['_error']}")
 
 
+def print_servers_table(results: list[tuple[str, str | None, list]]) -> None:
+    """Print server list with Serial, OS Name, iLO Name, Model, IP — Rich styled."""
+    from rich import box
+    from rich.table import Table
+    from pcli.common.display import get_console
+
+    console = get_console()
+    table = Table(
+        box=box.SIMPLE_HEAD,
+        show_lines=False,
+        expand=True,
+    )
+    table.add_column("Serial",   style="grey70",  no_wrap=True, min_width=13)
+    table.add_column("OS Name",  style="default", ratio=4, overflow="fold")
+    table.add_column("iLO Name", style="green",   ratio=4, overflow="fold")
+    table.add_column("Model",    style="grey70",  no_wrap=True, max_width=13)
+    table.add_column("IP",       style="white",   no_wrap=True, min_width=15)
+
+    for host_name, error, rows in sorted(results, key=lambda r: r[0]):
+        if error:
+            table.add_row(
+                f"[grey70]{host_name}[/grey70]", "—", "—", "—",
+                f"[red]{error}[/red]",
+            )
+            continue
+        d = dict(rows)
+        serial   = d.get("Serial", "—")
+        os_name  = d.get("OS_Name", "")
+        ilo_name = d.get("iLO_Name", "") or "—"
+        model    = d.get("Model", "—")
+        ip_addr  = d.get("IP", "—")
+
+        os_cell = f"[cyan]{os_name}[/cyan]" if os_name else "[cyan]—[/cyan]"
+        table.add_row(serial, os_cell, ilo_name, model, ip_addr)
+
+    count = len(results)
+    console.print(f"\n[bold]iLO Servers ({count} total)[/bold]")
+    console.print(table)
+
+
 def print_serial_table(results: list[tuple[str, str | None, list]]) -> None:
     keys = ("Model", "Serial", "ProductID")
     server_data: dict[str, dict[str, str]] = {}

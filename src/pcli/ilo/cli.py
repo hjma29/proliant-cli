@@ -67,6 +67,7 @@ from pcli.ilo.printers import (
     print_disk_map_table,
     print_fleet_table,
     print_serial_table,
+    print_servers_table,
     print_update_method_table,
     print_full_table,
     _print_fw_components,
@@ -84,6 +85,7 @@ def _ilo_fields_completer(choices: tuple):
 
 
 _FETCH_DISPATCH: dict[str, FetchFn] = {
+    "servers": inventory.fetch_server_list_info,
     "ilo": inventory.fetch_ilo_version,
     "network": inventory.fetch_network_versions,
     "nic": inventory.fetch_nic_status,
@@ -176,6 +178,7 @@ def _build_parser() -> argparse.ArgumentParser:
     get_sub.required = True
 
     get_choices = {
+        "servers": "Server list: serial, OS name, iLO name, model, IP",
         "firmwares": "Firmware summary: key firmware versions per server (one row per server)",
         "ilo": "iLO firmware version",
         "network": "NIC firmware versions",
@@ -845,6 +848,7 @@ async def _run_get(args: argparse.Namespace) -> None:
         "com": lambda r: _print_component_table(r, "HPE Compute Ops Management"),
         "full": print_full_table,
         "disk_map": print_disk_map_table,
+        "servers": print_servers_table,
         "serial": print_serial_table,
         "update_method": print_update_method_table,
     }

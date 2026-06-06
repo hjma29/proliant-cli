@@ -86,8 +86,8 @@ def _ilo_fields_completer(choices: tuple):
 
 _FETCH_DISPATCH: dict[str, FetchFn] = {
     "servers": inventory.fetch_server_list_info,
-    "ilo": inventory.fetch_ilo_version,
-    "network": inventory.fetch_network_versions,
+    "nic-host": inventory.fetch_network_versions,
+    "nic-ilo":  inventory.fetch_ilo_nic_summary,
     "nic": inventory.fetch_nic_status,
     "storage": inventory.fetch_storage_versions,
     "cpu": inventory.fetch_cpu_info,
@@ -102,8 +102,8 @@ _FETCH_DISPATCH: dict[str, FetchFn] = {
 
 _RAW_DISPATCH: dict[str, FetchFn] = {
     "servers": inventory.fetch_server_list_info,
-    "ilo": inventory.fetch_firmware_raw,
-    "network": inventory.fetch_network_raw,
+    "nic-host": inventory.fetch_network_raw,
+    "nic-ilo":  inventory.fetch_ilo_nic_summary,
     "nic": inventory.fetch_nic_raw,
     "storage": inventory.fetch_storage_raw,
     "cpu": inventory.fetch_cpu_raw,
@@ -179,18 +179,18 @@ def _build_parser() -> argparse.ArgumentParser:
     get_sub.required = True
 
     get_choices = {
-        "servers": "Server list: serial, OS name, iLO name, model, IP",
-        "firmwares": "Firmware summary: key firmware versions per server (one row per server)",
-        "ilo": "iLO firmware version",
-        "network": "NIC firmware versions",
-        "nic": "NIC link status + MAC address",
-        "storage": "Storage controller + drive firmware",
-        "cpu": "CPU model + microcode version",
-        "memory": "DIMM info + firmware revision",
-        "com": "HPE Compute Ops Management registration status",
-        "full": "Full firmware inventory",
-        "disk-map": "Drive bay + serial number map (cross-ref with lsblk)",
-        "serial": "Server model, serial number, and product ID (for COM onboarding)",
+        "servers":       "Server list: serial, OS name, iLO name, model, IP",
+        "firmwares":     "Firmware summary: key firmware versions per server (one row per server)",
+        "nic-host":      "Host NIC firmware versions",
+        "nic-ilo":       "iLO dedicated NIC: LLDP status, neighbor info, IP",
+        "nic":           "NIC link status + MAC address",
+        "storage":       "Storage controller + drive firmware",
+        "cpu":           "CPU model + microcode version",
+        "memory":        "DIMM info + firmware revision",
+        "com":           "HPE Compute Ops Management registration status",
+        "full":          "Full firmware inventory",
+        "disk-map":      "Drive bay + serial number map (cross-ref with lsblk)",
+        "serial":        "Server model, serial number, and product ID (for COM onboarding)",
         "update-method": "Full firmware inventory with update method (BMC / UEFI / OS) per component",
     }
     for name, help_text in get_choices.items():

@@ -101,6 +101,7 @@ _FETCH_DISPATCH: dict[str, FetchFn] = {
 }
 
 _RAW_DISPATCH: dict[str, FetchFn] = {
+    "servers": inventory.fetch_server_list_info,
     "ilo": inventory.fetch_firmware_raw,
     "network": inventory.fetch_network_raw,
     "nic": inventory.fetch_nic_raw,

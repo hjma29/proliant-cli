@@ -27,6 +27,7 @@ async def run_describe(host: dict) -> None:
                 mgr_uri = await c.get_manager_uri()
                 system  = await c.get(sys_uri)
                 manager = await c.get(mgr_uri)
+                upd_svc = await c.get("/redfish/v1/UpdateService")
                 fw_list = await inventory.fetch_firmware_inventory_full(c)
                 cpus    = await inventory.fetch_cpu_report_data(c)
                 gpus    = await inventory.fetch_gpu_report_data(c)
@@ -53,11 +54,19 @@ async def run_describe(host: dict) -> None:
     cloud      = (manager.get("Oem") or {}).get("Hpe", {}).get("CloudConnect") or {}
     cloud_ext  = cloud.get("ExtendedStatusInfo") or {}
 
+    upd_state  = (upd_svc.get("Oem") or {}).get("Hpe", {}).get("State", "")
+
     _HS = {"OK": "green", "Warning": "yellow", "Critical": "red"}
 
     def _h(v: str | None) -> str:
         s = _HS.get(v or "", "")
         return f"[{s}]{v}[/{s}]" if s else (v or "—")
+
+    # ── Firmware-update pending warning ───────────────────────────────────────
+    if upd_state == "Complete":
+        console.print(
+            "[bold yellow]⚠  Firmware update completed — host restart required to activate.[/bold yellow]"
+        )
 
     # ── Header ────────────────────────────────────────────────────────────────
     console.print(Panel(

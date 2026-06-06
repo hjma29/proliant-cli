@@ -275,6 +275,7 @@ async def run_describe_fw_update(host: dict) -> None:
     # ── Component repository ───────────────────────────────────────────────────
     console.print("[bold]Component Repository[/bold]")
     if repo_items:
+        repo_items.sort(key=lambda r: r.get("Created") or "", reverse=True)
         cr_t = Table(box=rich_box.SIMPLE, show_header=True, header_style="bold cyan", padding=(0, 2))
         cr_t.add_column("Name")
         cr_t.add_column("Version")

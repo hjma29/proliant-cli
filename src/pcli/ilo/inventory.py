@@ -60,6 +60,26 @@ async def fetch_firmware_inventory_full(client: ILOClient) -> list[dict]:
     return await _member_resources(client, await client.get_firmware_inventory_uri())
 
 
+async def fetch_component_repo_activates(client: ILOClient) -> dict[str, str]:
+    """Return {device_class_uuid: activates_value} from the ComponentRepository.
+
+    Only components present in the repository (recently staged/uploaded) are returned.
+    Activates values: 'Immediately', 'AfterReboot', 'AfterDeviceReset'.
+    """
+    try:
+        repo = await client.get("/redfish/v1/UpdateService/ComponentRepository")
+        result: dict[str, str] = {}
+        for m in repo.get("Members", []):
+            item = await client.get(m["@odata.id"])
+            dc = item.get("DeviceClass")
+            ac = item.get("Activates")
+            if dc and ac:
+                result[dc] = ac
+        return result
+    except Exception:
+        return {}
+
+
 async def fetch_nic_firmware_inventory(client: ILOClient) -> list[dict]:
     chassis = await client.get(await client.get_chassis_uri())
     na_uri = chassis.get("NetworkAdapters", {}).get("@odata.id")

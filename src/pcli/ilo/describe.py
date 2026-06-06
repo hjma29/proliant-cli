@@ -29,6 +29,7 @@ async def run_describe(host: dict) -> None:
                 manager = await c.get(mgr_uri)
                 upd_svc = await c.get("/redfish/v1/UpdateService")
                 fw_list = await inventory.fetch_firmware_inventory_full(c)
+                comp_repo = await inventory.fetch_component_repo_activates(c)
                 cpus    = await inventory.fetch_cpu_report_data(c)
                 gpus    = await inventory.fetch_gpu_report_data(c)
                 dimms   = await inventory.fetch_memory_population(c)
@@ -174,14 +175,29 @@ async def run_describe(host: dict) -> None:
 
     # ── Firmware ──────────────────────────────────────────────────────────────
     if fw_list:
+        _ACT_STYLE = {
+            "AfterReboot":       "[bold yellow]AfterReboot[/bold yellow]",
+            "AfterDeviceReset":  "[cyan]DeviceReset[/cyan]",
+            "Immediately":       "[green]Immediately[/green]",
+        }
+        has_repo = bool(comp_repo)
         console.print("[bold]Firmware[/bold]")
         fw_t = Table(box=rich_box.SIMPLE, show_header=True, header_style="bold cyan", padding=(0, 2))
         fw_t.add_column("Component", no_wrap=True)
         fw_t.add_column("Version")
         fw_t.add_column("Location", style="dim")
+        if has_repo:
+            fw_t.add_column("Activates", no_wrap=True)
         for fw in fw_list:
-            loc = (fw.get("Oem") or {}).get("Hpe", {}).get("DeviceContext", "")
-            fw_t.add_row(fw.get("Name", ""), fw.get("Version", ""), loc)
+            oem = (fw.get("Oem") or {}).get("Hpe", {})
+            loc = oem.get("DeviceContext", "")
+            if has_repo:
+                dc       = oem.get("DeviceClass", "")
+                act_raw  = comp_repo.get(dc, "")
+                act_str  = _ACT_STYLE.get(act_raw, "") if act_raw else ""
+                fw_t.add_row(fw.get("Name", ""), fw.get("Version", ""), loc, act_str)
+            else:
+                fw_t.add_row(fw.get("Name", ""), fw.get("Version", ""), loc)
         console.print(fw_t)
 
 

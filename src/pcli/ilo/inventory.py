@@ -747,7 +747,7 @@ async def fetch_server_list_info(client: ILOClient) -> list[tuple[str, str]]:
     model  = _MODEL_STRIP_RE.sub("", raw_model).strip() or raw_model
     serial = system.get("SerialNumber", "N/A") or "N/A"
     os_name  = system.get("HostName") or ""
-    ilo_name = manager.get("HostName") or ""
+    ilo_name = manager.get("HostName") or ""  # may be None; overridden by interface below
 
     # Get current iLO IP and hostname from dedicated EthernetInterface
     ip_addr  = "—"

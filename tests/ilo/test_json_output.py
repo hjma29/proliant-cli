@@ -27,13 +27,13 @@ class TestIloParserJson:
     def test_parser_json_flag_on_list(self):
         from pcli.ilo.cli import _build_parser
         parser = _build_parser()
-        args = parser.parse_args(["--json", "list", "ilo"])
+        args = parser.parse_args(["--json", "list", "nic-host"])
         assert args.json_output is True
 
     def test_parser_json_default_false(self):
         from pcli.ilo.cli import _build_parser
         parser = _build_parser()
-        args = parser.parse_args(["list", "ilo"])
+        args = parser.parse_args(["list", "nic-host"])
         assert args.json_output is False
 
     def test_parser_json_flag_list_firmwares(self):
@@ -47,12 +47,12 @@ class TestIloJsonOutput:
     def test_list_ilo_json_is_valid(self, capsys):
         from pcli.ilo import cli
 
-        fake_ilo_data = [("iLO Version", "iLO 5 v2.78")]
+        fake_ilo_data = [("NIC Firmware", "235.1.164.14")]
         fake_results = [(FAKE_HOST["name"], None, fake_ilo_data)]
 
         with patch("pcli.ilo.cli._load_hosts_or_exit", return_value=[FAKE_HOST]), \
              patch("pcli.ilo.cli._run_parallel_async", new_callable=AsyncMock, return_value=fake_results):
-            cli.main(["--json", "list", "ilo", "--host", "dl325-gen12"])
+            cli.main(["--json", "list", "nic-host", "--host", "dl325-gen12"])
 
         captured = capsys.readouterr()
         result = json.loads(captured.out)
@@ -93,7 +93,7 @@ class TestIloJsonOutput:
 
         with patch("pcli.ilo.cli._load_hosts_or_exit", return_value=[FAKE_HOST]), \
              patch("pcli.ilo.cli._run_parallel_async", new_callable=AsyncMock, return_value=fake_results):
-            cli.main(["--json", "list", "network", "--host", "dl325-gen12"])
+            cli.main(["--json", "list", "nic-host", "--host", "dl325-gen12"])
 
         captured = capsys.readouterr()
         result = json.loads(captured.out)
@@ -118,20 +118,21 @@ class TestIloJsonOutput:
 
         with patch("pcli.ilo.cli._load_hosts_or_exit", return_value=[FAKE_HOST]), \
              patch("pcli.ilo.cli._run_parallel_async", new_callable=AsyncMock, return_value=fake_results):
-            cli.main(["--json", "list", "ilo", "--host", "dl325-gen12"])
+            cli.main(["--json", "list", "nic-host", "--host", "dl325-gen12"])
 
         captured = capsys.readouterr()
         result = json.loads(captured.out)
+        assert isinstance(result, list)
         assert result[0]["error"] == "connection refused"
 
     def test_json_no_rich_markup_in_stdout(self, capsys):
         from pcli.ilo import cli
 
-        fake_results = [(FAKE_HOST["name"], None, [("iLO Version", "iLO 5 v2.78")])]
+        fake_results = [(FAKE_HOST["name"], None, [("NIC Firmware", "235.1.164.14")])]
 
         with patch("pcli.ilo.cli._load_hosts_or_exit", return_value=[FAKE_HOST]), \
              patch("pcli.ilo.cli._run_parallel_async", new_callable=AsyncMock, return_value=fake_results):
-            cli.main(["--json", "list", "ilo", "--host", "dl325-gen12"])
+            cli.main(["--json", "list", "nic-host", "--host", "dl325-gen12"])
 
         captured = capsys.readouterr()
         assert "[bold" not in captured.out

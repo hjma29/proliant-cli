@@ -87,7 +87,7 @@ def test_parser_show_subcommands():
 def test_parser_show_host_filter():
     from pcli.ilo.cli import _build_parser
     parser = _build_parser()
-    args = parser.parse_args(["list", "ilo", "--host", "dl325-gen12"])
+    args = parser.parse_args(["list", "nic-host", "--host", "dl325-gen12"])
     assert args.host == "dl325-gen12"
 
 

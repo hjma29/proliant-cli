@@ -57,18 +57,17 @@ async def run_describe(host: dict) -> None:
     health_str = health_obj.get("Health", "—")
     uuid       = system.get("UUID", "—")
 
-    # Fetch COM status independently — skipped silently if not configured
-    com_server = await _fetch_com_server(serial)
-    bios_ver   = system.get("BiosVersion", "—")
-    power      = system.get("PowerState", "—")
-    health_obj = (system.get("Status") or {})
-    health_str = health_obj.get("Health", "—")
-    uuid       = system.get("UUID", "—")
-
     mgr_model  = manager.get("Model", "—")
     mgr_fw     = manager.get("FirmwareVersion", "—") or "—"
     mgr_host   = manager.get("HostName", "—") or "—"
     ilo_status = (manager.get("Status") or {}).get("Health", "—")
+
+    # iLO-side cloud connect status (Oem.Hpe.CloudConnect)
+    cloud      = (manager.get("Oem") or {}).get("Hpe", {}).get("CloudConnect") or {}
+    cloud_ext  = cloud.get("ExtendedStatusInfo") or {}
+
+    # Fetch COM API server record — skipped silently if not configured
+    com_server = await _fetch_com_server(serial)
 
     _HS = {"OK": "green", "Warning": "yellow", "Critical": "red"}
 

@@ -976,3 +976,52 @@ async def fetch_ilo_nic_details(client: ILOClient) -> dict[str, Any]:
         "selection_note": selection_note,
         "connected_via":  client.base_url,
     }
+
+
+async def fetch_ilo_nic_summary(client: ILOClient) -> list[dict[str, Any]]:
+    """Fetch iLO dedicated NIC summary row for the list nic-ilo table.
+
+    Returns a list with a single dict containing LLDP and IP info.
+    Neighbor fields are populated from Oem.Hpe.LLDPData if available.
+    """
+    details = await fetch_ilo_nic_details(client)
+    if not details:
+        return []
+
+    # Try to extract LLDP neighbor data from the raw interface (re-fetch for neighbor fields)
+    manager = await client.get(await client.get_manager_uri())
+    eth_col_uri = (manager.get("EthernetInterfaces") or {}).get("@odata.id")
+    neighbor_system = "—"
+    neighbor_port = "—"
+    if eth_col_uri:
+        members = await _collection_members(client, eth_col_uri)
+        for item in members:
+            uri = item.get("@odata.id")
+            if not uri:
+                continue
+            iface = await client.get(uri)
+            oem_hpe = ((iface.get("Oem") or {}).get("Hpe") or {})
+            if oem_hpe.get("InterfaceType") == "Dedicated":
+                lldp_block = oem_hpe.get("LLDPData") or oem_hpe.get("LLDP") or {}
+                if isinstance(lldp_block, dict):
+                    neighbor_system = lldp_block.get("NeighborSystemName") or lldp_block.get("SystemName") or "—"
+                    neighbor_port = lldp_block.get("NeighborPortID") or lldp_block.get("PortID") or "—"
+                break
+
+    ipv4 = details.get("current_ipv4") or {}
+    lldp_val = details.get("lldp_enabled")
+    if lldp_val is True:
+        lldp_str = "Enabled"
+    elif lldp_val is False:
+        lldp_str = "Disabled"
+    else:
+        lldp_str = "—"
+
+    return [{
+        "lldp_enabled":     lldp_str,
+        "neighbor_system":  neighbor_system,
+        "neighbor_port":    neighbor_port,
+        "ipv4":             ipv4.get("address") or "—",
+        "mac":              details.get("mac") or "—",
+        "link_status":      details.get("link_status") or "—",
+    }]

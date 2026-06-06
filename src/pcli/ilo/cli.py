@@ -60,9 +60,9 @@ from pcli.ilo.describe import run_describe, run_describe_ilo_nic, run_describe_f
 from pcli.ilo.printers import (
     _print_json_results,
     _header_line,
-    print_ilo_table,
     _print_component_table,
     print_network_table,
+    print_nic_ilo_table,
     _print_raw_table,
     print_disk_map_table,
     print_fleet_table,
@@ -86,8 +86,8 @@ def _ilo_fields_completer(choices: tuple):
 
 _FETCH_DISPATCH: dict[str, FetchFn] = {
     "servers": inventory.fetch_server_list_info,
-    "nic-host": inventory.fetch_network_versions,
-    "nic-ilo":  inventory.fetch_ilo_nic_summary,
+    "nic_host": inventory.fetch_network_versions,
+    "nic_ilo":  inventory.fetch_ilo_nic_summary,
     "nic": inventory.fetch_nic_status,
     "storage": inventory.fetch_storage_versions,
     "cpu": inventory.fetch_cpu_info,
@@ -102,8 +102,8 @@ _FETCH_DISPATCH: dict[str, FetchFn] = {
 
 _RAW_DISPATCH: dict[str, FetchFn] = {
     "servers": inventory.fetch_server_list_info,
-    "nic-host": inventory.fetch_network_raw,
-    "nic-ilo":  inventory.fetch_ilo_nic_summary,
+    "nic_host": inventory.fetch_network_raw,
+    "nic_ilo":  inventory.fetch_ilo_nic_summary,
     "nic": inventory.fetch_nic_raw,
     "storage": inventory.fetch_storage_raw,
     "cpu": inventory.fetch_cpu_raw,
@@ -841,18 +841,18 @@ async def _run_get(args: argparse.Namespace) -> None:
         return
 
     printers = {
-        "firmwares": lambda r: print_fleet_table(r, fields=getattr(args, "fields", None)),
-        "ilo": print_ilo_table,
-        "network": print_network_table,
-        "nic": lambda r: _print_component_table(r, "NIC Link Status + MAC"),
-        "storage": lambda r: _print_component_table(r, "Storage Firmware"),
-        "cpu": lambda r: _print_component_table(r, "CPU Info"),
-        "memory": lambda r: _print_component_table(r, "Memory Info"),
-        "com": lambda r: _print_component_table(r, "HPE Compute Ops Management"),
-        "full": print_full_table,
-        "disk_map": print_disk_map_table,
-        "servers": print_servers_table,
-        "serial": print_serial_table,
+        "firmwares":    lambda r: print_fleet_table(r, fields=getattr(args, "fields", None)),
+        "nic_host":     print_network_table,
+        "nic_ilo":      print_nic_ilo_table,
+        "nic":          lambda r: _print_component_table(r, "NIC Link Status + MAC"),
+        "storage":      lambda r: _print_component_table(r, "Storage Firmware"),
+        "cpu":          lambda r: _print_component_table(r, "CPU Info"),
+        "memory":       lambda r: _print_component_table(r, "Memory Info"),
+        "com":          lambda r: _print_component_table(r, "HPE Compute Ops Management"),
+        "full":         print_full_table,
+        "disk_map":     print_disk_map_table,
+        "servers":      print_servers_table,
+        "serial":       print_serial_table,
         "update_method": print_update_method_table,
     }
     printers[what](results)

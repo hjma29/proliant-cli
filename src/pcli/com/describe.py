@@ -45,8 +45,9 @@ def _find_server(items: list[dict], target: str) -> dict | None:
 async def run_describe(session: COMSession, target: str) -> None:
     """Show full details for a single server from COM."""
     from rich import box as rich_box
-    from rich.panel import Panel
     from rich.table import Table
+    from rich.console import Group
+    from rich.text import Text
 
     async with COMClient(session) as c:
         with get_console().status("[dim]Fetching server list…[/dim]"):
@@ -66,37 +67,57 @@ async def run_describe(session: COMSession, target: str) -> None:
         print_json(server)
         return
 
-    get_console().print(Panel(
-        f"[bold]{server.get('name')}[/bold]   [dim]{hw.get('model', '—')}[/dim]",
-        expand=False,
+    os_name  = server.get("name") or "—"
+    ilo_name = bmc.get("hostname") or "—"
+    serial   = hw.get("serialNumber", "—")
+
+    # ── LEFT COLUMN — matches COM GUI "Device details" ─────────────────────
+    left = []
+
+    # Header: serial bold + iLO name
+    left.append(Text.assemble(
+        (serial, "bold green"),
+        "\n",
+        (ilo_name, "green"),
     ))
 
-    # ── Identity ──────────────────────────────────────────────────────────────
-    id_t = Table(box=rich_box.SIMPLE, show_header=False, padding=(0, 2))
-    id_t.add_column(style="dim", no_wrap=True)
-    id_t.add_column()
-    id_t.add_row("Serial",      hw.get("serialNumber", "—"))
-    id_t.add_row("Product ID",  hw.get("productId", "—"))
-    id_t.add_row("Generation",  server.get("serverGeneration", "—"))
-    id_t.add_row("Power",       _h(hw.get("powerState", "—")))
-    id_t.add_row("Connection",  _h("CONNECTED" if state.get("connected") else "DISCONNECTED"))
-    id_t.add_row("Managed",     "Yes" if state.get("managed") else "No")
-    get_console().print(id_t)
+    left.append(Text("\nDevice Details", style="bold"))
+    dev_t = Table(box=rich_box.SIMPLE, show_header=False, padding=(0, 2))
+    dev_t.add_column(style="dim", no_wrap=True)
+    dev_t.add_column()
+    dev_t.add_row("iLO Name",    f"[green]{ilo_name}[/green]")
+    dev_t.add_row("OS Name",     f"[cyan]{os_name}[/cyan]" if os_name not in ("—", serial) else "[dim]—[/dim]")
+    dev_t.add_row("Model",       hw.get("model", "—"))
+    dev_t.add_row("Part Number", hw.get("productId", "—"))
+    dev_t.add_row("Generation",  server.get("serverGeneration", "—"))
+    dev_t.add_row("Power",       _h(hw.get("powerState", "—")))
+    dev_t.add_row("Connection",  _h("CONNECTED" if state.get("connected") else "DISCONNECTED"))
+    dev_t.add_row("Managed",     "Yes" if state.get("managed") else "No")
+    left.append(dev_t)
 
-    # ── iLO ───────────────────────────────────────────────────────────────────
-    get_console().print("[bold]iLO[/bold]")
+    left.append(Text("Subscription", style="bold"))
+    sub_t = Table(box=rich_box.SIMPLE, show_header=False, padding=(0, 2))
+    sub_t.add_column(style="dim", no_wrap=True)
+    sub_t.add_column()
+    sub_t.add_row("Tier",    state.get("subscriptionTier", "—"))
+    sub_t.add_row("Key",     state.get("subscriptionKey", "—"))
+    sub_t.add_row("Expires", (state.get("subscriptionExpiresAt") or "—")[:10])
+    left.append(sub_t)
+
+    # ── RIGHT COLUMN — iLO hardware + health + GPU ─────────────────────────
+    right = []
+
+    right.append(Text("iLO", style="bold"))
     ilo_t = Table(box=rich_box.SIMPLE, show_header=False, padding=(0, 2))
     ilo_t.add_column(style="dim", no_wrap=True)
     ilo_t.add_column()
-    ilo_t.add_row("Model",    bmc.get("model", "—"))
-    ilo_t.add_row("Version",  bmc.get("version", "—"))
-    ilo_t.add_row("IP",       bmc.get("ip", "—"))
-    ilo_t.add_row("Hostname", bmc.get("hostname", "—"))
-    ilo_t.add_row("MAC",      bmc.get("mac", "—"))
-    get_console().print(ilo_t)
+    ilo_t.add_row("Model",   bmc.get("model", "—"))
+    ilo_t.add_row("Version", bmc.get("version", "—"))
+    ilo_t.add_row("IP",      bmc.get("ip", "—"))
+    ilo_t.add_row("MAC",     bmc.get("mac", "—"))
+    right.append(ilo_t)
 
-    # ── Health ────────────────────────────────────────────────────────────────
-    get_console().print("[bold]Health[/bold]")
+    right.append(Text("Health", style="bold"))
     h_t = Table(box=rich_box.SIMPLE, show_header=False, padding=(0, 2))
     h_t.add_column(style="dim", no_wrap=True)
     h_t.add_column()
@@ -104,19 +125,8 @@ async def run_describe(session: COMSession, target: str) -> None:
     for k, v in (health or {}).items():
         if k not in skip:
             h_t.add_row(k.replace("_", " ").title(), _h(v))
-    get_console().print(h_t)
+    right.append(h_t)
 
-    # ── Subscription ──────────────────────────────────────────────────────────
-    get_console().print("[bold]Subscription[/bold]")
-    sub_t = Table(box=rich_box.SIMPLE, show_header=False, padding=(0, 2))
-    sub_t.add_column(style="dim", no_wrap=True)
-    sub_t.add_column()
-    sub_t.add_row("Tier",    state.get("subscriptionTier", "—"))
-    sub_t.add_row("Key",     state.get("subscriptionKey", "—"))
-    sub_t.add_row("Expires", (state.get("subscriptionExpiresAt") or "—")[:10])
-    get_console().print(sub_t)
-
-    # ── GPU ───────────────────────────────────────────────────────────────────
     _GPU_KEYWORDS = ("video controller", "gpu", "nvidia", "radeon", "gaudi",
                      "accelerator", "xe graphics")
     fw_items = server.get("firmwareInventory") or []
@@ -125,27 +135,37 @@ async def run_describe(session: COMSession, target: str) -> None:
         if any(kw in (fw.get("name") or "").lower() for kw in _GPU_KEYWORDS)
     ]
     if gpu_items:
-        get_console().print("[bold]GPU[/bold]")
-        gpu_t = Table(box=rich_box.SIMPLE, show_header=True, header_style="bold cyan", padding=(0, 2))
+        right.append(Text("GPU", style="bold"))
+        gpu_t = Table(box=rich_box.SIMPLE, show_header=True,
+                      header_style="bold cyan", padding=(0, 2))
         gpu_t.add_column("Model", no_wrap=True)
         gpu_t.add_column("Driver/FW")
         gpu_t.add_column("Slot", style="dim")
         for fw in gpu_items:
-            gpu_t.add_row(fw.get("name", ""), fw.get("version", ""), fw.get("deviceContext", ""))
-        get_console().print(gpu_t)
+            gpu_t.add_row(fw.get("name", ""), fw.get("version", ""),
+                          fw.get("deviceContext", ""))
+        right.append(gpu_t)
 
-    # ── Memory (via iLO Redfish if creds available, else COM total) ───────────
+    # ── 2-column layout ────────────────────────────────────────────────────
+    layout = Table(box=None, show_header=False, padding=(0, 2), expand=True)
+    layout.add_column(ratio=1)
+    layout.add_column(ratio=1)
+    layout.add_row(Group(*left), Group(*right))
+    get_console().print(layout)
+
+    # ── Full width: Memory + Firmware ──────────────────────────────────────
     await _render_memory(hw, bmc)
 
-    # ── Firmware inventory ────────────────────────────────────────────────────
     if fw_items:
         get_console().print("[bold]Firmware[/bold]")
-        fw_t = Table(box=rich_box.SIMPLE, show_header=True, header_style="bold cyan", padding=(0, 2))
+        fw_t = Table(box=rich_box.SIMPLE, show_header=True,
+                     header_style="bold cyan", padding=(0, 2))
         fw_t.add_column("Component", no_wrap=True)
         fw_t.add_column("Version")
         fw_t.add_column("Location", style="dim")
         for fw in fw_items:
-            fw_t.add_row(fw.get("name", ""), fw.get("version", ""), fw.get("deviceContext", ""))
+            fw_t.add_row(fw.get("name", ""), fw.get("version", ""),
+                         fw.get("deviceContext", ""))
         get_console().print(fw_t)
 
 

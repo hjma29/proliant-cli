@@ -105,11 +105,19 @@ def _get_subparsers(parser: argparse.ArgumentParser) -> dict[str, argparse.Argum
     return {}
 
 
+def _node_priority(name: str) -> int:
+    if name == "list":     return 0
+    if name == "describe": return 1
+    if name == "report":   return 2
+    return 3
+
+
 def _add_tree_nodes(branch: Tree, parser: argparse.ArgumentParser, depth: int = 0) -> None:
     """Recursively add subcommands as tree nodes (max 4 levels deep)."""
     if depth > 3:
         return
-    for name, sub in _get_subparsers(parser).items():
+    items = sorted(_get_subparsers(parser).items(), key=lambda x: (_node_priority(x[0]), x[0]))
+    for name, sub in items:
         node = branch.add(f"[cyan]{name}[/cyan]")
         _add_tree_nodes(node, sub, depth + 1)
 

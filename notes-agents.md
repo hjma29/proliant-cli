@@ -654,6 +654,7 @@ https://downloads.linux.hpe.com/SDR/repo/fwpp-gen{N}/{YYYY.MM.00.00}/
 14. **iLO 7 ComponentRepository/UpdateTaskQueue return stub Members** — must expand each `{"@odata.id": "..."}` via individual GET.
 15. **`masterdependency.xml` must be UTF-8 without BOM** — PowerShell `Set-Content -Encoding UTF8` adds BOM and crashes SUM. Use `[System.Text.UTF8Encoding]::new($false)`.
 16. **`NO_APP_ACCOUNT = YES` in SUM INI causes 30+ min inventory hang on iLO 7** — remove it.
+17. **iLO 6 (Gen11) allows only one TLS connection at a time** — `asyncio.gather()` across firmware inventory members causes the second `start_tls()` to fail with `httpx.ConnectError` (empty message). iLO 7 (Gen12) handles concurrent TLS connections fine. Fix: sequential loops in `_member_resources` / `_resource_list`. Symptom: first `describe` succeeds (reuses warm TLS), second fails (needs new handshake).
 
 ### COM / Compute Ops Management
 

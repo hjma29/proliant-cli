@@ -6,17 +6,18 @@ Async Redfish session management built on httpx.AsyncClient.
 
 from __future__ import annotations
 
-import json
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
 import httpx
 
+from pcli.common.http import BaseAsyncClient
+
 ServerDownOrUnreachableError = httpx.ConnectError
 _TIMEOUT = httpx.Timeout(timeout=60.0, connect=10.0)
 
 
-class ILOClient:
+class ILOClient(BaseAsyncClient):
     """Async Redfish client for a single iLO host."""
 
     def __init__(self, base_url: str, username: str, password: str):
@@ -36,41 +37,6 @@ class ILOClient:
     @property
     def _auth_headers(self) -> dict[str, str]:
         return {"X-Auth-Token": self._token} if self._token else {}
-
-    def _ensure_http(self) -> httpx.AsyncClient:
-        if self._http is None:
-            raise RuntimeError("Use 'async with ILOClient(...) as client:' before issuing requests")
-        return self._http
-
-    @staticmethod
-    def _safe_json(resp: httpx.Response) -> dict[str, Any]:
-        if not resp.content:
-            return {}
-        try:
-            data = resp.json()
-        except ValueError:
-            text = resp.text.strip()
-            return {"raw": text} if text else {}
-        return data if isinstance(data, dict) else {"value": data}
-
-    @classmethod
-    def _error_detail(cls, resp: httpx.Response) -> str:
-        payload = cls._safe_json(resp)
-        if not payload:
-            return resp.reason_phrase
-        if "raw" in payload:
-            return payload["raw"][:200]
-        return json.dumps(payload, default=str)[:200]
-
-    @classmethod
-    def _raise_for_status(cls, resp: httpx.Response, method: str, uri: str) -> None:
-        try:
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            detail = cls._error_detail(resp)
-            raise RuntimeError(
-                f"{method} {uri} failed — HTTP {resp.status_code}: {detail}"
-            ) from exc
 
     async def __aenter__(self) -> "ILOClient":
         # iLO 6 and iLO 7 only support HTTP/1.1; http2=True causes httpx to

@@ -43,7 +43,7 @@ pcli qs <command>        # HPE ProLiant QuickSpec reader
 pcli ilo init                              # Create starter hosts-ilo.ini config
 pcli ilo list firmwares                    # Firmware summary across all hosts
 pcli ilo list ilo                          # iLO firmware versions
-pcli ilo list network                      # NIC firmware versions
+pcli ilo list network                      # NIC firmware, slot, part #, MAC, and link state
 pcli ilo list storage                      # Storage controllers + drives
 pcli ilo list bios                         # BIOS/System ROM versions
 pcli ilo list cpu                          # CPU models + microcode

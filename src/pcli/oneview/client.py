@@ -25,6 +25,8 @@ from typing import Any
 
 import httpx
 
+from pcli.common.http import BaseAsyncClient
+
 _TIMEOUT = httpx.Timeout(timeout=60.0, connect=10.0)
 _PAGE_SIZE = 500  # OneView default max is 65535, but 500 is safe and fast
 
@@ -33,7 +35,7 @@ class OneViewError(RuntimeError):
     """Raised for OneView API errors with a human-readable message."""
 
 
-class OneViewClient:
+class OneViewClient(BaseAsyncClient):
     """Async REST client for a single HPE OneView appliance."""
 
     def __init__(
@@ -128,27 +130,8 @@ class OneViewClient:
 
     # ── HTTP helpers ──────────────────────────────────────────────────────
 
-    @staticmethod
-    def _safe_json(resp: httpx.Response) -> dict[str, Any]:
-        if not resp.content:
-            return {}
-        try:
-            data = resp.json()
-        except ValueError:
-            return {"raw": resp.text.strip()[:500]}
-        return data if isinstance(data, dict) else {"value": data}
-
-    @classmethod
-    def _error_detail(cls, resp: httpx.Response) -> str:
-        payload = cls._safe_json(resp)
-        if not payload:
-            return resp.reason_phrase
-        # OneView error format: {"errorCode": "...", "message": "...", "details": "..."}
-        msg = payload.get("message", "")
-        detail = payload.get("details", "")
-        return f"{msg} {detail}".strip() or str(payload)[:200]
-
     def _raise_for_status(self, resp: httpx.Response, method: str, uri: str) -> None:
+        """Override base to raise OneViewError instead of RuntimeError."""
         try:
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -157,15 +140,10 @@ class OneViewClient:
                 f"{method} {uri} failed — HTTP {resp.status_code}: {detail}"
             ) from exc
 
-    def _http_client(self) -> httpx.AsyncClient:
-        if self._http is None:
-            raise RuntimeError("Use 'async with OneViewClient(...) as client:' before requests")
-        return self._http
-
     # ── CRUD ──────────────────────────────────────────────────────────────
 
     async def get(self, uri: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        resp = await self._http_client().get(uri, headers=self._headers, params=params)
+        resp = await self._ensure_http().get(uri, headers=self._headers, params=params)
         self._raise_for_status(resp, "GET", uri)
         return self._safe_json(resp)
 
@@ -185,11 +163,11 @@ class OneViewClient:
         return results
 
     async def post(self, uri: str, body: dict[str, Any]) -> dict[str, Any]:
-        resp = await self._http_client().post(uri, json=body, headers=self._headers)
+        resp = await self._ensure_http().post(uri, json=body, headers=self._headers)
         self._raise_for_status(resp, "POST", uri)
         return self._safe_json(resp)
 
     async def patch(self, uri: str, body: list[dict[str, Any]]) -> dict[str, Any]:
-        resp = await self._http_client().patch(uri, json=body, headers=self._headers)
+        resp = await self._ensure_http().patch(uri, json=body, headers=self._headers)
         self._raise_for_status(resp, "PATCH", uri)
         return self._safe_json(resp)

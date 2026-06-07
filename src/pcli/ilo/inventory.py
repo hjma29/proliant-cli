@@ -17,21 +17,37 @@ _PORT_RE = re.compile(r"\s*\b(?:\d+-port|dual[ -]port|quad[ -]port)\b", re.IGNOR
 _MODEL_STRIP_RE = re.compile(r"^\s*(?:HPE\s+)?(?:ProLiant\s+)?(?:Compute\s+)?", re.IGNORECASE)
 _EMPTY: list[tuple[str, str]] = [("N/A", "N/A")]
 FLEET_KEYS = ("Model", "iLO", "BIOS", "NIC-FW", "Storage-FW")
-
-
+_STORAGE_FIRMWARE_KEYWORDS = (
+    "sata controller",
+    "nvme",
+    "raid",
+    "storage controller",
+    "boot controller",
+    "smart array",
+    "hpe mr",
+    "hpe sr",
+    "hpe ns",
+    "hpe ubm",
+)
 async def _collection_members(client: ILOClient, collection_uri: str) -> list[dict[str, Any]]:
     return (await client.get(collection_uri)).get("Members", [])
 
 
 async def _member_resources(client: ILOClient, collection_uri: str) -> list[dict[str, Any]]:
     members = await _collection_members(client, collection_uri)
-    coros = [client.get(item["@odata.id"]) for item in members if "@odata.id" in item]
-    return list(await asyncio.gather(*coros)) if coros else []
+    results = []
+    for item in members:
+        if "@odata.id" in item:
+            results.append(await client.get(item["@odata.id"]))
+    return results
 
 
 async def _resource_list(client: ILOClient, links: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    coros = [client.get(item["@odata.id"]) for item in links if "@odata.id" in item]
-    return list(await asyncio.gather(*coros)) if coros else []
+    results = []
+    for item in links:
+        if "@odata.id" in item:
+            results.append(await client.get(item["@odata.id"]))
+    return results
 
 
 async def fetch_all_firmware(client: ILOClient) -> list[tuple[str, str]]:
@@ -42,6 +58,26 @@ async def fetch_all_firmware(client: ILOClient) -> list[tuple[str, str]]:
 
 async def fetch_firmware_inventory_full(client: ILOClient) -> list[dict]:
     return await _member_resources(client, await client.get_firmware_inventory_uri())
+
+
+async def fetch_component_repo_activates(client: ILOClient) -> dict[str, str]:
+    """Return {device_class_uuid: activates_value} from the ComponentRepository.
+
+    Only components present in the repository (recently staged/uploaded) are returned.
+    Activates values: 'Immediately', 'AfterReboot', 'AfterDeviceReset'.
+    """
+    try:
+        repo = await client.get("/redfish/v1/UpdateService/ComponentRepository")
+        result: dict[str, str] = {}
+        for m in repo.get("Members", []):
+            item = await client.get(m["@odata.id"])
+            dc = item.get("DeviceClass")
+            ac = item.get("Activates")
+            if dc and ac:
+                result[dc] = ac
+        return result
+    except Exception:
+        return {}
 
 
 async def fetch_nic_firmware_inventory(client: ILOClient) -> list[dict]:
@@ -79,20 +115,52 @@ async def fetch_ilo_version(client: ILOClient) -> list[tuple[str, str]]:
     return _EMPTY
 
 
-async def fetch_network_versions(client: ILOClient) -> list[tuple[str, str]]:
+async def fetch_network_versions(client: ILOClient) -> list[dict[str, str]]:
     chassis = await client.get(await client.get_chassis_uri())
     na_uri = chassis.get("NetworkAdapters", {}).get("@odata.id")
     if not na_uri:
-        return _EMPTY
+        return [{
+            "Name": "N/A",
+            "PartNumber": "N/A",
+            "Location": "N/A",
+            "Port": "N/A",
+            "MACAddress": "N/A",
+            "LinkStatus": "N/A",
+            "Version": "N/A",
+        }]
 
     found = []
+    oem_info_map = await _build_oem_device_info_map(client)
     for adapter in await _member_resources(client, na_uri):
-        label = adapter.get("Model") or adapter.get("Name", "N/A")
-        label = _PORT_RE.sub("", label).strip()
+        label = (adapter.get("Model") or adapter.get("Name") or "N/A").strip() or "N/A"
         controllers = adapter.get("Controllers", [])
         version = controllers[0].get("FirmwarePackageVersion", "N/A") if controllers else "N/A"
-        found.append((label, version or "N/A"))
-    return found or _EMPTY
+        base_row = {
+            "Name": label,
+            "PartNumber": _adapter_part_number(adapter, oem_info_map) or "N/A",
+            "Version": version or "N/A",
+            "Location": _adapter_location(adapter, oem_info_map) or "N/A",
+        }
+        port_rows = await _network_adapter_ports(client, adapter)
+        if not port_rows:
+            found.append({
+                **base_row,
+                "Port": "N/A",
+                "MACAddress": "N/A",
+                "LinkStatus": "N/A",
+            })
+            continue
+        for port_row in port_rows:
+            found.append({**base_row, **port_row})
+    return found or [{
+        "Name": "N/A",
+        "PartNumber": "N/A",
+        "Location": "N/A",
+        "Port": "N/A",
+        "MACAddress": "N/A",
+        "LinkStatus": "N/A",
+        "Version": "N/A",
+    }]
 
 
 async def _storage_members(client: ILOClient) -> list[dict[str, Any]]:
@@ -103,8 +171,8 @@ async def _storage_members(client: ILOClient) -> list[dict[str, Any]]:
     return await _member_resources(client, storage_uri)
 
 
-async def fetch_storage_versions(client: ILOClient) -> list[tuple[str, str]]:
-    found = []
+async def _storage_controller_versions(client: ILOClient) -> list[tuple[str, str]]:
+    found: list[tuple[str, str]] = []
     seen_ctrl_names: set[str] = set()
 
     for storage in await _storage_members(client):
@@ -124,20 +192,24 @@ async def fetch_storage_versions(client: ILOClient) -> list[tuple[str, str]]:
                 found.append((name, fw))
                 seen_ctrl_names.add(name)
 
+    if found:
+        return found
+
+    for item in await _member_resources(client, await client.get_firmware_inventory_uri()):
+        name = item.get("Name", "")
+        if any(keyword in name.lower() for keyword in _STORAGE_FIRMWARE_KEYWORDS):
+            found.append((name, item.get("Version") or "N/A"))
+    return found
+
+
+async def fetch_storage_versions(client: ILOClient) -> list[tuple[str, str]]:
+    found = list(await _storage_controller_versions(client))
+
+    for storage in await _storage_members(client):
         for drive in await _resource_list(client, storage.get("Drives", [])):
             fw = drive.get("FirmwareVersion") or ""
             if fw:
                 found.append((drive.get("Name", "N/A"), fw))
-
-    if not found:
-        storage_keywords = (
-            "sata controller", "nvme", "raid", "storage controller", "boot controller",
-            "smart array", "mr4", "mr8", "p408", "p816",
-        )
-        for item in await _member_resources(client, await client.get_firmware_inventory_uri()):
-            name = item.get("Name", "")
-            if any(keyword in name.lower() for keyword in storage_keywords):
-                found.append((name, item.get("Version") or "N/A"))
 
     return found or _EMPTY
 
@@ -287,11 +359,7 @@ async def _build_nic_label_map(client: ILOClient) -> dict[str, str]:
     for adapter in await _member_resources(client, na_uri):
         model = (adapter.get("Model") or adapter.get("Name") or "NIC").strip()
         model = _PORT_RE.sub("", model).strip()
-        controllers = adapter.get("Controllers", [])
-        slot_label = (
-            controllers[0].get("Location", {}).get("PartLocation", {}).get("ServiceLabel", "")
-            if controllers else ""
-        ) or ""
+        slot_label = _adapter_location(adapter)
         short_model = re.sub(r"\W+$", "", model[:35])
         abbrev_slot = re.sub(r"\bSlot (\S+)", r"S_\1", slot_label) if slot_label else ""
         label_prefix = f"{abbrev_slot}({short_model})" if slot_label else short_model
@@ -319,6 +387,98 @@ async def _build_nic_label_map(client: ILOClient) -> dict[str, str]:
                 if uri:
                     label_map[uri] = label
     return label_map
+
+
+async def _build_oem_device_info_map(client: ILOClient) -> dict[str, dict[str, str]]:
+    chassis = await client.get(await client.get_chassis_uri())
+    devices_uri = ((chassis.get("Oem") or {}).get("Hpe") or {}).get("Links", {}).get("Devices", {}).get("@odata.id")
+    if not devices_uri:
+        return {}
+
+    info_map: dict[str, dict[str, str]] = {}
+    for device in await _member_resources(client, devices_uri):
+        serial = (device.get("SerialNumber") or "").strip()
+        if not serial:
+            continue
+        info_map[serial] = {
+            "Location": (device.get("Location") or "").strip(),
+            "PartNumber": (
+                device.get("ProductPartNumber")
+                or device.get("PartNumber")
+                or ""
+            ).strip(),
+        }
+    return info_map
+
+
+async def _network_adapter_ports(client: ILOClient, adapter: dict[str, Any]) -> list[dict[str, str]]:
+    port_rows: list[dict[str, str]] = []
+    ports_uri = adapter.get("Ports", {}).get("@odata.id")
+    if ports_uri:
+        for port in await _member_resources(client, ports_uri):
+            macs = ((port.get("Ethernet") or {}).get("AssociatedMACAddresses") or [])
+            port_rows.append({
+                "Port": f"p{port.get('PortId') or port.get('Id') or '?'}",
+                "MACAddress": str(macs[0]).lower() if macs else "N/A",
+                "LinkStatus": _display_link_status(
+                    port.get("LinkStatus")
+                    or port.get("LinkState")
+                    or port.get("Status", {}).get("State")
+                    or "N/A"
+                ),
+            })
+        if port_rows:
+            return port_rows
+
+    ndf_uri = adapter.get("NetworkDeviceFunctions", {}).get("@odata.id")
+    if not ndf_uri:
+        return []
+    for idx, ndf in enumerate(await _member_resources(client, ndf_uri), start=1):
+        eth = ndf.get("Ethernet") or {}
+        mac = (eth.get("PermanentMACAddress") or eth.get("MACAddress") or "").lower().strip() or "N/A"
+        port_rows.append({
+            "Port": f"p{ndf.get('Id') or idx}",
+            "MACAddress": mac,
+            "LinkStatus": "N/A",
+        })
+    return port_rows
+
+
+def _display_link_status(status: str) -> str:
+    normalized = status.replace("_", "").replace("-", "").strip().lower()
+    if normalized == "linkup":
+        return "Link Up"
+    if normalized == "nolink":
+        return "No Link"
+    return status
+
+
+def _adapter_part_number(adapter: dict[str, Any], oem_info_map: dict[str, dict[str, str]] | None = None) -> str:
+    part_number = (adapter.get("PartNumber") or "").strip()
+    if part_number:
+        return part_number
+    serial = (adapter.get("SerialNumber") or "").strip()
+    if oem_info_map and serial:
+        return oem_info_map.get(serial, {}).get("PartNumber", "")
+    return ""
+
+
+def _adapter_location(adapter: dict[str, Any], oem_info_map: dict[str, dict[str, str]] | None = None) -> str:
+    part_loc = adapter.get("Location", {}).get("PartLocation", {})
+    if not part_loc:
+        controllers = adapter.get("Controllers") or []
+        if controllers:
+            part_loc = controllers[0].get("Location", {}).get("PartLocation", {})
+    label = (part_loc.get("ServiceLabel") or "").strip()
+    if label:
+        return label
+    ordinal = part_loc.get("LocationOrdinalValue")
+    if ordinal is not None and part_loc.get("LocationType") == "Slot":
+        return f"Slot {ordinal}"
+    serial = (adapter.get("SerialNumber") or "").strip()
+    if oem_info_map and serial:
+        return oem_info_map.get(serial, {}).get("Location", "")
+    return ""
 
 
 async def fetch_nic_status(client: ILOClient) -> list[tuple[str, str]]:
@@ -592,6 +752,64 @@ async def fetch_serial_info(client: ILOClient) -> list[tuple[str, str]]:
     return [("Model", model), ("Serial", serial), ("ProductID", sku)]
 
 
+async def fetch_server_list_info(client: ILOClient) -> list[tuple[str, str]]:
+    """Fetch server identity + iLO IP for the 'pcli ilo list servers' table."""
+    sys_uri, mgr_uri = await asyncio.gather(
+        client.get_system_uri(),
+        client.get_manager_uri(),
+    )
+    system, manager = await asyncio.gather(
+        client.get(sys_uri),
+        client.get(mgr_uri),
+    )
+
+    raw_model = system.get("Model", "N/A")
+    model  = _MODEL_STRIP_RE.sub("", raw_model).strip() or raw_model
+    serial = system.get("SerialNumber", "N/A") or "N/A"
+    os_name  = system.get("HostName") or ""
+    ilo_name = manager.get("HostName") or ""  # may be None; overridden by interface below
+
+    # Get current iLO IP and hostname from dedicated EthernetInterface
+    ip_addr  = "—"
+    ilo_name = ""
+    eth_col_uri = (manager.get("EthernetInterfaces") or {}).get("@odata.id")
+    if eth_col_uri:
+        members = await _collection_members(client, eth_col_uri)
+        dedicated = None
+        for item in members:
+            uri = item.get("@odata.id")
+            if not uri:
+                continue
+            iface = await client.get(uri)
+            iface_type = ((iface.get("Oem") or {}).get("Hpe") or {}).get("InterfaceType", "")
+            if iface_type == "Dedicated":
+                dedicated = iface
+                break
+            if dedicated is None:
+                dedicated = iface
+        if dedicated:
+            # FQDN is the best iLO hostname; fall back to short HostName
+            ilo_name = (
+                dedicated.get("FQDN")
+                or dedicated.get("HostName")
+                or ((dedicated.get("Oem") or {}).get("Hpe") or {}).get("HostName")
+                or ""
+            )
+            for a in (dedicated.get("IPv4Addresses") or []):
+                addr = (a.get("Address") or "").strip()
+                if addr and addr != "0.0.0.0":
+                    ip_addr = addr
+                    break
+
+    return [
+        ("Serial",   serial),
+        ("OS_Name",  os_name),
+        ("iLO_Name", ilo_name),
+        ("Model",    model),
+        ("IP",       ip_addr),
+    ]
+
+
 async def fetch_fleet_summary(client: ILOClient) -> list[tuple[str, str]]:
     # Fetch system + manager in parallel — both are available without hitting
     # firmware inventory (which can be slow on some iLOs)
@@ -626,22 +844,8 @@ async def fetch_fleet_summary(client: ILOClient) -> list[tuple[str, str]]:
             controllers = adapter.get("Controllers", [])
             nic_ver = (controllers[0].get("FirmwarePackageVersion", "N/A") if controllers else "N/A") or "N/A"
 
-    storage_ver = "N/A"
-    storage_uri = system.get("Storage", {}).get("@odata.id")
-    if storage_uri:
-        s_members = await _collection_members(client, storage_uri)
-        if s_members:
-            storage = await client.get(s_members[0]["@odata.id"])
-            controllers = storage.get("StorageControllers", [])
-            if controllers:
-                storage_ver = controllers[0].get("FirmwareVersion", "N/A") or "N/A"
-            else:
-                ctrl_link = (storage.get("Controllers") or {}).get("@odata.id")
-                if ctrl_link:
-                    ctrl_members = await _collection_members(client, ctrl_link)
-                    if ctrl_members:
-                        ctrl = await client.get(ctrl_members[0]["@odata.id"])
-                        storage_ver = ctrl.get("FirmwareVersion", "N/A") or "N/A"
+    storage_entries = await _storage_controller_versions(client)
+    storage_ver = storage_entries[0][1] if storage_entries else "N/A"
 
     return [
         ("Model",      model),
@@ -650,3 +854,185 @@ async def fetch_fleet_summary(client: ILOClient) -> list[tuple[str, str]]:
         ("NIC-FW",     nic_ver),
         ("Storage-FW", storage_ver),
     ]
+
+
+def _ipv4_entry(addresses: list[dict]) -> dict[str, str] | None:
+    """Return first non-empty, non-all-zeros IPv4 entry as {address, subnet, gateway}."""
+    for a in addresses:
+        addr = (a.get("Address") or a.get("IPv4Address") or "").strip()
+        if addr and addr != "0.0.0.0":
+            return {
+                "address": addr,
+                "subnet":  (a.get("SubnetMask") or "").strip() or "—",
+                "gateway": (a.get("Gateway") or a.get("GatewayIPv4Address") or "").strip() or "—",
+                "origin":  (a.get("AddressOrigin") or "").strip(),
+            }
+    return None
+
+
+async def fetch_ilo_nic_raw(client: ILOClient) -> list[tuple[str, str]]:
+    """Dump raw Redfish JSON for all Manager EthernetInterfaces."""
+    manager = await client.get(await client.get_manager_uri())
+    eth_col_uri = (manager.get("EthernetInterfaces") or {}).get("@odata.id")
+    if not eth_col_uri:
+        return _EMPTY
+    return await _fetch_members_raw(client, eth_col_uri)
+
+
+async def fetch_ilo_nic_details(client: ILOClient) -> dict[str, Any]:
+    """Fetch iLO dedicated network port details from Manager EthernetInterfaces.
+
+    Returns a normalized dict:
+        mac, link_status, speed_mbps,
+        dhcp_enabled, current_ipv4, static_ipv4,
+        dns_servers, static_routes, lldp_enabled,
+        selection_note
+    """
+    manager = await client.get(await client.get_manager_uri())
+    eth_col_uri = (manager.get("EthernetInterfaces") or {}).get("@odata.id")
+    if not eth_col_uri:
+        return {}
+
+    members = await _collection_members(client, eth_col_uri)
+    if not members:
+        return {}
+
+    dedicated: dict[str, Any] | None = None
+    selection_note = ""
+    for item in members:
+        uri = item.get("@odata.id")
+        if not uri:
+            continue
+        iface = await client.get(uri)
+        iface_type = ((iface.get("Oem") or {}).get("Hpe") or {}).get("InterfaceType", "")
+        if iface_type == "Dedicated":
+            dedicated = iface
+            selection_note = "Dedicated"
+            break
+        if dedicated is None:
+            dedicated = iface  # tentative fallback
+
+    if dedicated is None:
+        return {}
+    if not selection_note:
+        selection_note = "first interface (Dedicated type not identified)"
+
+    oem_hpe = ((dedicated.get("Oem") or {}).get("Hpe") or {})
+    oem_ipv4 = (oem_hpe.get("IPv4") or {})
+
+    # DHCP
+    dhcp_block = dedicated.get("DHCPv4") or {}
+    dhcp_enabled: bool = bool(dhcp_block.get("DHCPEnabled", False))
+
+    # Current effective IPv4 (DHCP-assigned if DHCP on, otherwise static)
+    current_ipv4 = _ipv4_entry(dedicated.get("IPv4Addresses") or [])
+
+    # Configured static IPv4 (what would be used if DHCP is turned off)
+    static_ipv4 = _ipv4_entry(dedicated.get("IPv4StaticAddresses") or [])
+
+    # DNS servers — standard field first, then OEM fallback
+    raw_dns: list[str] = dedicated.get("NameServers") or oem_ipv4.get("DNSServers") or []
+    dns_servers = [s for s in raw_dns if s and s != "0.0.0.0"]
+
+    # Static routes — OEM field (standard Redfish has no static routes on Manager NICs)
+    raw_routes: list[dict] = oem_ipv4.get("StaticRoutes") or []
+    static_routes = [
+        {
+            "destination": r.get("Destination", ""),
+            "subnet":      r.get("SubnetMask", ""),
+            "gateway":     r.get("Gateway", ""),
+        }
+        for r in raw_routes
+        if r.get("Destination") not in (None, "", "0.0.0.0")
+    ]
+
+    # LLDP — try a few known OEM paths gracefully
+    lldp_enabled: bool | None = None
+    lldp_block = oem_hpe.get("LLDPData") or oem_hpe.get("LLDP") or {}
+    if isinstance(lldp_block, dict):
+        for key in ("LLDPEnabled", "Enabled", "Status"):
+            val = lldp_block.get(key)
+            if val is not None:
+                if isinstance(val, bool):
+                    lldp_enabled = val
+                elif isinstance(val, str):
+                    lldp_enabled = val.lower() in ("enabled", "true", "yes")
+                break
+    # iLO 7.1+ may expose LLDP directly on the interface
+    if lldp_enabled is None and "LLDPEnabled" in dedicated:
+        v = dedicated["LLDPEnabled"]
+        lldp_enabled = bool(v) if isinstance(v, bool) else str(v).lower() in ("enabled", "true", "yes")
+
+    return {
+        "mac":            (dedicated.get("MACAddress") or "—").lower(),
+        "link_status":    dedicated.get("LinkStatus") or "—",
+        "speed_mbps":     dedicated.get("SpeedMbps"),
+        "dhcp_enabled":   dhcp_enabled,
+        "current_ipv4":   current_ipv4,
+        "static_ipv4":    static_ipv4,
+        "dns_servers":    dns_servers,
+        "static_routes":  static_routes,
+        "lldp_enabled":   lldp_enabled,
+        "selection_note": selection_note,
+        "connected_via":  client.base_url,
+    }
+
+
+async def fetch_ilo_nic_summary(client: ILOClient) -> list[dict[str, Any]]:
+    """Fetch iLO dedicated NIC summary row for the list nic-ilo table.
+
+    Returns a list with a single dict containing LLDP and IP info.
+    LLDP neighbor data comes from DedicatedNetworkPorts/1 Ethernet.LLDPReceive
+    (iLO 7+). PortId is hex-encoded IfName — decoded to ASCII.
+    """
+    details = await fetch_ilo_nic_details(client)
+    if not details:
+        return []
+
+    # Fetch LLDP data from the dedicated port resource (iLO 7 path)
+    lldp_enabled_str = "—"
+    neighbor_system = "—"
+    neighbor_port = "—"
+    neighbor_ipv4 = "—"
+    try:
+        port = await client.get("/redfish/v1/Managers/1/DedicatedNetworkPorts/1/")
+        eth = port.get("Ethernet") or {}
+        lldp_on = eth.get("LLDPEnabled")
+        if lldp_on is True:
+            lldp_enabled_str = "Enabled"
+        elif lldp_on is False:
+            lldp_enabled_str = "Disabled"
+        recv = eth.get("LLDPReceive") or {}
+        if recv:
+            neighbor_system = recv.get("SystemName") or "—"
+            # PortId is hex-encoded ASCII (e.g. "47:69:31:2F:30:2F:34:35" = "Gi1/0/45")
+            raw_port_id = recv.get("PortId") or ""
+            if ":" in raw_port_id:
+                try:
+                    neighbor_port = bytes.fromhex(raw_port_id.replace(":", "")).decode("ascii")
+                except Exception:
+                    neighbor_port = raw_port_id
+            else:
+                neighbor_port = raw_port_id or "—"
+            neighbor_ipv4 = recv.get("ManagementAddressIPv4") or "—"
+    except Exception:
+        pass
+
+    # Fall back to EthernetInterface LLDPEnabled if DedicatedNetworkPorts not available
+    if lldp_enabled_str == "—":
+        lldp_val = details.get("lldp_enabled")
+        if lldp_val is True:
+            lldp_enabled_str = "Enabled"
+        elif lldp_val is False:
+            lldp_enabled_str = "Disabled"
+
+    ipv4 = details.get("current_ipv4") or {}
+    return [{
+        "lldp_enabled":     lldp_enabled_str,
+        "neighbor_system":  neighbor_system,
+        "neighbor_port":    neighbor_port,
+        "neighbor_ipv4":    neighbor_ipv4,
+        "ipv4":             ipv4.get("address") or "—",
+        "mac":              details.get("mac") or "—",
+        "link_status":      details.get("link_status") or "—",
+    }]

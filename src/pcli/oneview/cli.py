@@ -13,16 +13,11 @@ import argparse
 import asyncio
 import sys
 
-from rich.console import Console
+
 from rich import box
-from rich.table import Table
 
-console = Console()
-
-# ── async runner ─────────────────────────────────────────────────────────────
-
-def _run(coro):
-    return asyncio.run(coro)
+from pcli.common.display import get_console, get_output_mode, make_table, OutputMode, print_json, print_memory_report, set_output_mode
+from pcli.common.runner import run_sync
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -71,23 +66,20 @@ async def _async_servers_list(fields: list[str] | None) -> None:
     from pcli.oneview.servers import list_servers_with_profiles
 
     async with _load_client() as client:
-        with console.status(f"[dim]Fetching server inventory from OneView (API v{client.api_version})…[/dim]"):
+        with get_console().status(f"[dim]Fetching server inventory from OneView (API v{client.api_version})…[/dim]"):
             servers = await list_servers_with_profiles(client)
 
     if not servers:
-        console.print("[yellow]No servers found in OneView.[/yellow]")
+        get_console().print("[yellow]No servers found in OneView.[/yellow]")
         return
 
-    # Default columns (ilo_ip omitted for Synergy — always blank)
+    # ── JSON early return ─────────────────────────────────────────────────────
+    if get_output_mode() == OutputMode.JSON:
+        print_json(servers)
+        return
+
     all_fields = ["name", "model", "serial", "ilo", "power", "state", "profile"]
     show = fields if fields else all_fields
-
-    table = Table(
-        title=f"OneView Servers  ({len(servers)} total)",
-        box=box.ROUNDED,
-        show_header=True,
-        header_style="bold cyan",
-    )
 
     col_map = {
         "name":    ("Name",        dict(min_width=20, no_wrap=True)),
@@ -100,10 +92,10 @@ async def _async_servers_list(fields: list[str] | None) -> None:
         "profile": ("Profile",     dict(min_width=16)),
     }
 
-    for f in show:
-        if f in col_map:
-            label, kwargs = col_map[f]
-            table.add_column(label, **kwargs)
+    table = make_table(
+        f"OneView Servers  ({len(servers)} total)",
+        *[(col_map[f][0], col_map[f][1]) for f in show if f in col_map],
+    )
 
     for s in servers:
         row = []
@@ -126,16 +118,12 @@ async def _async_servers_list(fields: list[str] | None) -> None:
                 row.append(s["profile"])
         table.add_row(*row)
 
-    console.print(table)
+    get_console().print(table)
 
 
-def _cmd_servers_list(args: argparse.Namespace) -> None:
+async def _cmd_servers_list(args: argparse.Namespace) -> None:
     fields = [f.strip() for f in args.fields.split(",")] if args.fields else None
-    try:
-        _run(_async_servers_list(fields))
-    except Exception as exc:
-        console.print(f"[red]Error: {exc}[/red]")
-        sys.exit(1)
+    await _async_servers_list(fields)
 
 
 # ── pcli oneview firmware list ────────────────────────────────────────────────
@@ -145,32 +133,36 @@ async def _async_firmware_fleet() -> None:
     from pcli.oneview.firmware import get_fleet_firmware
 
     async with _load_client() as client:
-        with console.status("[dim]Fetching fleet firmware inventory…[/dim]"):
+        with get_console().status("[dim]Fetching fleet firmware inventory…[/dim]"):
             fleet = await get_fleet_firmware(client)
 
     if not fleet:
-        console.print("[yellow]No firmware data returned.[/yellow]")
+        get_console().print("[yellow]No firmware data returned.[/yellow]")
         return
 
-    for entry in fleet:
+    # ── JSON early return ─────────────────────────────────────────────────────
+    if get_output_mode() == OutputMode.JSON:
+        print_json(fleet)
+        return
+
         server_name = entry["server_name"]
         fw_list = entry["firmware"]
 
-        table = Table(
-            title=f"[bold]{server_name}[/bold]",
-            box=box.SIMPLE_HEAD,
+        table = make_table(
+            f"[bold]{server_name}[/bold]",
+            ("Component", {"min_width": 40, "no_wrap": True}),
+            ("Version",   {"no_wrap": True, "justify": "right"}),
+            ("Location",  {"style": "dim"}),
+            box_style=box.SIMPLE_HEAD,
             show_header=True,
             header_style="bold",
         )
-        table.add_column("Component", min_width=40, no_wrap=True)
-        table.add_column("Version",   no_wrap=True, justify="right")
-        table.add_column("Location",  style="dim")
 
         for fw in fw_list:
             table.add_row(fw["name"], fw["version"], fw["location"])
 
-        console.print(table)
-        console.print()
+        get_console().print(table)
+        get_console().print()
 
 
 async def _async_firmware_server(server_name: str) -> None:
@@ -179,35 +171,33 @@ async def _async_firmware_server(server_name: str) -> None:
     from pcli.oneview.firmware import get_server_firmware
 
     async with _load_client() as client:
-        with console.status(f"[dim]Fetching firmware for {server_name}…[/dim]"):
+        with get_console().status(f"[dim]Fetching firmware for {server_name}…[/dim]"):
             server = await get_server(client, server_name)
             fw_list = await get_server_firmware(client, server["uri"])
 
-    table = Table(
-        title=f"[bold]{server_name}[/bold]  Firmware Inventory",
-        box=box.ROUNDED,
-        show_header=True,
-        header_style="bold cyan",
+    # ── JSON early return ─────────────────────────────────────────────────────
+    if get_output_mode() == OutputMode.JSON:
+        print_json({"server": server_name, "firmware": fw_list})
+        return
+
+    table = make_table(
+        f"[bold]{server_name}[/bold]  Firmware Inventory",
+        ("Component", {"min_width": 40, "no_wrap": True}),
+        ("Version",   {"no_wrap": True, "justify": "right"}),
+        ("Location",  {"style": "dim"}),
     )
-    table.add_column("Component", min_width=40, no_wrap=True)
-    table.add_column("Version",   no_wrap=True, justify="right")
-    table.add_column("Location",  style="dim")
 
     for fw in fw_list:
         table.add_row(fw["name"], fw["version"], fw["location"])
 
-    console.print(table)
+    get_console().print(table)
 
 
-def _cmd_firmware_list(args: argparse.Namespace) -> None:
-    try:
-        if args.server:
-            _run(_async_firmware_server(args.server))
-        else:
-            _run(_async_firmware_fleet())
-    except Exception as exc:
-        console.print(f"[red]Error: {exc}[/red]")
-        sys.exit(1)
+async def _cmd_firmware_list(args: argparse.Namespace) -> None:
+    if args.server:
+        await _async_firmware_server(args.server)
+    else:
+        await _async_firmware_fleet()
 
 
 # ── pcli oneview list networks ────────────────────────────────────────────────
@@ -216,24 +206,28 @@ async def _async_networks_list() -> None:
     from pcli.oneview.network import list_networks
 
     async with _load_client() as client:
-        with console.status("[dim]Fetching ethernet networks…[/dim]"):
+        with get_console().status("[dim]Fetching ethernet networks…[/dim]"):
             nets = await list_networks(client)
 
     if not nets:
-        console.print("[yellow]No ethernet networks found.[/yellow]")
+        get_console().print("[yellow]No ethernet networks found.[/yellow]")
         return
 
-    table = Table(
-        title=f"Ethernet Networks  ({len(nets)} total)",
-        box=box.ROUNDED, show_header=True, header_style="bold cyan",
+    # ── JSON early return ─────────────────────────────────────────────────────
+    if get_output_mode() == OutputMode.JSON:
+        print_json(nets)
+        return
+
+    table = make_table(
+        f"Ethernet Networks  ({len(nets)} total)",
+        ("Name",      {"min_width": 24, "no_wrap": True}),
+        ("VLAN",      {"justify": "right", "no_wrap": True}),
+        ("Type",      {"no_wrap": True}),
+        ("Purpose",   {"no_wrap": True}),
+        ("Status",    {"justify": "center", "no_wrap": True}),
+        ("State",     {"justify": "center", "no_wrap": True}),
+        ("SmartLink", {"justify": "center", "no_wrap": True}),
     )
-    table.add_column("Name",       min_width=24, no_wrap=True)
-    table.add_column("VLAN",       justify="right", no_wrap=True)
-    table.add_column("Type",       no_wrap=True)
-    table.add_column("Purpose",    no_wrap=True)
-    table.add_column("Status",     justify="center", no_wrap=True)
-    table.add_column("State",      justify="center", no_wrap=True)
-    table.add_column("SmartLink",  justify="center", no_wrap=True)
 
     for n in nets:
         vlan = str(n["vlan"]) if n["vlan"] else "—"
@@ -243,15 +237,11 @@ async def _async_networks_list() -> None:
             n["state"],
             "[green]✓[/green]" if n["smart_link"] else "[dim]—[/dim]",
         )
-    console.print(table)
+    get_console().print(table)
 
 
-def _cmd_networks_list(args: argparse.Namespace) -> None:
-    try:
-        _run(_async_networks_list())
-    except Exception as exc:
-        console.print(f"[red]Error: {exc}[/red]")
-        sys.exit(1)
+async def _cmd_networks_list(args: argparse.Namespace) -> None:
+    await _async_networks_list()
 
 
 # ── pcli oneview list networksets ─────────────────────────────────────────────
@@ -260,23 +250,27 @@ async def _async_networksets_list() -> None:
     from pcli.oneview.network import list_network_sets
 
     async with _load_client() as client:
-        with console.status("[dim]Fetching network sets…[/dim]"):
+        with get_console().status("[dim]Fetching network sets…[/dim]"):
             sets = await list_network_sets(client)
 
     if not sets:
-        console.print("[yellow]No network sets found.[/yellow]")
+        get_console().print("[yellow]No network sets found.[/yellow]")
         return
 
-    table = Table(
-        title=f"Network Sets  ({len(sets)} total)",
-        box=box.ROUNDED, show_header=True, header_style="bold cyan",
+    # ── JSON early return ─────────────────────────────────────────────────────
+    if get_output_mode() == OutputMode.JSON:
+        print_json(sets)
+        return
+
+    table = make_table(
+        f"Network Sets  ({len(sets)} total)",
+        ("Name",           {"min_width": 24, "no_wrap": True}),
+        ("Type",           {"no_wrap": True}),
+        ("Networks",       {"justify": "right", "no_wrap": True}),
+        ("Native Network", {"no_wrap": True, "style": "dim"}),
+        ("Status",         {"justify": "center", "no_wrap": True}),
+        ("State",          {"justify": "center", "no_wrap": True}),
     )
-    table.add_column("Name",           min_width=24, no_wrap=True)
-    table.add_column("Type",           no_wrap=True)
-    table.add_column("Networks",       justify="right", no_wrap=True)
-    table.add_column("Native Network", no_wrap=True, style="dim")
-    table.add_column("Status",         justify="center", no_wrap=True)
-    table.add_column("State",          justify="center", no_wrap=True)
 
     for s in sets:
         table.add_row(
@@ -284,15 +278,11 @@ async def _async_networksets_list() -> None:
             s["native_network"] or "—",
             _status_style(s["status"]), s["state"],
         )
-    console.print(table)
+    get_console().print(table)
 
 
-def _cmd_networksets_list(args: argparse.Namespace) -> None:
-    try:
-        _run(_async_networksets_list())
-    except Exception as exc:
-        console.print(f"[red]Error: {exc}[/red]")
-        sys.exit(1)
+async def _cmd_networksets_list(args: argparse.Namespace) -> None:
+    await _async_networksets_list()
 
 
 # ── pcli oneview list uplinksets ─────────────────────────────────────────────
@@ -301,25 +291,29 @@ async def _async_uplinksets_list() -> None:
     from pcli.oneview.network import list_uplink_sets
 
     async with _load_client() as client:
-        with console.status("[dim]Fetching uplink sets…[/dim]"):
+        with get_console().status("[dim]Fetching uplink sets…[/dim]"):
             uplinks = await list_uplink_sets(client)
 
     if not uplinks:
-        console.print("[yellow]No uplink sets found.[/yellow]")
+        get_console().print("[yellow]No uplink sets found.[/yellow]")
         return
 
-    table = Table(
-        title=f"Uplink Sets  ({len(uplinks)} total)",
-        box=box.ROUNDED, show_header=True, header_style="bold cyan",
+    # ── JSON early return ─────────────────────────────────────────────────────
+    if get_output_mode() == OutputMode.JSON:
+        print_json(uplinks)
+        return
+
+    table = make_table(
+        f"Uplink Sets  ({len(uplinks)} total)",
+        ("Name",         {"min_width": 20, "no_wrap": True}),
+        ("Type",         {"no_wrap": True}),
+        ("Mode",         {"no_wrap": True}),
+        ("Reachability", {"no_wrap": True}),
+        ("Networks",     {"justify": "right", "no_wrap": True}),
+        ("Ports",        {"style": "dim"}),
+        ("Logical IC",   {"no_wrap": True}),
+        ("Status",       {"justify": "center", "no_wrap": True}),
     )
-    table.add_column("Name",          min_width=20, no_wrap=True)
-    table.add_column("Type",          no_wrap=True)
-    table.add_column("Mode",          no_wrap=True)
-    table.add_column("Reachability",  no_wrap=True)
-    table.add_column("Networks",      justify="right", no_wrap=True)
-    table.add_column("Ports",         style="dim")
-    table.add_column("Logical IC",    no_wrap=True)
-    table.add_column("Status",        justify="center", no_wrap=True)
 
     for u in uplinks:
         reach = u["reachability"]
@@ -330,15 +324,11 @@ async def _async_uplinksets_list() -> None:
             u["ports"], u["li_name"],
             _status_style(u["status"]),
         )
-    console.print(table)
+    get_console().print(table)
 
 
-def _cmd_uplinksets_list(args: argparse.Namespace) -> None:
-    try:
-        _run(_async_uplinksets_list())
-    except Exception as exc:
-        console.print(f"[red]Error: {exc}[/red]")
-        sys.exit(1)
+async def _cmd_uplinksets_list(args: argparse.Namespace) -> None:
+    await _async_uplinksets_list()
 
 
 # ── pcli oneview list server-profiles ────────────────────────────────────────
@@ -347,22 +337,26 @@ async def _async_profiles_list() -> None:
     from pcli.oneview.profiles import list_profiles
 
     async with _load_client() as client:
-        with console.status("[dim]Fetching server profiles…[/dim]"):
+        with get_console().status("[dim]Fetching server profiles…[/dim]"):
             profiles = await list_profiles(client)
 
     if not profiles:
-        console.print("[yellow]No server profiles found.[/yellow]")
+        get_console().print("[yellow]No server profiles found.[/yellow]")
         return
 
-    table = Table(
-        title=f"Server Profiles  ({len(profiles)} total)",
-        box=box.ROUNDED, show_header=True, header_style="bold cyan",
+    # ── JSON early return ─────────────────────────────────────────────────────
+    if get_output_mode() == OutputMode.JSON:
+        print_json(profiles)
+        return
+
+    table = make_table(
+        f"Server Profiles  ({len(profiles)} total)",
+        ("Name",        {"min_width": 22, "no_wrap": True}),
+        ("Server",      {"min_width": 20, "no_wrap": True}),
+        ("Status",      {"justify": "center", "no_wrap": True}),
+        ("State",       {"justify": "center", "no_wrap": True}),
+        ("Description", {"style": "dim"}),
     )
-    table.add_column("Name",        min_width=22, no_wrap=True)
-    table.add_column("Server",      min_width=20, no_wrap=True)
-    table.add_column("Status",      justify="center", no_wrap=True)
-    table.add_column("State",       justify="center", no_wrap=True)
-    table.add_column("Description", style="dim")
 
     for p in profiles:
         table.add_row(
@@ -370,15 +364,11 @@ async def _async_profiles_list() -> None:
             _status_style(p["status"]), p["state"],
             p["description"] or "—",
         )
-    console.print(table)
+    get_console().print(table)
 
 
-def _cmd_profiles_list(args: argparse.Namespace) -> None:
-    try:
-        _run(_async_profiles_list())
-    except Exception as exc:
-        console.print(f"[red]Error: {exc}[/red]")
-        sys.exit(1)
+async def _cmd_profiles_list(args: argparse.Namespace) -> None:
+    await _async_profiles_list()
 
 
 # ── pcli oneview describe ─────────────────────────────────────────────────────
@@ -390,13 +380,13 @@ async def _async_describe_uplinkset(name: str) -> None:
     import rich.text as rt
 
     async with _load_client() as client:
-        with console.status(f"[dim]Fetching uplink set '{name}'…[/dim]"):
+        with get_console().status(f"[dim]Fetching uplink set '{name}'…[/dim]"):
             u = await describe_uplink_set(client, name)
 
     reach = u["reachability"]
     reach_s = f"[green]{reach}[/green]" if reach == "Reachable" else f"[yellow]{reach}[/yellow]"
 
-    console.print(Panel(
+    get_console().print(Panel(
         f"[bold]{u['name']}[/bold]\n"
         f"Logical IC:    [cyan]{u['li_name']}[/cyan]\n"
         f"Type:          {u['network_type']}  |  Mode: {u['conn_mode']}\n"
@@ -405,25 +395,33 @@ async def _async_describe_uplinkset(name: str) -> None:
     ))
 
     # Ports table
-    port_table = Table(title="Ports", box=box.SIMPLE_HEAD, header_style="bold")
-    port_table.add_column("Bay",   justify="center", no_wrap=True)
-    port_table.add_column("Port",  no_wrap=True)
-    port_table.add_column("Speed", no_wrap=True)
-    port_table.add_column("FEC",   no_wrap=True)
+    port_table = make_table(
+        "Ports",
+        ("Bay",   {"justify": "center", "no_wrap": True}),
+        ("Port",  {"no_wrap": True}),
+        ("Speed", {"no_wrap": True}),
+        ("FEC",   {"no_wrap": True}),
+        box_style=box.SIMPLE_HEAD,
+        header_style="bold",
+    )
     for p in u["ports"]:
         port_table.add_row(p["bay"], p["port"], p["speed"], p["fec"])
-    console.print(port_table)
+    get_console().print(port_table)
 
     # Networks table
-    net_table = Table(title=f"Member Networks ({len(u['networks'])})", box=box.SIMPLE_HEAD, header_style="bold")
-    net_table.add_column("Name",   min_width=24, no_wrap=True)
-    net_table.add_column("VLAN",   justify="right", no_wrap=True)
-    net_table.add_column("Type",   no_wrap=True)
-    net_table.add_column("Status", justify="center", no_wrap=True)
+    net_table = make_table(
+        f"Member Networks ({len(u['networks'])})",
+        ("Name",   {"min_width": 24, "no_wrap": True}),
+        ("VLAN",   {"justify": "right", "no_wrap": True}),
+        ("Type",   {"no_wrap": True}),
+        ("Status", {"justify": "center", "no_wrap": True}),
+        box_style=box.SIMPLE_HEAD,
+        header_style="bold",
+    )
     for n in u["networks"]:
         vlan = str(n["vlan"]) if n["vlan"] else "—"
         net_table.add_row(n["name"], vlan, n["type"], _status_style(n["status"]))
-    console.print(net_table)
+    get_console().print(net_table)
 
 
 async def _async_describe_networkset(name: str) -> None:
@@ -431,10 +429,10 @@ async def _async_describe_networkset(name: str) -> None:
     from rich.panel import Panel
 
     async with _load_client() as client:
-        with console.status(f"[dim]Fetching network set '{name}'…[/dim]"):
+        with get_console().status(f"[dim]Fetching network set '{name}'…[/dim]"):
             s = await describe_network_set(client, name)
 
-    console.print(Panel(
+    get_console().print(Panel(
         f"[bold]{s['name']}[/bold]\n"
         f"Type:           {s['type']}\n"
         f"Native Network: {s['native_network'] or '—'}\n"
@@ -442,13 +440,17 @@ async def _async_describe_networkset(name: str) -> None:
         title="Network Set", border_style="cyan",
     ))
 
-    net_table = Table(title=f"Member Networks ({len(s['networks'])})", box=box.SIMPLE_HEAD, header_style="bold")
-    net_table.add_column("Name",    min_width=28, no_wrap=True)
-    net_table.add_column("VLAN",    justify="right", no_wrap=True)
-    net_table.add_column("Type",    no_wrap=True)
-    net_table.add_column("Purpose", no_wrap=True)
-    net_table.add_column("Status",  justify="center", no_wrap=True)
-    net_table.add_column("Native",  justify="center", no_wrap=True)
+    net_table = make_table(
+        f"Member Networks ({len(s['networks'])})",
+        ("Name",    {"min_width": 28, "no_wrap": True}),
+        ("VLAN",    {"justify": "right", "no_wrap": True}),
+        ("Type",    {"no_wrap": True}),
+        ("Purpose", {"no_wrap": True}),
+        ("Status",  {"justify": "center", "no_wrap": True}),
+        ("Native",  {"justify": "center", "no_wrap": True}),
+        box_style=box.SIMPLE_HEAD,
+        header_style="bold",
+    )
     for n in s["networks"]:
         vlan = str(n["vlan"]) if n["vlan"] else "—"
         net_table.add_row(
@@ -456,7 +458,7 @@ async def _async_describe_networkset(name: str) -> None:
             _status_style(n["status"]),
             "[green]✓[/green]" if n["native"] else "",
         )
-    console.print(net_table)
+    get_console().print(net_table)
 
 
 async def _async_describe_profile(name: str) -> None:
@@ -464,7 +466,7 @@ async def _async_describe_profile(name: str) -> None:
     from rich.panel import Panel
 
     async with _load_client() as client:
-        with console.status(f"[dim]Fetching profile '{name}'…[/dim]"):
+        with get_console().status(f"[dim]Fetching profile '{name}'…[/dim]"):
             p = await describe_profile(client, name)
 
     fw_line = ""
@@ -482,7 +484,7 @@ async def _async_describe_profile(name: str) -> None:
 
     desc_line = f"\nDescription:    {p['description']}" if p["description"] else ""
 
-    console.print(Panel(
+    get_console().print(Panel(
         f"[bold]{p['name']}[/bold]\n"
         f"Server:         {server_line}\n"
         f"Enclosure Group: [cyan]{p['eg_name']}[/cyan]\n"
@@ -494,84 +496,48 @@ async def _async_describe_profile(name: str) -> None:
     ))
 
     if p["connections"]:
-        conn_table = Table(title="Connections", box=box.SIMPLE_HEAD, header_style="bold")
-        conn_table.add_column("ID",       justify="center")
-        conn_table.add_column("Name",     min_width=16, no_wrap=True)
-        conn_table.add_column("Network",  no_wrap=True)
-        conn_table.add_column("Function", no_wrap=True)
-        conn_table.add_column("Speed",    no_wrap=True)
+        conn_table = make_table(
+            "Connections",
+            ("ID",       {"justify": "center"}),
+            ("Name",     {"min_width": 16, "no_wrap": True}),
+            ("Network",  {"no_wrap": True}),
+            ("Function", {"no_wrap": True}),
+            ("Speed",    {"no_wrap": True}),
+            box_style=box.SIMPLE_HEAD,
+            header_style="bold",
+        )
         for c in p["connections"]:
             conn_table.add_row(
                 str(c.get("id", "")), c.get("name", ""),
                 c.get("networkUri", "").rsplit("/", 1)[-1],
                 c.get("functionType", ""), c.get("requestedMbps", ""),
             )
-        console.print(conn_table)
+        get_console().print(conn_table)
 
 
-def _cmd_describe(args: argparse.Namespace) -> None:
-    try:
-        if args.resource == "uplinkset":
-            _run(_async_describe_uplinkset(args.name))
-        elif args.resource == "networkset":
-            _run(_async_describe_networkset(args.name))
-        elif args.resource == "server-profile":
-            _run(_async_describe_profile(args.name))
-    except ValueError as exc:
-        console.print(f"[red]{exc}[/red]")
-        sys.exit(1)
-    except Exception as exc:
-        console.print(f"[red]Error: {exc}[/red]")
-        sys.exit(1)
+async def _cmd_describe(args: argparse.Namespace) -> None:
+    if args.resource == "uplinkset":
+        await _async_describe_uplinkset(args.name)
+    elif args.resource == "networkset":
+        await _async_describe_networkset(args.name)
+    elif args.resource == "server-profile":
+        await _async_describe_profile(args.name)
 
 
-def _cmd_report_memory(args: argparse.Namespace) -> None:
-    from rich.table import Table
-    from rich import box as rich_box
+async def _cmd_report_memory(args: argparse.Namespace) -> None:
     from pcli.oneview.servers import get_fleet_memory
     from pcli.com.inventory import aggregate_by_part_number
 
-    async def _run_report():
-        async with _load_client() as client:
-            with console.status("[dim]Fetching memory inventory across fleet…[/dim]"):
-                return await get_fleet_memory(client)
-
-    dimms = _run(_run_report())
+    async with _load_client() as client:
+        with get_console().status("[dim]Fetching memory inventory across fleet…[/dim]"):
+            dimms = await get_fleet_memory(client)
 
     if not dimms:
-        console.print("[yellow]No memory inventory data returned.[/yellow]")
+        get_console().print("[yellow]No memory inventory data returned.[/yellow]")
         return
 
     rows = aggregate_by_part_number(dimms)
-    total_dimms = sum(r["count"] for r in rows)
-    total_tb = sum(r["count"] * r["capacity_gb"] for r in rows) / 1024
-
-    table = Table(
-        title=f"Memory Part-Number Breakdown  ({total_dimms} DIMMs  /  {total_tb:.1f} TB total)",
-        box=rich_box.ROUNDED,
-        show_header=True,
-        header_style="bold cyan",
-    )
-    table.add_column("HPE Part Number", min_width=14, no_wrap=True)
-    table.add_column("Vendor",          min_width=12, no_wrap=True)
-    table.add_column("Capacity",        justify="right", no_wrap=True)
-    table.add_column("Type",            no_wrap=True)
-    table.add_column("Speed",           justify="right", no_wrap=True)
-    table.add_column("Count",           justify="right", no_wrap=True, style="bold")
-    table.add_column("Total",           justify="right", no_wrap=True)
-    table.add_column("Servers",         justify="right", no_wrap=True, style="dim")
-
-    for r in rows:
-        cap = f"{r['capacity_gb']} GB" if r["capacity_gb"] else "—"
-        speed = f"{r['speed_mts']} MT/s" if r["speed_mts"] else "—"
-        total_cap_gb = r["count"] * r["capacity_gb"]
-        total_cap = f"{total_cap_gb} GB" if total_cap_gb < 1024 else f"{total_cap_gb/1024:.1f} TB"
-        table.add_row(
-            r["hpe_pn"], r["vendor"], cap, r["type"], speed,
-            str(r["count"]), total_cap, str(len(r["servers"])),
-        )
-
-    console.print(table)
+    print_memory_report(rows, source="OneView")
 
 
 # ── argument parser ───────────────────────────────────────────────────────────
@@ -595,6 +561,9 @@ examples:
   pcli oneview describe server-profile "ocp-single-node"
 """,
     )
+
+    parser.add_argument("--json", action="store_true", dest="json_output",
+                        help="Output as JSON (for piping/scripting)")
 
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
     sub.required = True
@@ -659,7 +628,9 @@ def main(argv: list[str] | None = None) -> None:
         parser = _build_parser()
 
     args = parser.parse_args(argv)
-    args.func(args)
+    if getattr(args, "json_output", False):
+        set_output_mode(OutputMode.JSON)
+    run_sync(args.func(args))
 
 
 if __name__ == "__main__":

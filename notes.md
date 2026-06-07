@@ -259,6 +259,7 @@ iLO 6 `HttpPushUri` multipart upload (`/cgi-bin/uploadFile`) often fails with em
   - `228.1.111.0` installed; SDR has `235.1.164.14` (upgrade available)
   - OCP3 NIC: **NOT in FirmwareInventory** on iLO 6 (no PLDM channel)
   - Only upgradeble via in-band `bnxtnvm` OS tool
+  - `NetworkAdapters[].Location` is blank on iLO 6; GUI slot label comes from HPE OEM `Chassis/Devices` (`Location: OCP 3.0 Slot 15`)
 - **COM status**: Permanently blocked — `ProductID=NA` (internal test unit, no supply chain record)
 - dl380 iLO had `Gateway: 0.0.0.0` (fixed May 2026 via `ilorest load --force_network_config`)
 
@@ -266,6 +267,10 @@ iLO 6 `HttpPushUri` multipart upload (`/cgi-bin/uploadFile`) often fails with em
 
 - Storage: `Storage/{id}/Controllers/` present
 - Has **HPE MR416i-o Gen11 RAID controller** (current `52.22.3-4650`)
+- NICs:
+  - `P10113-001` in `OCP Slot 21` reports generic `Model=BCM57414`, `SKU=10/25Gb 2-port SFP28 BCM57414 OCP3 Adapter`
+  - `P26264-001` in `PCIE Slot 6` also reports generic `Model=BCM57414`, but HPE GUI labels it **Broadcom P225p**
+  - Both adapters run firmware `235.1.164.14`
 - NVMe drives: SK Hynix (no fw via iLO)
 - ✅ In COM workspace HPECC_USWEST_1
 
@@ -445,4 +450,3 @@ POST /redfish/v1/Systems/1/Actions/ComputerSystem.Reset/
 ```
 
 ---
-

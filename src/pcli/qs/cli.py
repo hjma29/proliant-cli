@@ -29,15 +29,7 @@ _SEP_RE = re.compile(r"^\|[\s\-:|]+\|")
 
 # Matches HPE option entries: "HPE <description> P12345-B21"
 _OPTION_ENTRY_RE = re.compile(r"HPE\s+(.*?)\s+([A-Z]\d{5}-[A-Z]\d{2})", re.DOTALL)
-_CAPACITY_RE = re.compile(r"\d+\.?\d*\s*[TGMK]B", re.I)
 _PAGE_NUM_RE = re.compile(r"\bPage\s+\d+\b", re.I)
-# Words that indicate a genuine section/subsection header (not a product name fragment)
-_SECTION_KW_RE = re.compile(
-    r"\b(Drives?|Options?|Interface|Controllers?|Adapters?|Processors?|"
-    r"Memory|Storage|Power|Networks?|Configuration|Temperature|Management|"
-    r"GPU|Accelerator|Cache|Array|Accessories|Servers?)\b",
-    re.I,
-)
 
 
 def _parse_md_row(line: str) -> list[str]:
@@ -80,20 +72,32 @@ def _render_md_table(table_lines: list[str]) -> None:
 def _render_option_list(text: str) -> None:
     """Render HPE option entries (e.g. Core Options) as structured table(s).
 
-    Detects sub-section labels between entries (e.g. "Mixed Use Drives") and
-    renders each group as a separate labelled table.
+    Gaps between entries are parsed line-by-line:
+    - Lines starting with Notes:/−/- are shown as dim context text
+    - Other short non-HPE lines become bold sub-section headers
     """
-    # Walk through the text collecting (position, entry|header, ...) segments
     segments: list[tuple] = []
     prev_end = 0
     for m in _OPTION_ENTRY_RE.finditer(text):
-        gap = text[prev_end:m.start()]
-        gap = _PAGE_NUM_RE.sub("", gap).strip()
-        # Only treat as subsection header if it looks like a section title
-        if gap and len(gap) < 120 and not _OPTION_ENTRY_RE.search(gap) and _SECTION_KW_RE.search(gap):
-            label = re.sub(r"\s+", " ", gap).strip()
-            if label:
-                segments.append(("header", label))
+        gap = _PAGE_NUM_RE.sub("", text[prev_end:m.start()]).strip()
+        if gap:
+            notes: list[str] = []
+            headers: list[str] = []
+            for line in gap.splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith(("Notes:", "Note:", "−", "-", "•")):
+                    notes.append(line)
+                elif len(line) < 100:
+                    headers.append(line)
+                else:
+                    notes.append(line)
+            if notes:
+                segments.append(("notes", "\n".join(notes)))
+            for h in headers:
+                segments.append(("header", h))
+
         desc = re.sub(r"\s+", " ", m.group(1)).strip()
         segments.append(("entry", "HPE " + desc, m.group(2)))
         prev_end = m.end()
@@ -102,8 +106,10 @@ def _render_option_list(text: str) -> None:
         get_console().print(Markdown(text))
         return
 
-    def _flush(rows: list[tuple[str, str]]) -> None:
-        if not rows:
+    pending_rows: list[tuple[str, str]] = []
+
+    def _flush() -> None:
+        if not pending_rows:
             return
         t = make_table(
             "",
@@ -113,19 +119,21 @@ def _render_option_list(text: str) -> None:
             show_header=False,
             padding=(0, 1),
         )
-        for desc, pn in rows:
+        for desc, pn in pending_rows:
             t.add_row(desc, pn)
         get_console().print(t)
+        pending_rows.clear()
 
-    pending_rows: list[tuple[str, str]] = []
     for seg in segments:
         if seg[0] == "header":
-            _flush(pending_rows)
-            pending_rows = []
+            _flush()
             get_console().print(f"\n[bold]{seg[1]}[/bold]")
+        elif seg[0] == "notes":
+            _flush()
+            get_console().print(f"[dim]{seg[1]}[/dim]")
         else:
             pending_rows.append((seg[1], seg[2]))
-    _flush(pending_rows)
+    _flush()
 
 
 def _split_sections(markdown: str) -> list[tuple[str, str]]:

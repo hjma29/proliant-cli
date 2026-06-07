@@ -27,6 +27,18 @@ from pcli.qs.client import QSEntry, search_quickspecs, fetch_quickspec_markdown,
 
 _SEP_RE = re.compile(r"^\|[\s\-:|]+\|")
 
+# Matches HPE option entries: "HPE <description> P12345-B21"
+_OPTION_ENTRY_RE = re.compile(r"HPE\s+(.*?)\s+([A-Z]\d{5}-[A-Z]\d{2})", re.DOTALL)
+_CAPACITY_RE = re.compile(r"\d+\.?\d*\s*[TGMK]B", re.I)
+_PAGE_NUM_RE = re.compile(r"\bPage\s+\d+\b", re.I)
+# Words that indicate a genuine section/subsection header (not a product name fragment)
+_SECTION_KW_RE = re.compile(
+    r"\b(Drives?|Options?|Interface|Controllers?|Adapters?|Processors?|"
+    r"Memory|Storage|Power|Networks?|Configuration|Temperature|Management|"
+    r"GPU|Accelerator|Cache|Array|Accessories|Servers?)\b",
+    re.I,
+)
+
 
 def _parse_md_row(line: str) -> list[str]:
     """Parse '| **A** | [B](url) | C |' → ['A', 'B', 'C']."""
@@ -65,18 +77,98 @@ def _render_md_table(table_lines: list[str]) -> None:
     get_console().print(t)
 
 
+def _render_option_list(text: str) -> None:
+    """Render HPE option entries (e.g. Core Options) as structured table(s).
+
+    Detects sub-section labels between entries (e.g. "Mixed Use Drives") and
+    renders each group as a separate labelled table.
+    """
+    # Walk through the text collecting (position, entry|header, ...) segments
+    segments: list[tuple] = []
+    prev_end = 0
+    for m in _OPTION_ENTRY_RE.finditer(text):
+        gap = text[prev_end:m.start()]
+        gap = _PAGE_NUM_RE.sub("", gap).strip()
+        # Only treat as subsection header if it looks like a section title
+        if gap and len(gap) < 120 and not _OPTION_ENTRY_RE.search(gap) and _SECTION_KW_RE.search(gap):
+            label = re.sub(r"\s+", " ", gap).strip()
+            if label:
+                segments.append(("header", label))
+        desc = re.sub(r"\s+", " ", m.group(1)).strip()
+        segments.append(("entry", "HPE " + desc, m.group(2)))
+        prev_end = m.end()
+
+    if not segments:
+        get_console().print(Markdown(text))
+        return
+
+    def _flush(rows: list[tuple[str, str]]) -> None:
+        if not rows:
+            return
+        t = make_table(
+            "",
+            ("Part Number", {"style": "cyan", "no_wrap": True}),
+            ("Capacity",    {"no_wrap": True}),
+            ("Description", {}),
+            box_style=box.SIMPLE_HEAD,
+            header_style="bold",
+            padding=(0, 1),
+        )
+        for desc, pn in rows:
+            cap_m = _CAPACITY_RE.search(desc)
+            t.add_row(pn, cap_m.group(0) if cap_m else "", desc)
+        get_console().print(t)
+
+    pending_rows: list[tuple[str, str]] = []
+    for seg in segments:
+        if seg[0] == "header":
+            _flush(pending_rows)
+            pending_rows = []
+            get_console().print(f"\n[bold]{seg[1]}[/bold]")
+        else:
+            pending_rows.append((seg[1], seg[2]))
+    _flush(pending_rows)
+
+
+def _split_sections(markdown: str) -> list[tuple[str, str]]:
+    """Split markdown into [(heading, body)] pairs on ### / ## / # headings."""
+    pattern = re.compile(r"^(#{1,3})\s+(.+)$", re.MULTILINE)
+    result: list[tuple[str, str]] = []
+    last_heading: str | None = None
+    last_end = 0
+    for m in pattern.finditer(markdown):
+        if last_heading is not None:
+            result.append((last_heading, markdown[last_end:m.start()].strip()))
+        last_heading = m.group(2).strip()
+        last_end = m.end()
+    if last_heading is not None:
+        result.append((last_heading, markdown[last_end:].strip()))
+    if not result:
+        result = [("", markdown)]
+    return result
+
+
 def _render_section_body(body: str) -> None:
-    """Render section body, using Rich Table for markdown tables to avoid padding."""
+    """Render section body: Rich tables for markdown tables, option-list tables
+    for HPE drive/accessory entries, and Markdown for everything else."""
     lines = body.splitlines()
     pending: list[str] = []
+
+    def _flush_pending() -> None:
+        text_block = "\n".join(pending).strip()
+        pending.clear()
+        if not text_block:
+            return
+        # If the block contains HPE option entries, render as structured table
+        if len(_OPTION_ENTRY_RE.findall(text_block)) >= 2:
+            _render_option_list(text_block)
+        else:
+            get_console().print(Markdown(text_block))
+
     i = 0
     while i < len(lines):
         if lines[i].startswith("|"):
-            if pending:
-                text_block = "\n".join(pending).strip()
-                if text_block:
-                    get_console().print(Markdown(text_block))
-                pending = []
+            _flush_pending()
             table_lines = []
             while i < len(lines) and lines[i].startswith("|"):
                 table_lines.append(lines[i])
@@ -85,10 +177,7 @@ def _render_section_body(body: str) -> None:
         else:
             pending.append(lines[i])
             i += 1
-    if pending:
-        text_block = "\n".join(pending).strip()
-        if text_block:
-            get_console().print(Markdown(text_block))
+    _flush_pending()
 
 
 # Matches a date-leading plain-text version header from PDF conversion:
@@ -98,6 +187,17 @@ _PDF_DATE_HDR = re.compile(
 )
 # Matches an action-only plain-text line from PDF: "Added  description..."
 _PDF_ACTION_LINE = re.compile(r"^(Added|Changed|Removed)\s{2,}(.*)")
+_FLAT_CHANGE_BLOCK_RE = re.compile(
+    r"(?P<date>\d{2}-[A-Za-z]{3}-\d{4})\s+"
+    r"Version\s+(?P<ver>\d+)\s+"
+    r"(?P<action>Added|Changed|Removed|New)\s+"
+    r"(?P<desc>.*?)"
+    r"(?=(?:\d{2}-[A-Za-z]{3}-\d{4}\s+Version\s+\d+\s+(?:Added|Changed|Removed|New)\b)"
+    r"|(?:QuickSpecs\s+HPE\s+ProLiant\b)"
+    r"|(?:Page\s+\d+\b)"
+    r"|$)",
+    re.S,
+)
 
 
 def _parse_change_rows(body: str) -> list[list[str]]:
@@ -190,6 +290,111 @@ def _take_n_versions(rows: list[list[str]], n: int) -> list[list[str]]:
     return result
 
 
+def _version_num(text: str) -> str:
+    """Extract '17' from 'Version 17' or return '' when absent."""
+    m = re.search(r"(\d+)", text or "")
+    return m.group(1) if m else ""
+
+
+def _display_date(text: str) -> str:
+    """Convert ISO date to QuickSpecs-style dd-Mon-yyyy for table output."""
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})$", text or "")
+    if not m:
+        return text
+    year, month, day = m.groups()
+    mon = {
+        "01": "Jan", "02": "Feb", "03": "Mar", "04": "Apr",
+        "05": "May", "06": "Jun", "07": "Jul", "08": "Aug",
+        "09": "Sep", "10": "Oct", "11": "Nov", "12": "Dec",
+    }.get(month, month)
+    return f"{day}-{mon}-{year}"
+
+
+def _clean_change_description(text: str) -> str:
+    """Remove markdown-table artifacts from flattened QuickSpecs text."""
+    text = text.replace("|", " ")
+    text = re.sub(r"(?:\s*-{3,}\s*)+", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip(" -–")
+
+
+def _collect_change_details(markdown: str, sections: list[str]) -> dict[str, tuple[str, str]]:
+    """Return {version_num: (action, description)} from Summary of Changes when present."""
+    matched = next((s for s in sections if "summary of changes" in s.lower()), None)
+    if not matched:
+        return {}
+
+    text = filter_section(markdown, matched)
+    lines = text.splitlines()
+    body = "\n".join(lines[1:]).lstrip("\n")
+    parsed_rows = _parse_change_rows(body)
+
+    changes: dict[str, list[tuple[str, str]]] = {}
+    current_version = ""
+    for date, version, action, description in parsed_rows:
+        version_num = _version_num(version) or current_version
+        if not version_num:
+            continue
+        current_version = version_num
+        if not action and not description:
+            continue
+        changes.setdefault(version_num, []).append((action, description))
+
+    result: dict[str, tuple[str, str]] = {}
+    for version_num, entries in changes.items():
+        actions = [a for a, _ in entries if a]
+        descs = [d for _, d in entries if d]
+        result[version_num] = (
+            "; ".join(actions),
+            " ".join(descs).strip(),
+        )
+
+    # Some QuickSpecs flatten multiple versions into one wrapped paragraph, so the
+    # line-oriented parser above misses later descriptions. Recover those by scanning
+    # the whole body for repeated "DD-Mon-YYYY Version N Action ..." blocks.
+    normalized = re.sub(r"\s+", " ", body).strip()
+    normalized = re.sub(
+        r"^Date\s+Version\s+History\s+Action\s+Description\s+of\s+Change\s+",
+        "",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    for m in _FLAT_CHANGE_BLOCK_RE.finditer(normalized):
+        version_num = m.group("ver")
+        action = m.group("action").strip()
+        description = _clean_change_description(m.group("desc"))
+        if not description and version_num in result:
+            continue
+        current_action, current_description = result.get(version_num, ("", ""))
+        result[version_num] = (
+            current_action or action,
+            current_description or description,
+        )
+    return result
+
+
+def _enrich_missing_change_details(
+    doc_id: str,
+    versions: list,
+    change_details: dict[str, tuple[str, str]],
+) -> dict[str, tuple[str, str]]:
+    """Backfill missing descriptions from version-specific QuickSpec pages."""
+    enriched = dict(change_details)
+    for version in versions:
+        current_action, current_description = enriched.get(version.version_num, ("", ""))
+        if current_description:
+            continue
+        try:
+            markdown, sections = fetch_quickspec_markdown(doc_id, ver=version.version_num)
+        except Exception:
+            continue
+        specific_details = _collect_change_details(markdown, sections)
+        action, description = specific_details.get(version.version_num, ("", ""))
+        if action or description:
+            enriched[version.version_num] = (action, description)
+    return enriched
+
+
 # ── Commands ───────────────────────────────────────────────────────────────────
 
 def _cmd_list(args: argparse.Namespace) -> None:
@@ -217,24 +422,34 @@ def _cmd_list(args: argparse.Namespace) -> None:
     top = unique[0]
     get_console().print(f"[dim]Fetching QuickSpec {top.doc_id}…[/dim]")
     try:
-        markdown, sections = fetch_quickspec_markdown(top.doc_id)
+        versions = fetch_quickspec_versions(top.doc_id, title=top.title, n=args.count)
     except Exception as exc:
         get_console().print(f"[red]Error:[/red] {exc}", highlight=False)
         sys.exit(1)
 
-    # Find Summary of Changes
-    matched = next((s for s in sections if "summary of changes" in s.lower()), None)
-    if not matched:
-        get_console().print("[yellow]No 'Summary of Changes' section found in this QuickSpec.[/yellow]")
-        get_console().print(f"[dim]Use 'pcli qs describe {top.doc_id}' to browse all sections.[/dim]")
+    if not versions:
+        get_console().print("[yellow]No version history found for this QuickSpec.[/yellow]")
+        get_console().print(f"[dim]Use 'pcli qs describe {top.doc_id}' to read the full QuickSpec.[/dim]")
         return
 
-    text = filter_section(markdown, matched)
-    lines = text.splitlines()
-    body = "\n".join(lines[1:]).lstrip("\n")
+    change_details: dict[str, tuple[str, str]] = {}
+    try:
+        markdown, sections = fetch_quickspec_markdown(top.doc_id)
+        change_details = _collect_change_details(markdown, sections)
+    except Exception:
+        # Version history comes from the variants API; descriptions are best-effort only.
+        pass
+    change_details = _enrich_missing_change_details(top.doc_id, versions, change_details)
 
-    rows = _parse_change_rows(body)
-    rows = _take_n_versions(rows, args.count)
+    rows = []
+    for version in versions:
+        action, description = change_details.get(version.version_num, ("", ""))
+        rows.append([
+            _display_date(version.date),
+            f"Version {version.version_num}",
+            action,
+            description,
+        ])
 
     # ── JSON early return ─────────────────────────────────────────────────────
     if get_output_mode() == OutputMode.JSON:
@@ -242,8 +457,13 @@ def _cmd_list(args: argparse.Namespace) -> None:
             "doc_id": top.doc_id,
             "title": top.title,
             "revisions": [
-                {"date": r[0], "version": r[1], "action": r[2], "description": r[3]}
-                for r in rows
+                {
+                    "date": version.date,
+                    "version": f"Version {version.version_num}",
+                    "action": row[2],
+                    "description": row[3],
+                }
+                for version, row in zip(versions, rows)
             ],
         })
         return
@@ -256,7 +476,6 @@ def _cmd_list(args: argparse.Namespace) -> None:
         "",
         ("Date",                  {"no_wrap": True, "style": "cyan"}),
         ("Version",               {"no_wrap": True, "style": "green"}),
-        ("Action",                {"no_wrap": True}),
         ("Description of Change", {}),
         box_style=box.SIMPLE_HEAD,
         show_header=True,
@@ -265,7 +484,7 @@ def _cmd_list(args: argparse.Namespace) -> None:
     )
 
     for row in rows:
-        t.add_row(*row)
+        t.add_row(row[0], row[1], row[3])
 
     get_console().print(t)
     get_console().print(
@@ -337,8 +556,11 @@ def _cmd_describe(args: argparse.Namespace) -> None:
         _render_section_body(body)
         return
 
-    # Full document
-    get_console().print(Markdown(markdown))
+    # Full document — render section by section so option lists get table formatting
+    for heading, body in _split_sections(markdown):
+        if heading:
+            get_console().print(Rule(f"[bold]{heading}[/bold]"))
+        _render_section_body(body)
 
 
 # ── diff ──────────────────────────────────────────────────────────────────────

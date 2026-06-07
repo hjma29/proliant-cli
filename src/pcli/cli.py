@@ -474,6 +474,7 @@ def main(argv: list[str] | None = None) -> None:
         sub.add_parser("spp",     help="HPE Service Pack for ProLiant analysis")
         sub.add_parser("oneview", help="HPE OneView fleet management")
         sub.add_parser("qs",      help="HPE QuickSpecs browser")
+        sub.add_parser("config",  help="View and manage pcli configuration")
         sub.add_parser("update",  help="Upgrade pcli to the latest release")
         argcomplete.autocomplete(parser)
         return  # autocomplete() exits; reaching here means no completion needed

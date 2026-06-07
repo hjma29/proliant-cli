@@ -107,16 +107,14 @@ def _render_option_list(text: str) -> None:
             return
         t = make_table(
             "",
-            ("Part Number", {"style": "cyan", "no_wrap": True}),
-            ("Capacity",    {"no_wrap": True}),
-            ("Description", {}),
-            box_style=box.SIMPLE_HEAD,
-            header_style="bold",
+            ("Description", {"ratio": 5}),
+            ("Part Number", {"style": "cyan", "no_wrap": True, "justify": "right"}),
+            box_style=box.SIMPLE,
+            show_header=False,
             padding=(0, 1),
         )
         for desc, pn in rows:
-            cap_m = _CAPACITY_RE.search(desc)
-            t.add_row(pn, cap_m.group(0) if cap_m else "", desc)
+            t.add_row(desc, pn)
         get_console().print(t)
 
     pending_rows: list[tuple[str, str]] = []

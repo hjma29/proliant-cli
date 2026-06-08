@@ -463,6 +463,11 @@ def main(argv: list[str] | None = None) -> None:
             _dispatch_qs(parts[2:])
             return
 
+        if len(parts) >= 2 and parts[1] == "config":
+            os.environ["_ARGCOMPLETE"] = "2"
+            _dispatch_config(parts[2:])
+            return
+
         # Top-level: use argparse so argcomplete can offer 'ilo', 'com', 'spp', 'oneview'
         import argparse
         import argcomplete

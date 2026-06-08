@@ -42,6 +42,7 @@ from typing import Any
 
 import argcomplete
 
+from pcli.ilo.boot import fetch_boot_order, set_one_time_pxe
 from pcli.common.completers import comma_sep_completer
 from pcli.common.display import get_console, make_table, print_json, OutputMode, get_output_mode
 from pcli.common.runner import run_parallel, run_sync
@@ -57,6 +58,7 @@ from pcli.ilo.config import (
     load_hosts,
 )
 from pcli.ilo.describe import run_describe, run_describe_ilo_nic, run_describe_fw_update
+from pcli.ilo.power import RESET_TYPES, force_off, graceful_shutdown, power_on, reset_server
 from pcli.ilo.printers import (
     _print_json_results,
     _header_line,
@@ -295,6 +297,73 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_host(up_clear, required=True)
     up_clear.add_argument("--dry-run", action="store_true", dest="dry_run")
 
+    power_p = subparsers.add_parser(
+        "power",
+        help="Server power operations",
+        description=(
+            "Issue Redfish ComputerSystem.Reset actions through iLO.\n\n"
+            "Examples:\n"
+            "  pcli ilo power reset --host dl325-gen12\n"
+            "  pcli ilo power reset --host dl325-gen12 --reset-type ForceRestart\n"
+            "  pcli ilo power shutdown --host dl325-gen12\n"
+            "  pcli ilo power off --host dl325-gen12\n"
+            "  pcli ilo power on --host dl325-gen12\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    power_sub = power_p.add_subparsers(dest="power_action", metavar="ACTION")
+    power_sub.required = True
+
+    power_reset = power_sub.add_parser("reset", help="Reset a server")
+    _add_host(power_reset, required=True)
+    power_reset.add_argument(
+        "--reset-type",
+        choices=sorted(RESET_TYPES),
+        default="GracefulRestart",
+        help="Redfish ResetType to send (default: GracefulRestart)",
+    )
+    power_reset.add_argument("--dry-run", action="store_true", dest="dry_run")
+
+    power_on_p = power_sub.add_parser("on", help="Power on a server")
+    _add_host(power_on_p, required=True)
+    power_on_p.add_argument("--dry-run", action="store_true", dest="dry_run")
+
+    power_off_p = power_sub.add_parser("off", help="Force power off a server")
+    _add_host(power_off_p, required=True)
+    power_off_p.add_argument("--dry-run", action="store_true", dest="dry_run")
+
+    power_shutdown_p = power_sub.add_parser("shutdown", help="Gracefully shut down a server")
+    _add_host(power_shutdown_p, required=True)
+    power_shutdown_p.add_argument("--dry-run", action="store_true", dest="dry_run")
+
+    boot_p = subparsers.add_parser(
+        "boot",
+        help="Inspect and override server boot behavior",
+        description=(
+            "Show current boot order and set one-time PXE IPv4 boot.\n\n"
+            "Examples:\n"
+            "  pcli ilo boot show --host dl325-gen12\n"
+            "  pcli ilo boot pxe --host dl325-gen12\n"
+            "  pcli ilo boot pxe --host dl325-gen12 --port \"Slot 1 Port 1\"\n"
+            "  pcli ilo boot pxe --host dl325-gen12 --port BC97E1E296C0 --dry-run\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    boot_sub = boot_p.add_subparsers(dest="boot_action", metavar="ACTION")
+    boot_sub.required = True
+
+    boot_show = boot_sub.add_parser("show", help="Show current boot order and one-time override state")
+    _add_host(boot_show, required=True)
+
+    boot_pxe = boot_sub.add_parser("pxe", help="Set one-time PXE IPv4 boot")
+    _add_host(boot_pxe, required=True)
+    boot_pxe.add_argument(
+        "--port",
+        metavar="MATCH",
+        help="Specific PXE IPv4 port to boot from; matches boot option display text or MAC",
+    )
+    boot_pxe.add_argument("--dry-run", action="store_true", dest="dry_run")
+
     subparsers.add_parser(
         "init",
         help="Create a starter hosts-ilo.ini at ~/.config/pcli/hosts-ilo.ini",
@@ -411,6 +480,10 @@ async def _async_main(args: argparse.Namespace) -> None:
             await _run_set_static(args)
         elif args.set_action == "route":
             await _run_set_route(args)
+    elif args.command == "power":
+        await _run_power(args)
+    elif args.command == "boot":
+        await _run_boot(args)
 
 
 def _load_hosts_or_exit(name: str | None, hosts_from: str | None = None) -> list[dict]:
@@ -880,6 +953,166 @@ async def _run_upgrade(args: argparse.Namespace) -> None:
             url=getattr(args, "url", None),
             filename=getattr(args, "filename", None),
         )
+
+
+async def _run_power(args: argparse.Namespace) -> None:
+    action = args.power_action
+    dry_run = getattr(args, "dry_run", False)
+    host = _load_hosts_or_exit(args.host)[0]
+
+    try:
+        async with ilo_session(host) as client:
+            if action == "reset":
+                result = await reset_server(
+                    client,
+                    reset_type=getattr(args, "reset_type", "GracefulRestart"),
+                    dry_run=dry_run,
+                )
+            elif action == "on":
+                result = await power_on(client, dry_run=dry_run)
+            elif action == "off":
+                result = await force_off(client, dry_run=dry_run)
+            elif action == "shutdown":
+                result = await graceful_shutdown(client, dry_run=dry_run)
+            else:  # pragma: no cover - parser restricts this
+                raise ValueError(f"Unsupported power action: {action}")
+    except ServerDownOrUnreachableError as exc:
+        print(f"ERROR: {host['name']} unreachable: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except (RuntimeError, TimeoutError, ValueError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    if get_output_mode() == OutputMode.JSON:
+        print_json({"host": host["name"], "action": action, **result})
+        return
+
+    status = result["status"]
+    reset_type = result["reset_type"]
+    if status == "dry-run":
+        get_console().print(
+            f"[yellow][dry-run][/yellow] Would send [bold]{reset_type}[/bold] to "
+            f"[bold]{host['name']}[/bold] via [dim]{result['url']}[/dim]"
+        )
+        return
+
+    get_console().print(
+        f"[green]✓[/green] Sent [bold]{reset_type}[/bold] to "
+        f"[bold]{host['name']}[/bold]"
+    )
+
+
+async def _run_boot(args: argparse.Namespace) -> None:
+    action = args.boot_action
+    host = _load_hosts_or_exit(args.host)[0]
+
+    try:
+        async with ilo_session(host) as client:
+            if action == "show":
+                result = await fetch_boot_order(client)
+            elif action == "pxe":
+                result = await set_one_time_pxe(
+                    client,
+                    port=getattr(args, "port", None),
+                    dry_run=getattr(args, "dry_run", False),
+                )
+            else:  # pragma: no cover - parser restricts this
+                raise ValueError(f"Unsupported boot action: {action}")
+    except ServerDownOrUnreachableError as exc:
+        print(f"ERROR: {host['name']} unreachable: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except (RuntimeError, TimeoutError, ValueError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    if get_output_mode() == OutputMode.JSON:
+        print_json({"host": host["name"], "action": action, **result})
+        return
+
+    console = get_console()
+    if action == "show":
+        summary = make_table("", box_style=None, show_header=False, padding=(0, 2))
+        summary.add_column(style="dim", no_wrap=True)
+        summary.add_column()
+        summary.add_row("Mode", result["mode"])
+        summary.add_row("Override Enabled", result["override_enabled"])
+        summary.add_row("Override Target", result["override_target"])
+        if result["uefi_target"] not in ("", "None", "—"):
+            summary.add_row("UEFI Target", result["uefi_target"])
+        console.print(summary)
+        console.print()
+
+        order_table = make_table(
+            "Boot Order",
+            ("Pos", {"justify": "right", "no_wrap": True, "style": "cyan"}),
+            ("Ref", {"no_wrap": True, "style": "green"}),
+            ("Type", {"no_wrap": True}),
+            ("Entry", {}),
+            box_style=None,
+            show_header=True,
+            header_style="bold",
+            padding=(0, 1),
+        )
+        for entry in result["order"]:
+            pos = str(entry["position"])
+            if entry["position"] == 1:
+                pos = f"{pos}*"
+            order_table.add_row(pos, entry["reference"], entry["kind"], entry["display_name"])
+        console.print(order_table)
+
+        if result["pxe_ipv4"]:
+            console.print()
+            pxe_table = make_table(
+                "PXE IPv4 Targets",
+                ("Ref", {"no_wrap": True, "style": "green"}),
+                ("Port", {"no_wrap": True, "style": "cyan"}),
+                ("MAC", {"no_wrap": True}),
+                ("Entry", {}),
+                box_style=None,
+                show_header=True,
+                header_style="bold",
+                padding=(0, 1),
+            )
+            for entry in result["pxe_ipv4"]:
+                pxe_table.add_row(
+                    entry["reference"],
+                    entry["port_hint"] or "—",
+                    entry["mac"] or "—",
+                    entry["display_name"],
+                )
+            console.print(pxe_table)
+
+        if result.get("desired_boot_devices"):
+            console.print()
+            desired_table = make_table(
+                "Pending Desired Boot Devices",
+                ("Port", {"no_wrap": True, "style": "cyan"}),
+                ("MAC", {"no_wrap": True}),
+                ("Entry", {}),
+                box_style=None,
+                show_header=True,
+                header_style="bold",
+                padding=(0, 1),
+            )
+            for entry in result["desired_boot_devices"]:
+                desired_table.add_row(
+                    entry.get("port_hint") or "—",
+                    entry.get("mac") or "—",
+                    entry.get("display_name") or entry.get("correlatable_id") or "—",
+                )
+            console.print(desired_table)
+        return
+
+    selected = result.get("selected")
+    if result["status"] == "dry-run":
+        message = "[yellow][dry-run][/yellow] Would set one-time "
+    else:
+        message = "[green]✓[/green] Set one-time "
+    message += "[bold]PXE IPv4[/bold] boot"
+    if selected:
+        message += f" via [bold]{selected['display_name']}[/bold]"
+    message += " [dim](pending until next reset)[/dim]"
+    console.print(message)
 
 
 async def _cmd_describe(args: argparse.Namespace) -> None:

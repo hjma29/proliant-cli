@@ -289,7 +289,6 @@ async def set_one_time_pxe(
     payload: dict[str, Any] = {
         "Boot": {
             "BootSourceOverrideEnabled": "Once",
-            "BootSourceOverrideMode": "UEFI",
             "BootSourceOverrideTarget": "UefiTarget",
             "UefiTargetBootSourceOverride": selected["device_path"],
         }

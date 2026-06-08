@@ -184,6 +184,8 @@ examples:
 
 def main(argv: list[str] | None = None) -> None:
     p = _build_parser()
+    import argcomplete
+    argcomplete.autocomplete(p)
     args = p.parse_args(argv)
 
     if args.cmd == "list":

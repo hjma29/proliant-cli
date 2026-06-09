@@ -1,7 +1,7 @@
 """
 pcli.ilo.bios
 ~~~~~~~~~~~~~
-BIOS settings inspection for HPE iLO servers.
+BIOS settings inspection and modification for HPE iLO servers.
 """
 
 from __future__ import annotations
@@ -11,6 +11,17 @@ from typing import Any
 
 from pcli.ilo.client import ILOClient
 
+
+WORKLOAD_PROFILES = [
+    "GeneralThroughputCompute",
+    "GeneralPeakFrequencyCompute",
+    "LowLatency",
+    "DecisionSupport",
+    "GraphicProcessing",
+    "TransactionalApplicationProcessing",
+    "MissionCritical",
+    "Custom",
+]
 
 # Keys to display, organized by section: (attribute_key, display_label)
 _SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
@@ -39,11 +50,16 @@ _SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
         ("AutoPowerOn",             "Auto Power-On"),
         ("WakeOnLan",               "Wake on LAN"),
     ]),
+    ("Virtualization", [
+        ("ProcAmdIoVt",             "AMD-Vi / IOMMU (VT-d)"),
+        ("AmdDmarSupport",          "DMAR (strict DMA isolation)"),
+        ("Sriov",                   "SR-IOV"),
+        ("AmdSecureNestedPaging",   "AMD SNP (secure nested paging)"),
+        ("AmdSecureMemoryEncryption", "AMD SME"),
+    ]),
     ("Security", [
         ("TpmState",                "TPM State"),
-        ("AmdSecureMemoryEncryption", "AMD SME"),
-        ("AmdSecureNestedPaging",   "AMD SNP"),
-        ("Sriov",                   "SR-IOV"),
+        ("SecureBootStatus",        "Secure Boot"),
     ]),
 ]
 
@@ -63,6 +79,22 @@ async def fetch_bios(client: ILOClient, pending: bool = False) -> dict[str, Any]
     path = "/redfish/v1/systems/1/bios/settings/" if pending else "/redfish/v1/systems/1/bios/"
     data = await client.get(path)
     return data.get("Attributes", {})
+
+
+async def set_workload_profile(client: ILOClient, profile: str) -> str:
+    """PATCH WorkloadProfile to BIOS pending settings. Returns confirmation message."""
+    resp = await client.patch(
+        "/redfish/v1/systems/1/bios/settings/",
+        {"Attributes": {"WorkloadProfile": profile}},
+    )
+    msg_id = (
+        resp.get("error", {})
+        .get("@Message.ExtendedInfo", [{}])[0]
+        .get("MessageId", "")
+    )
+    if "Success" not in msg_id and "SystemResetRequired" not in msg_id:
+        raise RuntimeError(f"Unexpected iLO response: {msg_id}")
+    return profile
 
 
 def format_bios(attrs: dict[str, Any], host: str, pending: bool = False) -> list[str]:

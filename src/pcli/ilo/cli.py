@@ -57,7 +57,7 @@ from pcli.ilo.config import (
     MAX_WORKERS,
     load_hosts,
 )
-from pcli.ilo.bios import fetch_bios, format_bios
+from pcli.ilo.bios import fetch_bios, format_bios, set_workload_profile, WORKLOAD_PROFILES
 from pcli.ilo.describe import run_describe, run_describe_ilo_nic, run_describe_fw_update
 from pcli.ilo.power import RESET_TYPES, force_off, graceful_shutdown, power_on, reset_server
 from pcli.ilo.printers import (
@@ -367,12 +367,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
     bios_p = subparsers.add_parser(
         "bios",
-        help="Inspect BIOS settings",
+        help="Inspect and change BIOS settings",
         description=(
-            "Show key BIOS settings for a server.\n\n"
+            "Show or change key BIOS settings for a server.\n\n"
             "Examples:\n"
             "  pcli ilo bios show --host dl325-gen12\n"
             "  pcli ilo bios show --host dl325-gen12 --pending\n"
+            "  pcli ilo bios set workload-profile Virtualization --host dl325-gen12\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -385,6 +386,22 @@ def _build_parser() -> argparse.ArgumentParser:
         "--pending",
         action="store_true",
         help="Show pending (staged) BIOS settings instead of current active settings",
+    )
+
+    bios_set = bios_sub.add_parser("set", help="Change a BIOS setting (staged, takes effect after reboot)")
+    bios_set_sub = bios_set.add_subparsers(dest="bios_set_action", metavar="SETTING")
+    bios_set_sub.required = True
+
+    bios_set_wl = bios_set_sub.add_parser(
+        "workload-profile",
+        help=f"Set WorkloadProfile ({', '.join(WORKLOAD_PROFILES)})",
+    )
+    _add_host(bios_set_wl, required=True)
+    bios_set_wl.add_argument(
+        "profile",
+        choices=WORKLOAD_PROFILES,
+        metavar="PROFILE",
+        help=f"One of: {', '.join(WORKLOAD_PROFILES)}",
     )
 
     subparsers.add_parser(
@@ -1142,19 +1159,24 @@ async def _run_boot(args: argparse.Namespace) -> None:
 
 async def _run_bios(args: argparse.Namespace) -> None:
     host = _load_hosts_or_exit(args.host)[0]
-    pending = getattr(args, "pending", False)
+    action = args.bios_action
     try:
         async with ilo_session(host) as client:
-            attrs = await fetch_bios(client, pending=pending)
+            if action == "show":
+                pending = getattr(args, "pending", False)
+                attrs = await fetch_bios(client, pending=pending)
+                for line in format_bios(attrs, host["name"], pending=pending):
+                    print(line)
+            elif action == "set":
+                if args.bios_set_action == "workload-profile":
+                    profile = await set_workload_profile(client, args.profile)
+                    print(f"✓ WorkloadProfile set to '{profile}' (staged — reboot to apply)")
     except ServerDownOrUnreachableError as exc:
         print(f"ERROR: {host['name']} unreachable: {exc}", file=sys.stderr)
         sys.exit(1)
     except (RuntimeError, TimeoutError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(1)
-
-    for line in format_bios(attrs, host["name"], pending=pending):
-        print(line)
 
 
 async def _cmd_describe(args: argparse.Namespace) -> None:

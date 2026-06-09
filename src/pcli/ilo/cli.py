@@ -342,6 +342,7 @@ def _build_parser() -> argparse.ArgumentParser:
     license_describe.set_defaults(command="list", what="license")
     _add_host_target(license_describe, required=True)
     license_set = license_sub.add_parser("set", help="Apply a license key to a server")
+    license_set.set_defaults(command="license")
     _add_host_target(license_set, required=True)
     license_set.add_argument("key", metavar="KEY", help="License key (format: XXXXX-XXXXX-XXXXX-XXXXX-XXXXX)")
 
@@ -540,7 +541,7 @@ async def _async_main(args: argparse.Namespace) -> None:
         await _run_boot(args)
     elif args.command == "bios":
         await _run_bios(args)
-    elif getattr(args, "license_action", None):
+    elif args.command == "license":
         await _run_license(args)
 
 

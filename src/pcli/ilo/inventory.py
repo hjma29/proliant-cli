@@ -564,9 +564,9 @@ async def apply_license_key(client: ILOClient, key: str) -> None:
     svc_uri = mgr.get("Oem", {}).get("Hpe", {}).get("Links", {}).get("LicenseService", {}).get("@odata.id")
     if not svc_uri:
         raise RuntimeError("LicenseService link not found in iLO Manager resource")
-    resp = await client.post(svc_uri, {"ActivationKey": key})
+    resp = await client.post(svc_uri, {"LicenseKey": key})
     msg_id = (resp.get("error", {}).get("@Message.ExtendedInfo", [{}])[0].get("MessageId", ""))
-    if msg_id and "Success" not in msg_id:
+    if msg_id and "Created" not in msg_id and "Success" not in msg_id:
         raise RuntimeError(f"License apply failed: {msg_id}")
 
 # ---------------------------------------------------------------------------

@@ -58,7 +58,10 @@ from pcli.ilo.config import (
     MAX_WORKERS,
     load_hosts,
 )
-from pcli.ilo.bios import fetch_bios, format_bios, set_workload_profile, WORKLOAD_PROFILES
+from pcli.ilo.bios import (fetch_bios, format_bios, set_workload_profile,
+                           set_serial_console, WORKLOAD_PROFILES,
+                           SERIAL_CONSOLE_PORTS, EMS_CONSOLE_VALUES,
+                           VIRTUAL_SERIAL_PORT_VALUES)
 from pcli.ilo.describe import run_describe, run_describe_ilo_nic, run_describe_fw_update
 from pcli.ilo.power import RESET_TYPES, force_off, graceful_shutdown, power_on, reset_server
 from pcli.ilo.printers import (
@@ -432,6 +435,15 @@ def _build_parser() -> argparse.ArgumentParser:
     bios_set = bios_sub.add_parser("set", help="Change a BIOS setting (staged, takes effect after reboot)")
     bios_set_sub = bios_set.add_subparsers(dest="bios_set_action", metavar="SETTING")
     bios_set_sub.required = True
+    bios_set_sc = bios_set_sub.add_parser("serial-console", help="Set serial console port redirect")
+    bios_set_sc.set_defaults(command="bios", bios_action="set", bios_set_action="serial-console")
+    _add_host_target(bios_set_sc, required=True)
+    bios_set_sc.add_argument("--port", choices=SERIAL_CONSOLE_PORTS, metavar="PORT",
+                              help=f"SerialConsolePort: {', '.join(SERIAL_CONSOLE_PORTS)}")
+    bios_set_sc.add_argument("--ems", choices=EMS_CONSOLE_VALUES, metavar="EMS",
+                              help=f"EmsConsole: {', '.join(EMS_CONSOLE_VALUES)}")
+    bios_set_sc.add_argument("--vsp", choices=VIRTUAL_SERIAL_PORT_VALUES, metavar="VSP",
+                              help=f"VirtualSerialPort: {', '.join(VIRTUAL_SERIAL_PORT_VALUES)}")
     bios_set_wl = bios_set_sub.add_parser("workload-profile", help=f"Set WorkloadProfile ({', '.join(WORKLOAD_PROFILES)})")
     bios_set_wl.set_defaults(command="bios", bios_action="set", bios_set_action="workload-profile")
     _add_host_target(bios_set_wl, required=True)
@@ -1204,6 +1216,21 @@ async def _run_bios(args: argparse.Namespace) -> None:
                 if args.bios_set_action == "workload-profile":
                     profile = await set_workload_profile(client, args.profile)
                     print(f"✓ WorkloadProfile set to '{profile}' (staged — reboot to apply)")
+                elif args.bios_set_action == "serial-console":
+                    await set_serial_console(
+                        client,
+                        port=getattr(args, "port", None),
+                        ems=getattr(args, "ems", None),
+                        vsp=getattr(args, "vsp", None),
+                    )
+                    changes = []
+                    if getattr(args, "port", None):
+                        changes.append(f"SerialConsolePort={args.port}")
+                    if getattr(args, "ems", None):
+                        changes.append(f"EmsConsole={args.ems}")
+                    if getattr(args, "vsp", None):
+                        changes.append(f"VirtualSerialPort={args.vsp}")
+                    print(f"✓ Serial console updated: {', '.join(changes)} (staged — reboot to apply)")
     except ServerDownOrUnreachableError as exc:
         print(f"ERROR: {host['name']} unreachable: {exc}", file=sys.stderr)
         sys.exit(1)

@@ -548,6 +548,15 @@ async def fetch_firmware_raw(client: ILOClient) -> list[tuple[str, str]]:
     return await _fetch_members_raw(client, await client.get_firmware_inventory_uri())
 
 
+async def fetch_license_info(client: ILOClient) -> list[tuple[str, str]]:
+    mgr = await client.get(await client.get_manager_uri())
+    lic = mgr.get("Oem", {}).get("Hpe", {}).get("License", {})
+    return [
+        ("License",  lic.get("LicenseString", "N/A")),
+        ("Type",     lic.get("LicenseType", "N/A")),
+        ("Key",      lic.get("LicenseKey") or "(none)"),
+    ]
+
 # ---------------------------------------------------------------------------
 # Update method classification
 # ---------------------------------------------------------------------------

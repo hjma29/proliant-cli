@@ -101,6 +101,7 @@ _FETCH_DISPATCH: dict[str, FetchFn] = {
     "firmwares": inventory.fetch_fleet_summary,
     "serial": inventory.fetch_serial_info,
     "update_method": inventory.fetch_firmware_update_method,
+    "license": inventory.fetch_license_info,
 }
 
 _RAW_DISPATCH: dict[str, FetchFn] = {
@@ -117,6 +118,7 @@ _RAW_DISPATCH: dict[str, FetchFn] = {
     "firmwares": inventory.fetch_firmware_raw,
     "serial": inventory.fetch_serial_info,
     "update_method": inventory.fetch_firmware_raw,
+    "license": inventory.fetch_license_info,
 }
 
 
@@ -195,6 +197,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "disk-map":      "Drive bay + serial number map (cross-ref with lsblk)",
         "serial":        "Server model, serial number, and product ID (for COM onboarding)",
         "update-method": "Full firmware inventory with update method (BMC / UEFI / OS) per component",
+        "license":       "iLO license info (license name, type, key)",
     }
     for name, help_text in get_choices.items():
         if name == "firmwares":
@@ -969,6 +972,7 @@ async def _run_get(args: argparse.Namespace) -> None:
         "servers":      print_servers_table,
         "serial":       print_serial_table,
         "update_method": print_update_method_table,
+        "license":      lambda r: _print_component_table(r, "iLO License"),
     }
     printers[what](results)
 

@@ -57,6 +57,7 @@ from pcli.ilo.config import (
     MAX_WORKERS,
     load_hosts,
 )
+from pcli.ilo.bios import fetch_bios, format_bios
 from pcli.ilo.describe import run_describe, run_describe_ilo_nic, run_describe_fw_update
 from pcli.ilo.power import RESET_TYPES, force_off, graceful_shutdown, power_on, reset_server
 from pcli.ilo.printers import (
@@ -364,6 +365,28 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     boot_pxe.add_argument("--dry-run", action="store_true", dest="dry_run")
 
+    bios_p = subparsers.add_parser(
+        "bios",
+        help="Inspect BIOS settings",
+        description=(
+            "Show key BIOS settings for a server.\n\n"
+            "Examples:\n"
+            "  pcli ilo bios show --host dl325-gen12\n"
+            "  pcli ilo bios show --host dl325-gen12 --pending\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    bios_sub = bios_p.add_subparsers(dest="bios_action", metavar="ACTION")
+    bios_sub.required = True
+
+    bios_show = bios_sub.add_parser("show", help="Show important BIOS settings")
+    _add_host(bios_show, required=True)
+    bios_show.add_argument(
+        "--pending",
+        action="store_true",
+        help="Show pending (staged) BIOS settings instead of current active settings",
+    )
+
     subparsers.add_parser(
         "init",
         help="Create a starter hosts-ilo.ini at ~/.config/pcli/hosts-ilo.ini",
@@ -484,6 +507,8 @@ async def _async_main(args: argparse.Namespace) -> None:
         await _run_power(args)
     elif args.command == "boot":
         await _run_boot(args)
+    elif args.command == "bios":
+        await _run_bios(args)
 
 
 def _load_hosts_or_exit(name: str | None, hosts_from: str | None = None) -> list[dict]:
@@ -1113,6 +1138,23 @@ async def _run_boot(args: argparse.Namespace) -> None:
         message += f" via [bold]{selected['display_name']}[/bold]"
     message += " [dim](pending until next reset)[/dim]"
     console.print(message)
+
+
+async def _run_bios(args: argparse.Namespace) -> None:
+    host = _load_hosts_or_exit(args.host)[0]
+    pending = getattr(args, "pending", False)
+    try:
+        async with ilo_session(host) as client:
+            attrs = await fetch_bios(client, pending=pending)
+    except ServerDownOrUnreachableError as exc:
+        print(f"ERROR: {host['name']} unreachable: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except (RuntimeError, TimeoutError, ValueError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    for line in format_bios(attrs, host["name"], pending=pending):
+        print(line)
 
 
 async def _cmd_describe(args: argparse.Namespace) -> None:

@@ -552,10 +552,22 @@ async def fetch_license_info(client: ILOClient) -> list[tuple[str, str]]:
     mgr = await client.get(await client.get_manager_uri())
     lic = mgr.get("Oem", {}).get("Hpe", {}).get("License", {})
     return [
-        ("License",  lic.get("LicenseString", "N/A")),
-        ("Type",     lic.get("LicenseType", "N/A")),
-        ("Key",      lic.get("LicenseKey") or "(none)"),
+        ("License", lic.get("LicenseString", "N/A")),
+        ("Type",    lic.get("LicenseType", "N/A")),
+        ("Key",     lic.get("LicenseKey") or "(none)"),
     ]
+
+
+async def apply_license_key(client: ILOClient, key: str) -> None:
+    mgr_uri = await client.get_manager_uri()
+    mgr = await client.get(mgr_uri)
+    svc_uri = mgr.get("Oem", {}).get("Hpe", {}).get("Links", {}).get("LicenseService", {}).get("@odata.id")
+    if not svc_uri:
+        raise RuntimeError("LicenseService link not found in iLO Manager resource")
+    resp = await client.post(svc_uri, {"ActivationKey": key})
+    msg_id = (resp.get("error", {}).get("@Message.ExtendedInfo", [{}])[0].get("MessageId", ""))
+    if msg_id and "Success" not in msg_id:
+        raise RuntimeError(f"License apply failed: {msg_id}")
 
 # ---------------------------------------------------------------------------
 # Update method classification

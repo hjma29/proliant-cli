@@ -398,6 +398,31 @@ def print_serial_table(results: list[tuple[str, str | None, list]]) -> None:
             print(f"  {'':>{srv_w}}   {vals['_error']}")
 
 
+def print_license_table(results: list[tuple[str, str | None, list]]) -> None:
+    keys = ("License", "Type", "Key")
+    server_data: dict[str, dict[str, str]] = {}
+    for host_name, error, rows in results:
+        if error:
+            server_data[host_name] = {k: "ERROR" for k in keys}
+        else:
+            server_data[host_name] = dict(rows)
+
+    srv_w = max(len("Server"), max(len(n) for n in server_data))
+    col_w: dict[str, int] = {k: len(k) for k in keys}
+    for vals in server_data.values():
+        for key in keys:
+            col_w[key] = max(col_w[key], len(vals.get(key, "N/A")))
+
+    header = f"{'Server':<{srv_w}}" + "".join(f"   {key:<{col_w[key]}}" for key in keys)
+    print("\n--- iLO License ---")
+    print(header)
+    print("-" * len(header))
+    for host_name in sorted(server_data):
+        vals = server_data[host_name]
+        row = f"{host_name:<{srv_w}}" + "".join(f"   {vals.get(key, 'N/A'):<{col_w[key]}}" for key in keys)
+        print(row)
+
+
 def print_update_method_table(results: list[tuple[str, str | None, list]]) -> None:
     """Print firmware inventory with update method classification (BMC / UEFI / OS)."""
     from rich import box

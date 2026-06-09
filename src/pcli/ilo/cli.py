@@ -43,6 +43,7 @@ from typing import Any
 import argcomplete
 
 from pcli.ilo.boot import fetch_boot_order, set_one_time_pxe
+from pcli.ilo.inventory import apply_license_key
 from pcli.common.completers import comma_sep_completer
 from pcli.common.display import get_console, make_table, print_json, OutputMode, get_output_mode
 from pcli.common.runner import run_parallel, run_sync
@@ -69,6 +70,7 @@ from pcli.ilo.printers import (
     _print_raw_table,
     print_disk_map_table,
     print_fleet_table,
+    print_license_table,
     print_serial_table,
     print_servers_table,
     print_update_method_table,
@@ -312,7 +314,6 @@ def _build_parser() -> argparse.ArgumentParser:
         "disk-map": "Drive bay + serial number map (cross-ref with lsblk)",
         "serial": "Server model, serial number, and product ID (for COM onboarding)",
         "update-method": "Full firmware inventory with update method (BMC / UEFI / OS) per component",
-        "license": "iLO license info (license name, type, key)",
     }
     for resource, help_text in list_resources.items():
         desc = None
@@ -329,6 +330,20 @@ def _build_parser() -> argparse.ArgumentParser:
             )
         resource_p = subparsers.add_parser(resource, help=help_text)
         _add_list_action(resource_p, fetch_key=resource, help_text=f"List {resource}", description=desc)
+
+    license_p = subparsers.add_parser("license", help="iLO license info and key management")
+    license_sub = license_p.add_subparsers(dest="license_action", metavar="ACTION")
+    license_sub.required = True
+    license_list = license_sub.add_parser("list", help="List iLO license info across fleet")
+    license_list.set_defaults(command="list", what="license")
+    _add_host_target(license_list, required=False, allow_hosts_from=True)
+    license_list.add_argument("--raw", action="store_true")
+    license_describe = license_sub.add_parser("describe", help="Show license details for a single server")
+    license_describe.set_defaults(command="list", what="license")
+    _add_host_target(license_describe, required=True)
+    license_set = license_sub.add_parser("set", help="Apply a license key to a server")
+    _add_host_target(license_set, required=True)
+    license_set.add_argument("key", metavar="KEY", help="License key (format: XXXXX-XXXXX-XXXXX-XXXXX-XXXXX)")
 
     power_p = subparsers.add_parser(
         "power",
@@ -525,6 +540,8 @@ async def _async_main(args: argparse.Namespace) -> None:
         await _run_boot(args)
     elif args.command == "bios":
         await _run_bios(args)
+    elif getattr(args, "license_action", None):
+        await _run_license(args)
 
 
 def _load_hosts_or_exit(name: str | None, hosts_from: str | None = None) -> list[dict]:
@@ -968,7 +985,7 @@ async def _run_get(args: argparse.Namespace) -> None:
         "servers":      print_servers_table,
         "serial":       print_serial_table,
         "update_method": print_update_method_table,
-        "license":      lambda r: _print_component_table(r, "iLO License"),
+        "license":      print_license_table,
     }
     printers[what](results)
 
@@ -1192,6 +1209,24 @@ async def _run_bios(args: argparse.Namespace) -> None:
     except (RuntimeError, TimeoutError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(1)
+
+
+async def _run_license(args: argparse.Namespace) -> None:
+    action = args.license_action
+    if action in ("list", "describe"):
+        await _run_get(args)
+    elif action == "set":
+        host = _load_hosts_or_exit(args.host)[0]
+        try:
+            async with ilo_session(host) as client:
+                await apply_license_key(client, args.key)
+        except ServerDownOrUnreachableError as exc:
+            print(f"ERROR: {host['name']} unreachable: {exc}", file=sys.stderr)
+            sys.exit(1)
+        except (RuntimeError, TimeoutError, ValueError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(1)
+        print(f"✓ License key applied to {host['name']}")
 
 
 async def _cmd_describe(args: argparse.Namespace) -> None:

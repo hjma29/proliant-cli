@@ -1231,7 +1231,7 @@ async def _run_license(args: argparse.Namespace) -> None:
 
 
 async def _cmd_describe(args: argparse.Namespace) -> None:
-    hosts = _load_hosts_or_exit(args.name)
+    hosts = _load_hosts_or_exit(getattr(args, "host", None) or getattr(args, "name", None))
     if not hosts:
         get_console().print("[red]No host found.[/red]")
         sys.exit(1)

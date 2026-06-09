@@ -1143,6 +1143,21 @@ async def _run_boot(args: argparse.Namespace) -> None:
                     entry.get("display_name") or entry.get("correlatable_id") or "—",
                 )
             console.print(desired_table)
+
+        if result.get("persistent_order"):
+            console.print()
+            persist_table = make_table(
+                "Persistent Boot Config Order",
+                ("Pos", {"justify": "right", "no_wrap": True, "style": "cyan"}),
+                ("Device", {"min_width": 30}),
+                box_style=None,
+                show_header=True,
+                header_style="bold",
+                padding=(0, 1),
+            )
+            for i, entry in enumerate(result["persistent_order"], start=1):
+                persist_table.add_row(str(i), entry)
+            console.print(persist_table)
         return
 
     selected = result.get("selected")

@@ -61,6 +61,13 @@ _SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
         ("TpmState",                "TPM State"),
         ("SecureBootStatus",        "Secure Boot"),
     ]),
+    ("Serial Console", [
+        ("VirtualSerialPort",       "Virtual Serial Port"),
+        ("SerialConsolePort",       "Serial Console Port"),
+        ("SerialConsoleBaudRate",   "Baud Rate"),
+        ("SerialConsoleEmulation",  "Emulation"),
+        ("EmsConsole",              "EMS Console"),
+    ]),
 ]
 
 
@@ -79,6 +86,39 @@ async def fetch_bios(client: ILOClient, pending: bool = False) -> dict[str, Any]
     path = "/redfish/v1/systems/1/bios/settings/" if pending else "/redfish/v1/systems/1/bios/"
     data = await client.get(path)
     return data.get("Attributes", {})
+
+
+SERIAL_CONSOLE_PORTS = ["Auto", "Disabled", "Physical", "Virtual"]
+SERIAL_CONSOLE_BAUD_RATES = ["BaudRate9600", "BaudRate19200", "BaudRate38400", "BaudRate57600", "BaudRate115200"]
+SERIAL_CONSOLE_EMULATIONS = ["Vt100", "Ansi", "Vt100Plus", "VtUtf8"]
+EMS_CONSOLE_VALUES = ["Disabled", "Physical", "Virtual"]
+VIRTUAL_SERIAL_PORT_VALUES = ["Com1Irq4", "Com2Irq3", "Disabled"]
+
+
+async def set_serial_console(client: ILOClient, port: str | None = None,
+                              ems: str | None = None,
+                              vsp: str | None = None) -> None:
+    """PATCH serial console settings to BIOS pending settings."""
+    attrs: dict[str, str] = {}
+    if port is not None:
+        attrs["SerialConsolePort"] = port
+    if ems is not None:
+        attrs["EmsConsole"] = ems
+    if vsp is not None:
+        attrs["VirtualSerialPort"] = vsp
+    if not attrs:
+        raise ValueError("No settings specified")
+    resp = await client.patch(
+        "/redfish/v1/systems/1/bios/settings/",
+        {"Attributes": attrs},
+    )
+    msg_id = (
+        resp.get("error", {})
+        .get("@Message.ExtendedInfo", [{}])[0]
+        .get("MessageId", "")
+    )
+    if "Success" not in msg_id and "SystemResetRequired" not in msg_id:
+        raise RuntimeError(f"Unexpected iLO response: {msg_id}")
 
 
 async def set_workload_profile(client: ILOClient, profile: str) -> str:

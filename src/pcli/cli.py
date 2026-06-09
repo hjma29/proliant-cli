@@ -33,8 +33,8 @@ commands:
 Run 'pcli <namespace> --help' for namespace-specific help.
 
 examples:
-  pcli ilo list firmwares                       Firmware summary across all iLO hosts
-  pcli ilo upgrade --host myilo                Upgrade firmware via HPE SDR
+  pcli ilo firmware list                       Firmware summary across all iLO hosts
+  pcli ilo firmware upgrade myilo             Upgrade firmware via HPE SDR
   pcli com login                               Login to HPE GreenLake
   pcli com list devices                         List GreenLake devices
   pcli spp list                                List available gen12 SPP versions
@@ -58,7 +58,7 @@ Register-ArgumentCompleter -Native -CommandName pcli -ScriptBlock {
     if ($pos -eq 1) {
         $candidates = @('ilo', 'com', 'spp', 'oneview', 'qs', 'config', 'update')
     } elseif ($pos -eq 2) {
-        if ($t[1] -eq 'ilo') { $candidates = @('list', 'upgrade', 'init', 'report', 'set', 'describe') }
+        if ($t[1] -eq 'ilo') { $candidates = @('servers','firmware','nic-host','nic-ilo','nic','storage','cpu','memory','com','full','disk-map','serial','update-method','license','power','boot','bios','network','reports','init') }
         elseif ($t[1] -eq 'com') { $candidates = @('login', 'logout', 'list', 'use', 'add', 'report') }
         elseif ($t[1] -eq 'spp') { $candidates = @('list', 'inspect', 'diff') }
         elseif ($t[1] -eq 'oneview') { $candidates = @('list', 'describe', 'report') }
@@ -66,21 +66,30 @@ Register-ArgumentCompleter -Native -CommandName pcli -ScriptBlock {
         elseif ($t[1] -eq 'config') { $candidates = @('list') }
     } elseif ($pos -eq 3) {
         if ($t[1] -eq 'ilo') {
-            if ($t[2] -eq 'list') { $candidates = @('firmwares','ilo','network','nic','storage','cpu','memory','com','full','disk-map','serial','update-method') }
-            elseif ($t[2] -eq 'upgrade') { $candidates = @('components','queue','stage','flash','clear') }
-            elseif ($t[2] -eq 'report') { $candidates = @('memory') }
-            elseif ($t[2] -eq 'set') { $candidates = @('dhcp') }
-            if ($t[2] -eq 'list') { $candidates = @('devices','workspaces','bundles') }
-            elseif ($t[2] -eq 'use') { $candidates = @('workspace') }
-            elseif ($t[2] -eq 'add') { $candidates = @('device') }
-            elseif ($t[2] -eq 'report') { $candidates = @('memory') }
-        } elseif ($t[1] -eq 'oneview') {
+        if ($t[2] -eq 'servers') { $candidates = @('list','describe') }
+        elseif ($t[2] -eq 'firmware') { $candidates = @('list','upgrade','components','queue','stage','flash','clear') }
+        elseif ($t[2] -in @('nic-host','nic-ilo','nic','storage','cpu','memory','com','full','disk-map','serial','update-method','license')) { $candidates = @('list') }
+        elseif ($t[2] -eq 'power') { $candidates = @('reset','on','off','shutdown') }
+        elseif ($t[2] -eq 'boot') { $candidates = @('describe','set') }
+        elseif ($t[2] -eq 'bios') { $candidates = @('describe','set') }
+        elseif ($t[2] -eq 'network') { $candidates = @('set') }
+        elseif ($t[2] -eq 'reports') { $candidates = @('memory','cpu','gpu') }
+        if ($t[2] -eq 'list') { $candidates = @('devices','workspaces','bundles') }
+        elseif ($t[2] -eq 'use') { $candidates = @('workspace') }
+        elseif ($t[2] -eq 'add') { $candidates = @('device') }
+        elseif ($t[2] -eq 'report') { $candidates = @('memory') }
+    } elseif ($t[1] -eq 'oneview') {
             if ($t[2] -eq 'list') { $candidates = @('servers','firmware','networks','networksets','uplinksets','server-profiles') }
             elseif ($t[2] -eq 'describe') { $candidates = @('uplinkset','networkset','server-profile') }
             elseif ($t[2] -eq 'report') { $candidates = @('memory') }
         } elseif ($t[1] -eq 'config') {
             if ($t[2] -eq 'list') { $candidates = @('inventory') }
         }
+    } elseif ($pos -eq 4 -and $t[1] -eq 'ilo') {
+        if ($t[2] -eq 'boot' -and $t[3] -eq 'set') { $candidates = @('pxe') }
+        elseif ($t[2] -eq 'bios' -and $t[3] -eq 'set') { $candidates = @('workload-profile') }
+        elseif ($t[2] -eq 'network' -and $t[3] -eq 'set') { $candidates = @('dhcp','static','route') }
+        elseif ($t[2] -eq 'reports') { $candidates = @('list') }
     }
     $candidates | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
         [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)

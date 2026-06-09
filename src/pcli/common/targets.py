@@ -11,8 +11,8 @@ Supports multiple input methods:
 
 This enables Unix-style chaining::
 
-    pcli ilo list firmwares --json | jq -r '.[] | select(.BIOS < "2.90") | .Server' \\
-      | pcli ilo upgrade --hosts-from -
+    pcli ilo firmware list --json | jq -r '.[] | select(.BIOS < "2.90") | .Server' \\
+      | xargs -n1 pcli ilo firmware upgrade
 """
 
 from __future__ import annotations

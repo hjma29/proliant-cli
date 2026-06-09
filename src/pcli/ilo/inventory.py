@@ -762,7 +762,7 @@ async def fetch_serial_info(client: ILOClient) -> list[tuple[str, str]]:
 
 
 async def fetch_server_list_info(client: ILOClient) -> list[tuple[str, str]]:
-    """Fetch server identity + iLO IP for the 'pcli ilo list servers' table."""
+    """Fetch server identity + iLO IP for the 'pcli ilo servers list' table."""
     sys_uri, mgr_uri = await asyncio.gather(
         client.get_system_uri(),
         client.get_manager_uri(),

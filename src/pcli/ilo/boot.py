@@ -176,9 +176,11 @@ async def fetch_boot_order(client: ILOClient) -> dict[str, Any]:
         })
 
     hpe_boot = await _hpe_boot_settings(client)
+    persistent_order: list[str] = []
     if hpe_boot:
         boot_resource, settings_resource = hpe_boot
         sources = [_hpe_boot_source_entry(source) for source in boot_resource.get("BootSources") or []]
+        persistent_order = settings_resource.get("PersistentBootConfigOrder") or []
 
         pxe_ipv4 = [
             source for source in sources if source["kind"] == "PXE IPv4"
@@ -211,6 +213,7 @@ async def fetch_boot_order(client: ILOClient) -> dict[str, Any]:
         "order": ordered,
         "pxe_ipv4": pxe_ipv4,
         "desired_boot_devices": desired,
+        "persistent_order": persistent_order,
     }
 
 

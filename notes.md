@@ -450,3 +450,159 @@ POST /redfish/v1/Systems/1/Actions/ComputerSystem.Reset/
 ```
 
 ---
+
+## Storage Controllers
+
+### Types Comparison
+| Type | Interface | Speed | RAID | Device Name | Use Case |
+|------|-----------|-------|------|-------------|----------|
+| Smart Array / SAS HBA | SAS 12G/24G | ~2 GB/s | Hardware RAID (dedicated controller) | /dev/sda | Enterprise SAS HDDs/SSDs, large RAID arrays |
+| NVMe | PCIe Gen4/5 | ~7 GB/s | Software RAID or JBOF | /dev/nvme0n1+ | High-performance SSDs, databases, VMs |
+| Embedded SATA | SATA 6G | ~600 MB/s | Software RAID or none | /dev/sda | Boot drives, low-cost/non-critical storage |
+
+### NVMe Key Facts
+- Controller is **built into the drive itself** (on the SSD PCB)
+- Connects directly to CPU via PCIe lanes — no separate HBA needed
+- Each NVMe drive = independent disk (nvme0n1, nvme1n1, nvme2n1, ...)
+- Exception: HPE Tri-Mode controllers (MR416i-p) can manage NVMe+SAS+SATA together for hardware RAID across NVMe
+
+### Smart Array / SAS
+- Separate plug-in controller card (HPE MR/SR series)
+- One card controls all attached SAS/SATA drives
+- Required for hardware RAID 5/6 with battery-backed cache
+- HPE models: MR416i-p, MR216i-p, MR416i-o, MR932i-p (Gen12)
+
+### Gen12 Boot Device Options (most to least common)
+| Option | Device | Notes |
+|--------|--------|-------|
+| HPE NS204i-u (recommended) | nvme0n1 | Dedicated 2-port NVMe boot controller, 2× SSDs in hardware RAID-1. HPE standard for Gen11/12 |
+| Smart Array + SATA SSD | sda | If MR controller present with SATA boot SSD |
+| Embedded SATA | sda | Single point of failure, not recommended |
+| USB/SD card | — | Removed from Gen11+ — too unreliable |
+
+### NS204i-u Details
+- HPE's dedicated NVMe boot controller (Slot 16 by default)
+- Contains 2× NVMe SSDs mirrored (RAID-1) internally
+- Always enumerates as nvme0n1 (lowest index, fixed PCIe slot)
+- Data NVMe drives enumerate as nvme1n1, nvme2n1, etc.
+- Frees front drive bays for data; no separate HBA needed for OS
+
+### dl380-gen11 Lab Storage
+- Boot: NS204i-u (Slot 16), 2× 480GB NVMe RAID-1 → nvme0n1 (447GB usable)
+- Data: 4× SK Hynix 3.2TB NVMe (PE8030/PE8130) → nvme1n1–nvme4n1
+- OS: Ubuntu, PXE boot from BCM (node002), mounts / on nvme0n1p2
+- BCM disk config installs to nvme0n1 (falls through sda/hda/vda → nvme0n1)
+
+### dl325-gen12 Lab Storage
+- NVMe: Samsung PM1735 3.2TB (MO003200KWZQQ) → single data/boot drive
+- Embedded SATA controller present but no drives connected
+- No Smart Array / SAS controller installed
+
+### DL325 Gen12 Drive Bay Architecture
+
+**Chassis variants** (chosen at order time, mutually exclusive):
+| Chassis | Boxes | Drive slots | Form factor |
+|---------|-------|-------------|-------------|
+| 8SFF CTO | Box1 only | 8 bays | 2.5" SFF SAS/SATA/NVMe |
+| SFF/EDSFF CTO | Box1–5 | up to 10 SFF or 20 E3.S | Modular, mixed |
+| GPU CTO | Box1–2 | 4 SFF or 8 E3.S | GPU-focused |
+
+**8SFF CTO (dl325-gen12 lab server):**
+- Box1: 8 bays, backplane = `8 SFF 24G x4NVMe/SAS UBM6 BC BP`
+- Box2: optional 2-bay add-on (not installed on lab server)
+- All 8 bays: Direct Attach x4 PCIe Gen5 to CPU (no controller in path)
+- iLO labels them: `Box 1 Bay 1–8`
+
+**UBM (Universal Backplane Module):**
+- Each UBM chip manages 2 drive bays
+- 8SFF backplane has 4 UBM chips → iLO reports 4 firmware entries for same BP
+- Each UBM handles: drive presence detection, LED control, signal routing (NVMe vs SAS/SATA)
+- UBM6 = 6th gen UBM, supports NVMe x4, SAS 24G, SATA 6G in same slot
+
+**EDSFF / E3.S form factor:**
+- Ruler-shaped "gumstick" drive, designed for datacenter airflow and density
+- Cannot mix with SFF in same backplane — requires different cage entirely
+- E3.S = one EDSFF size variant; Gen5 NVMe native
+- DL325 Gen12 supports 20× E3.S drives in SFF/EDSFF CTO chassis variant
+
+**HPE part number vs spare part number:**
+- Product number (P#####-B21): ordering/option number, used in QuickSpec, for new purchases
+- Spare part number (P#####-001): field replacement number, shown in Partsurfer
+- Same physical drive = two different HPE part numbers
+
+**iLO does NOT expose HPE part numbers (P#####-B21 or -001):**
+- Drive `PartNumber` field = empty in Redfish API and ilorest
+- CPU, NIC PartNumber fields = also empty
+- Only source of B21/001 numbers: QuickSpec docs, Partsurfer (by server serial)
+- `MO003200KWZQQ` (Samsung model) ≠ HPE part number; not searchable in Partsurfer
+
+**PCIe slots on dl325-gen12:**
+| Slot | Type | State |
+|------|------|-------|
+| PCI-E Slot 1 | Gen5 x16 | Broadcom P225p NIC |
+| PCI-E Slot 2 | Gen5 x16 | Empty |
+| OCP Slot A | Gen4 OCP3 | Empty |
+| OCP Slot B | Gen4 OCP3 | Empty |
+| NVMe Box1 Bay1 | Gen5 U.2 | PM1735 3.2TB (Gen4 drive in Gen5 slot) |
+| NVMe Box1 Bay2–8 | Gen5 U.2 | Empty |
+
+---
+
+## HPE iLO Boot Order — Three Layers (Critical)
+
+HPE Gen12 (iLO 7) has **three separate boot order settings**. Confusing them causes persistent boot order scrambling.
+
+### 1. BootOrder (Redfish standard)
+- **Path:** `PATCH /redfish/v1/Systems/1/` → `Boot.BootOrder`
+- **Format:** UEFI NVRAM entries: `["Boot0016", "Boot000E", "Boot000D", ...]`
+- **Priority:** LOWEST — gets **overwritten on every reboot** by PersistentBootConfigOrder
+- **Scope:** Current boot only; survives until next reboot
+- What `pcli ilo boot show` currently displays
+
+### 2. PersistentBootConfigOrder (HPE OEM — the real source of truth)
+- **Path:** `PATCH /redfish/v1/systems/1/bios/oem/hpe/boot/settings/`
+- **Format:** HPE structured strings: `["NVMe.DriveBay.1.1", "NIC.Slot.1.1.Httpv4", ...]`
+- **Priority:** HIGHEST — BIOS translates this to BootOrder on **every reboot**
+- **Scope:** Persistent across reboots
+- **This is the one you must fix to permanently change boot order**
+- OS-installed UEFI entries (e.g. "redhat" Boot0016) get placed on top of this order automatically
+
+### 3. DesiredBootDevices (HPE OEM — one-time NIC selector)
+- **Path:** `PATCH /redfish/v1/systems/1/bios/oem/hpe/boot/settings/` → `DesiredBootDevices`
+- **Format:** Array of 5 slots with `CorrelatableID` (PCIe path)
+- **Effect:** Moves matched NIC to top of PersistentBootConfigOrder on next reboot
+- **Problem:** Cannot distinguish HTTP vs PXE (same CorrelatableID) → always picks first NIC match
+- **Clear it:** PATCH all 5 entries with empty `CorrelatableID: ""`
+
+### Boot order priority chain
+```
+Every reboot:
+  PersistentBootConfigOrder  →  translated to BootOrder (NVRAM)
+  OS boot vars (Boot0016 "redhat") placed on top automatically
+  DesiredBootDevices (if set) moves NIC to top before translation
+```
+
+### Fix for scrambled boot order (NIC at top after PXE boot)
+```bash
+# 1. Fix persistent order (NVMe first)
+curl -sk -u Administrator:<pw> -X PATCH https://<ilo-ip>/redfish/v1/systems/1/bios/oem/hpe/boot/settings/ \
+  -H "Content-Type: application/json" \
+  -d '{"PersistentBootConfigOrder": ["NVMe.DriveBay.1.1","Generic.USB.1.1","NIC.Slot.1.1.Httpv4","NIC.Slot.1.1.IPv4","NIC.Slot.1.1.Httpv6","NIC.Slot.1.1.IPv6"]}'
+
+# 2. Clear stale DesiredBootDevices
+curl -sk -u Administrator:<pw> -X PATCH https://<ilo-ip>/redfish/v1/systems/1/bios/oem/hpe/boot/settings/ \
+  -H "Content-Type: application/json" \
+  -d '{"DesiredBootDevices": [{"CorrelatableID":"","Lun":"","Wwn":"","iScsiTargetName":""},{"CorrelatableID":"","Lun":"","Wwn":"","iScsiTargetName":""},{"CorrelatableID":"","Lun":"","Wwn":"","iScsiTargetName":""},{"CorrelatableID":"","Lun":"","Wwn":"","iScsiTargetName":""},{"CorrelatableID":"","Lun":"","Wwn":"","iScsiTargetName":""}]}'
+
+# 3. Fix current active BootOrder immediately
+curl -sk -u Administrator:<pw> -X PATCH https://<ilo-ip>/redfish/v1/Systems/1/ \
+  -H "Content-Type: application/json" \
+  -d '{"Boot": {"BootOrder": ["Boot0016","Boot000E","Boot000D","Boot000F","Boot0012","Boot0010","Boot0013"]}}'
+```
+
+### pcli ilo boot pxe — how it works (correct approach)
+- Sets `BootSourceOverrideEnabled: Once` + `BootSourceOverrideTarget: UefiTarget`
+- Sets `UefiTargetBootSourceOverride` to exact PXE device path (no `/Uri()` suffix)
+- HTTP path has `/Uri()` suffix; PXE does not — that's how they're distinguished
+- Does NOT use DesiredBootDevices (causes boot order scrambling)
+- After one-time PXE boot, iLO resets override to Disabled/None automatically

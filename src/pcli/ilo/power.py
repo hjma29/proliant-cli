@@ -13,7 +13,12 @@ RESET_TYPES = frozenset(
 )
 
 
-async def reset_server(client: ILOClient, reset_type: str = "GracefulRestart") -> dict:
+async def reset_server(
+    client: ILOClient,
+    reset_type: str = "GracefulRestart",
+    *,
+    dry_run: bool = False,
+) -> dict:
     """Send a reset action to the server."""
     if reset_type not in RESET_TYPES:
         raise ValueError(f"Invalid reset_type '{reset_type}'. Valid values: {sorted(RESET_TYPES)}")
@@ -27,17 +32,21 @@ async def reset_server(client: ILOClient, reset_type: str = "GracefulRestart") -
     if not target_uri:
         raise RuntimeError("ComputerSystem.Reset action not found on this system")
 
-    await client.post(target_uri, {"ResetType": reset_type})
+    payload = {"ResetType": reset_type}
+    if dry_run:
+        return {"status": "dry-run", "url": target_uri, "payload": payload, "reset_type": reset_type}
+
+    await client.post(target_uri, payload)
     return {"status": "accepted", "url": target_uri, "reset_type": reset_type}
 
 
-async def power_on(client: ILOClient) -> dict:
-    return await reset_server(client, reset_type="On")
+async def power_on(client: ILOClient, *, dry_run: bool = False) -> dict:
+    return await reset_server(client, reset_type="On", dry_run=dry_run)
 
 
-async def graceful_shutdown(client: ILOClient) -> dict:
-    return await reset_server(client, reset_type="GracefulShutdown")
+async def graceful_shutdown(client: ILOClient, *, dry_run: bool = False) -> dict:
+    return await reset_server(client, reset_type="GracefulShutdown", dry_run=dry_run)
 
 
-async def force_off(client: ILOClient) -> dict:
-    return await reset_server(client, reset_type="ForceOff")
+async def force_off(client: ILOClient, *, dry_run: bool = False) -> dict:
+    return await reset_server(client, reset_type="ForceOff", dry_run=dry_run)

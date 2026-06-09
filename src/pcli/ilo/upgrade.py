@@ -283,11 +283,11 @@ async def run_fw_upgrade(
                 console.print(
                     f"\n[bold yellow]Updates queued.[/bold yellow] Reboot [bold]{host['name']}[/bold] to apply.\n"
                     f"  • Use [bold]--reboot[/bold] flag to reboot automatically\n"
-                    f"  • Run [bold]pcli ilo upgrade queue --host {host['name']}[/bold] to check queue status"
+                    f"  • Run [bold]pcli ilo firmware queue {host['name']}[/bold] to check queue status"
                 )
         else:
             console.print(
                 f"\n[bold yellow]Updates queued.[/bold yellow] Reboot [bold]{host['name']}[/bold] to apply.\n"
                 f"  • Use [bold]--reboot[/bold] flag to reboot automatically\n"
-                f"  • Run [bold]pcli ilo upgrade queue --host {host['name']}[/bold] to check queue status"
+                f"  • Run [bold]pcli ilo firmware queue {host['name']}[/bold] to check queue status"
             )

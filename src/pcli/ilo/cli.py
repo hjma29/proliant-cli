@@ -162,144 +162,173 @@ def _build_parser() -> argparse.ArgumentParser:
         except Exception:  # intentional: tab completion must never print to stdout
             return []
 
-    def _add_host(p: argparse.ArgumentParser, required: bool = False) -> None:
-        p.add_argument(
-            "--host", metavar="NAME[,NAME,...]", required=required,
-            help="Target host(s) by name — comma-separated for multiple",
-        ).completer = _host_completer
-        p.add_argument(
-            "--hosts-from", metavar="FILE", dest="hosts_from",
-            help="Read target hosts from FILE (one per line), or '-' for stdin",
+    def _add_host_target(
+        p: argparse.ArgumentParser,
+        *,
+        required: bool,
+        allow_hosts_from: bool = False,
+        metavar: str = "SERVER",
+        help_text: str = "Server name from hosts-ilo.ini",
+    ) -> None:
+        arg = p.add_argument(
+            "host",
+            metavar=metavar,
+            nargs=None if required else "?",
+            help=help_text,
         )
+        arg.completer = _host_completer
+        if allow_hosts_from:
+            p.add_argument(
+                "--hosts-from",
+                metavar="FILE",
+                dest="hosts_from",
+                help="Read target hosts from FILE (one per line), or '-' for stdin",
+            )
 
-    subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
+    def _add_list_action(
+        resource_parser: argparse.ArgumentParser,
+        *,
+        fetch_key: str,
+        help_text: str,
+        description: str | None = None,
+    ) -> argparse.ArgumentParser:
+        action_sub = resource_parser.add_subparsers(dest="action", metavar="ACTION")
+        action_sub.required = True
+        kwargs: dict[str, object] = {"help": help_text}
+        if description:
+            kwargs["description"] = description
+            kwargs["formatter_class"] = argparse.RawDescriptionHelpFormatter
+        list_p = action_sub.add_parser("list", **kwargs)
+        list_p.set_defaults(command="list", what=fetch_key)
+        _add_host_target(list_p, required=False, allow_hosts_from=True)
+        list_p.add_argument("--raw", action="store_true", help="Dump unprocessed Redfish API response (bypasses pcli field parsing)")
+        return list_p
+
+    subparsers = parser.add_subparsers(dest="resource", metavar="RESOURCE")
     subparsers.required = True
 
-    get_p = subparsers.add_parser(
-        "list",
-        help="List hardware/firmware inventory",
-        description="Query iLO and display hardware or firmware information.",
-    )
-    get_sub = get_p.add_subparsers(dest="what", metavar="WHAT")
-    get_sub.required = True
+    servers_p = subparsers.add_parser("servers", help="Server inventory and details")
+    servers_sub = servers_p.add_subparsers(dest="servers_action", metavar="ACTION")
+    servers_sub.required = True
+    servers_list = servers_sub.add_parser("list", help="List servers")
+    servers_list.set_defaults(command="list", what="servers")
+    _add_host_target(servers_list, required=False, allow_hosts_from=True)
+    servers_list.add_argument("--raw", action="store_true", help="Dump unprocessed Redfish API response (bypasses pcli field parsing)")
+    servers_desc = servers_sub.add_parser("describe", help="Show full details for a single server")
+    servers_desc.set_defaults(command="describe")
+    _add_host_target(servers_desc, required=True, metavar="NAME")
+    servers_desc.add_argument("--ilo-nic", action="store_true", dest="ilo_nic",
+                              help="Show iLO dedicated NIC details (DHCP/static, IP, DNS, routes, LLDP, MAC)")
+    servers_desc.add_argument("--raw", action="store_true",
+                              help="With --ilo-nic: dump unprocessed Redfish JSON for Manager EthernetInterfaces")
+    servers_desc.add_argument("--firmware-update", action="store_true", dest="firmware_update",
+                              help="Show firmware update status: UpdateService state, last bundle report, component repository")
 
-    get_choices = {
-        "servers":       "Server list: serial, OS name, iLO name, model, IP",
-        "firmwares":     "Firmware summary: key firmware versions per server (one row per server)",
-        "nic-host":      "Host NIC firmware versions",
-        "nic-ilo":       "iLO dedicated NIC: LLDP status, neighbor info, IP",
-        "nic":           "NIC link status + MAC address",
-        "storage":       "Storage controller + drive firmware",
-        "cpu":           "CPU model + microcode version",
-        "memory":        "DIMM info + firmware revision",
-        "com":           "HPE Compute Ops Management registration status",
-        "full":          "Full firmware inventory",
-        "disk-map":      "Drive bay + serial number map (cross-ref with lsblk)",
-        "serial":        "Server model, serial number, and product ID (for COM onboarding)",
-        "update-method": "Full firmware inventory with update method (BMC / UEFI / OS) per component",
-        "license":       "iLO license info (license name, type, key)",
-    }
-    for name, help_text in get_choices.items():
-        if name == "firmwares":
-            from pcli.ilo.inventory import FLEET_KEYS
-            sp = get_sub.add_parser(
-                name,
-                help=help_text,
-                description=(
-                    "Show firmware summary for all servers (one row per server).\n\n"
-                    "Examples:\n"
-                    "  pcli ilo list firmwares                         All servers, all columns\n"
-                    "  pcli ilo list firmwares --host dl325-gen12      Single server\n"
-                    "  pcli ilo list firmwares --fields bios,ilo       BIOS and iLO only\n"
-                    "  pcli ilo list firmwares --fields model,bios     Model and BIOS only\n"
-                    "  pcli ilo list firmwares --fields nic-fw,storage-fw  NIC and Storage only\n"
-                    f"\nAvailable --fields (case-insensitive): {', '.join(FLEET_KEYS)}"
-                ),
-                formatter_class=argparse.RawDescriptionHelpFormatter,
-            )
-            _add_host(sp)
-            sp.add_argument("--raw", action="store_true", help="Dump unprocessed Redfish API response (bypasses pcli field parsing)")
-            fleet_fields_arg = sp.add_argument(
-                "--fields", metavar="FIELDS",
-                help=(
-                    f"Comma-separated columns (case-insensitive). "
-                    f"Available: {', '.join(FLEET_KEYS)}. Default: all"
-                ),
-            )
-            fleet_keys_lower = tuple(k.lower() for k in FLEET_KEYS)
-            fleet_fields_arg.completer = _ilo_fields_completer(fleet_keys_lower)  # type: ignore[attr-defined]
-        elif name == "update-method":
-            sp = get_sub.add_parser(
-                name,
-                help=help_text,
-                description=(
-                    "Show all firmware components with update method classification.\n\n"
-                    "Update methods:\n"
-                    "  BMC  — iLO flashes the component directly (no server reboot needed)\n"
-                    "  UEFI — UEFI processes it on next server reboot (no OS required)\n"
-                    "  OS   — Requires a running OS + iSUT/SUM RuntimeAgent\n\n"
-                    "Examples:\n"
-                    "  pcli ilo list update-method                        All servers\n"
-                    "  pcli ilo list update-method --host dl345-gen12     Single server\n"
-                    "  pcli ilo list update-method --host dl380-gen11     Show Gen11 server\n"
-                ),
-                formatter_class=argparse.RawDescriptionHelpFormatter,
-            )
-            _add_host(sp)
-            sp.add_argument("--raw", action="store_true", help="Dump unprocessed Redfish API response (bypasses pcli field parsing)")
-        else:
-            sp = get_sub.add_parser(name, help=help_text)
-            _add_host(sp)
-            sp.add_argument("--raw", action="store_true", help="Dump unprocessed Redfish API response (bypasses pcli field parsing)")
-
-    upgrade_p = subparsers.add_parser(
-        "upgrade",
-        help="Firmware upgrade and task queue management",
+    firmware_p = subparsers.add_parser(
+        "firmware",
+        help="Firmware inventory and update operations",
         description=(
-            "Auto-upgrade outdated firmware from HPE SDR, with optional component filtering.\n"
-            "Subcommands give access to individual staging and queue operations.\n\n"
+            "List firmware inventory or manage staged firmware updates.\n\n"
             "Examples:\n"
-            "  pcli ilo upgrade --host dl325-gen12                       Upgrade all components\n"
-            "  pcli ilo upgrade --host dl325-gen12 --dry-run             Preview without changes\n"
-            "  pcli ilo upgrade --host dl325-gen12 --reboot              Upgrade and reboot\n"
-            "  pcli ilo upgrade --host dl325-gen12 --component bios      BIOS / System ROM only\n"
-            "  pcli ilo upgrade --host dl325-gen12 --component ilo       iLO firmware only\n"
-            "  pcli ilo upgrade --host dl325-gen12 --component nic       NIC firmware only\n"
-            "  pcli ilo upgrade --host dl325-gen12 --component storage   Storage controllers only\n"
-            "  pcli ilo upgrade --host dl325-gen12 --component bios --dry-run   Preview BIOS upgrade\n"
+            "  pcli ilo firmware list\n"
+            "  pcli ilo firmware list dl325-gen12\n"
+            "  pcli ilo firmware list --fields bios,ilo\n"
+            "  pcli ilo firmware upgrade dl325-gen12 --dry-run\n"
+            "  pcli ilo firmware queue dl325-gen12\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    upgrade_sub = upgrade_p.add_subparsers(dest="upgrade_action", metavar="ACTION")
-    upgrade_sub.required = False
-    upgrade_p.set_defaults(upgrade_action="auto")
+    firmware_sub = firmware_p.add_subparsers(dest="firmware_action", metavar="ACTION")
+    firmware_sub.required = True
+    firmware_list = firmware_sub.add_parser(
+        "list",
+        help="List firmware summary",
+        description=(
+            "Show firmware summary for all servers (one row per server).\n\n"
+            "Examples:\n"
+            "  pcli ilo firmware list\n"
+            "  pcli ilo firmware list dl325-gen12\n"
+            "  pcli ilo firmware list --fields bios,ilo\n"
+            "  pcli ilo firmware list --fields model,bios\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    firmware_list.set_defaults(command="list", what="firmwares")
+    _add_host_target(firmware_list, required=False, allow_hosts_from=True)
+    firmware_list.add_argument("--raw", action="store_true", help="Dump unprocessed Redfish API response (bypasses pcli field parsing)")
+    from pcli.ilo.inventory import FLEET_KEYS
+    fields_arg = firmware_list.add_argument(
+        "--fields",
+        metavar="FIELDS",
+        help=(
+            f"Comma-separated columns (case-insensitive). "
+            f"Available: {', '.join(FLEET_KEYS)}. Default: all"
+        ),
+    )
+    fields_arg.completer = _ilo_fields_completer(tuple(k.lower() for k in FLEET_KEYS))  # type: ignore[attr-defined]
 
-    _add_host(upgrade_p, required=False)
-    upgrade_p.add_argument("--dry-run", action="store_true", dest="dry_run", help="Preview without making changes")
-    upgrade_p.add_argument("--reboot", action="store_true", help="Reboot server after queuing all updates")
-    upgrade_p.add_argument(
+    fw_upgrade = firmware_sub.add_parser("upgrade", help="Upgrade outdated firmware")
+    fw_upgrade.set_defaults(command="upgrade", upgrade_action="auto")
+    _add_host_target(fw_upgrade, required=True)
+    fw_upgrade.add_argument("--dry-run", action="store_true", dest="dry_run", help="Preview without making changes")
+    fw_upgrade.add_argument("--reboot", action="store_true", help="Reboot server after queuing all updates")
+    fw_upgrade.add_argument(
         "--component",
         metavar="FILTER",
         choices=["all", "ilo", "bios", "nic", "storage"],
         default="all",
         help="Limit upgrade to a specific component type: all | ilo | bios | nic | storage (default: all)",
     )
+    fw_components = firmware_sub.add_parser("components", help="List staged components in iLO repository")
+    fw_components.set_defaults(command="upgrade", upgrade_action="components")
+    _add_host_target(fw_components, required=True)
+    fw_queue = firmware_sub.add_parser("queue", help="Show the firmware update task queue")
+    fw_queue.set_defaults(command="upgrade", upgrade_action="queue")
+    _add_host_target(fw_queue, required=True)
+    fw_stage = firmware_sub.add_parser("stage", help="Stage a firmware package from a URL")
+    fw_stage.set_defaults(command="upgrade", upgrade_action="stage")
+    _add_host_target(fw_stage, required=True)
+    fw_stage.add_argument("--url", metavar="URL", required=True, help="Direct URL to .fwpkg file on HPE SDR")
+    fw_stage.add_argument("--dry-run", action="store_true", dest="dry_run")
+    fw_flash = firmware_sub.add_parser("flash", help="Queue a staged file for flash on next reboot")
+    fw_flash.set_defaults(command="upgrade", upgrade_action="flash")
+    _add_host_target(fw_flash, required=True)
+    fw_flash.add_argument("filename", metavar="FILENAME", help="Filename of the staged component to queue")
+    fw_flash.add_argument("--dry-run", action="store_true", dest="dry_run")
+    fw_clear = firmware_sub.add_parser("clear", help="Clear all entries from the task queue")
+    fw_clear.set_defaults(command="upgrade", upgrade_action="clear")
+    _add_host_target(fw_clear, required=True)
+    fw_clear.add_argument("--dry-run", action="store_true", dest="dry_run")
 
-    up_comp = upgrade_sub.add_parser("components", help="List staged components in iLO repository")
-    _add_host(up_comp, required=True)
-    up_queue = upgrade_sub.add_parser("queue", help="Show the firmware update task queue")
-    _add_host(up_queue, required=True)
-    up_stage = upgrade_sub.add_parser("stage", help="Stage a firmware package from a URL")
-    _add_host(up_stage, required=True)
-    up_stage.add_argument("--url", metavar="URL", required=True, help="Direct URL to .fwpkg file on HPE SDR")
-    up_stage.add_argument("--dry-run", action="store_true", dest="dry_run")
-    up_flash = upgrade_sub.add_parser("flash", help="Queue a staged file for flash on next reboot")
-    _add_host(up_flash, required=True)
-    up_flash.add_argument("filename", metavar="FILENAME", help="Filename of the staged component to queue")
-    up_flash.add_argument("--dry-run", action="store_true", dest="dry_run")
-    up_clear = upgrade_sub.add_parser("clear", help="Clear all entries from the task queue")
-    _add_host(up_clear, required=True)
-    up_clear.add_argument("--dry-run", action="store_true", dest="dry_run")
+    list_resources = {
+        "nic-host": "Host NIC firmware versions",
+        "nic-ilo": "iLO dedicated NIC: LLDP status, neighbor info, IP",
+        "nic": "NIC link status + MAC address",
+        "storage": "Storage controller + drive firmware",
+        "cpu": "CPU model + microcode version",
+        "memory": "DIMM info + firmware revision",
+        "com": "HPE Compute Ops Management registration status",
+        "full": "Full firmware inventory",
+        "disk-map": "Drive bay + serial number map (cross-ref with lsblk)",
+        "serial": "Server model, serial number, and product ID (for COM onboarding)",
+        "update-method": "Full firmware inventory with update method (BMC / UEFI / OS) per component",
+        "license": "iLO license info (license name, type, key)",
+    }
+    for resource, help_text in list_resources.items():
+        desc = None
+        if resource == "update-method":
+            desc = (
+                "Show all firmware components with update method classification.\n\n"
+                "Update methods:\n"
+                "  BMC  — iLO flashes the component directly (no server reboot needed)\n"
+                "  UEFI — UEFI processes it on next server reboot (no OS required)\n"
+                "  OS   — Requires a running OS + iSUT/SUM RuntimeAgent\n\n"
+                "Examples:\n"
+                "  pcli ilo update-method list\n"
+                "  pcli ilo update-method list dl345-gen12\n"
+            )
+        resource_p = subparsers.add_parser(resource, help=help_text)
+        _add_list_action(resource_p, fetch_key=resource, help_text=f"List {resource}", description=desc)
 
     power_p = subparsers.add_parser(
         "power",
@@ -307,19 +336,19 @@ def _build_parser() -> argparse.ArgumentParser:
         description=(
             "Issue Redfish ComputerSystem.Reset actions through iLO.\n\n"
             "Examples:\n"
-            "  pcli ilo power reset --host dl325-gen12\n"
-            "  pcli ilo power reset --host dl325-gen12 --reset-type ForceRestart\n"
-            "  pcli ilo power shutdown --host dl325-gen12\n"
-            "  pcli ilo power off --host dl325-gen12\n"
-            "  pcli ilo power on --host dl325-gen12\n"
+            "  pcli ilo power reset dl325-gen12\n"
+            "  pcli ilo power reset dl325-gen12 --reset-type ForceRestart\n"
+            "  pcli ilo power shutdown dl325-gen12\n"
+            "  pcli ilo power off dl325-gen12\n"
+            "  pcli ilo power on dl325-gen12\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     power_sub = power_p.add_subparsers(dest="power_action", metavar="ACTION")
     power_sub.required = True
-
     power_reset = power_sub.add_parser("reset", help="Reset a server")
-    _add_host(power_reset, required=True)
+    power_reset.set_defaults(command="power", power_action="reset")
+    _add_host_target(power_reset, required=True)
     power_reset.add_argument(
         "--reset-type",
         choices=sorted(RESET_TYPES),
@@ -327,18 +356,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Redfish ResetType to send (default: GracefulRestart)",
     )
     power_reset.add_argument("--dry-run", action="store_true", dest="dry_run")
-
-    power_on_p = power_sub.add_parser("on", help="Power on a server")
-    _add_host(power_on_p, required=True)
-    power_on_p.add_argument("--dry-run", action="store_true", dest="dry_run")
-
-    power_off_p = power_sub.add_parser("off", help="Force power off a server")
-    _add_host(power_off_p, required=True)
-    power_off_p.add_argument("--dry-run", action="store_true", dest="dry_run")
-
-    power_shutdown_p = power_sub.add_parser("shutdown", help="Gracefully shut down a server")
-    _add_host(power_shutdown_p, required=True)
-    power_shutdown_p.add_argument("--dry-run", action="store_true", dest="dry_run")
+    for action_name, help_text in {
+        "on": "Power on a server",
+        "off": "Force power off a server",
+        "shutdown": "Gracefully shut down a server",
+    }.items():
+        action_parser = power_sub.add_parser(action_name, help=help_text)
+        action_parser.set_defaults(command="power", power_action=action_name)
+        _add_host_target(action_parser, required=True)
+        action_parser.add_argument("--dry-run", action="store_true", dest="dry_run")
 
     boot_p = subparsers.add_parser(
         "boot",
@@ -346,26 +372,26 @@ def _build_parser() -> argparse.ArgumentParser:
         description=(
             "Show current boot order and set one-time PXE IPv4 boot.\n\n"
             "Examples:\n"
-            "  pcli ilo boot show --host dl325-gen12\n"
-            "  pcli ilo boot pxe --host dl325-gen12\n"
-            "  pcli ilo boot pxe --host dl325-gen12 --port \"Slot 1 Port 1\"\n"
-            "  pcli ilo boot pxe --host dl325-gen12 --port BC97E1E296C0 --dry-run\n"
+            "  pcli ilo boot describe dl325-gen12\n"
+            "  pcli ilo boot set pxe dl325-gen12\n"
+            "  pcli ilo boot set pxe dl325-gen12 --port \"Slot 1 Port 1\"\n"
+            "  pcli ilo boot set pxe dl325-gen12 --port BC97E1E296C0 --dry-run\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    boot_sub = boot_p.add_subparsers(dest="boot_action", metavar="ACTION")
+    boot_sub = boot_p.add_subparsers(dest="boot_resource_action", metavar="ACTION")
     boot_sub.required = True
-
-    boot_show = boot_sub.add_parser("show", help="Show current boot order and one-time override state")
-    _add_host(boot_show, required=True)
-
-    boot_pxe = boot_sub.add_parser("pxe", help="Set one-time PXE IPv4 boot")
-    _add_host(boot_pxe, required=True)
-    boot_pxe.add_argument(
-        "--port",
-        metavar="MATCH",
-        help="Specific PXE IPv4 port to boot from; matches boot option display text or MAC",
-    )
+    boot_desc = boot_sub.add_parser("describe", help="Show current boot order and one-time override state")
+    boot_desc.set_defaults(command="boot", boot_action="show")
+    _add_host_target(boot_desc, required=True)
+    boot_set = boot_sub.add_parser("set", help="Change one-time boot behavior")
+    boot_set_sub = boot_set.add_subparsers(dest="boot_set_action", metavar="SETTING")
+    boot_set_sub.required = True
+    boot_pxe = boot_set_sub.add_parser("pxe", help="Set one-time PXE IPv4 boot")
+    boot_pxe.set_defaults(command="boot", boot_action="pxe")
+    _add_host_target(boot_pxe, required=True)
+    boot_pxe.add_argument("--port", metavar="MATCH",
+                          help="Specific PXE IPv4 port to boot from; matches boot option display text or MAC")
     boot_pxe.add_argument("--dry-run", action="store_true", dest="dry_run")
 
     bios_p = subparsers.add_parser(
@@ -374,118 +400,88 @@ def _build_parser() -> argparse.ArgumentParser:
         description=(
             "Show or change key BIOS settings for a server.\n\n"
             "Examples:\n"
-            "  pcli ilo bios show --host dl325-gen12\n"
-            "  pcli ilo bios show --host dl325-gen12 --pending\n"
-            "  pcli ilo bios set workload-profile Virtualization --host dl325-gen12\n"
+            "  pcli ilo bios describe dl325-gen12\n"
+            "  pcli ilo bios describe dl325-gen12 --pending\n"
+            "  pcli ilo bios set workload-profile dl325-gen12 LowLatency\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     bios_sub = bios_p.add_subparsers(dest="bios_action", metavar="ACTION")
     bios_sub.required = True
-
-    bios_show = bios_sub.add_parser("show", help="Show important BIOS settings")
-    _add_host(bios_show, required=True)
-    bios_show.add_argument(
-        "--pending",
-        action="store_true",
-        help="Show pending (staged) BIOS settings instead of current active settings",
-    )
-
+    bios_desc = bios_sub.add_parser("describe", help="Show important BIOS settings")
+    bios_desc.set_defaults(command="bios", bios_action="show")
+    _add_host_target(bios_desc, required=True)
+    bios_desc.add_argument("--pending", action="store_true",
+                           help="Show pending (staged) BIOS settings instead of current active settings")
     bios_set = bios_sub.add_parser("set", help="Change a BIOS setting (staged, takes effect after reboot)")
     bios_set_sub = bios_set.add_subparsers(dest="bios_set_action", metavar="SETTING")
     bios_set_sub.required = True
+    bios_set_wl = bios_set_sub.add_parser("workload-profile", help=f"Set WorkloadProfile ({', '.join(WORKLOAD_PROFILES)})")
+    bios_set_wl.set_defaults(command="bios", bios_action="set", bios_set_action="workload-profile")
+    _add_host_target(bios_set_wl, required=True)
+    bios_set_wl.add_argument("profile", choices=WORKLOAD_PROFILES, metavar="PROFILE",
+                             help=f"One of: {', '.join(WORKLOAD_PROFILES)}")
 
-    bios_set_wl = bios_set_sub.add_parser(
-        "workload-profile",
-        help=f"Set WorkloadProfile ({', '.join(WORKLOAD_PROFILES)})",
-    )
-    _add_host(bios_set_wl, required=True)
-    bios_set_wl.add_argument(
-        "profile",
-        choices=WORKLOAD_PROFILES,
-        metavar="PROFILE",
-        help=f"One of: {', '.join(WORKLOAD_PROFILES)}",
-    )
-
-    subparsers.add_parser(
-        "init",
-        help="Create a starter hosts-ilo.ini at ~/.config/pcli/hosts-ilo.ini",
-        description="Create ~/.config/pcli/hosts-ilo.ini with example entries to fill in.",
-    )
-
-    report_p = subparsers.add_parser("report", help="Fleet hardware reports")
-    report_sub = report_p.add_subparsers(dest="what", metavar="WHAT")
-    report_sub.required = True
-    rep_mem = report_sub.add_parser("memory", aliases=["mem"], help="Memory DIMM part-number breakdown")
-    _add_host(rep_mem)
-    rep_cpu = report_sub.add_parser("cpu", help="CPU model and core count across fleet")
-    _add_host(rep_cpu)
-    rep_gpu = report_sub.add_parser("gpu", help="GPU inventory across fleet")
-    _add_host(rep_gpu)
-
-    set_p = subparsers.add_parser("set", help="Change iLO configuration")
-    set_sub = set_p.add_subparsers(dest="set_action", metavar="ACTION")
-    set_sub.required = True
-    set_dhcp = set_sub.add_parser(
+    network_p = subparsers.add_parser("network", help="Change iLO network configuration")
+    network_sub = network_p.add_subparsers(dest="network_action", metavar="ACTION")
+    network_sub.required = True
+    network_set = network_sub.add_parser("set", help="Change iLO dedicated NIC settings")
+    network_set_sub = network_set.add_subparsers(dest="set_action", metavar="SETTING")
+    network_set_sub.required = True
+    set_dhcp = network_set_sub.add_parser(
         "dhcp",
         help="Switch iLO management NIC from static IP to DHCP",
         description="Patch the iLO EthernetInterface to enable DHCPv4 and reset iLO. "
                     "The iLO will reboot its network stack and obtain a new IP from DHCP. "
                     "The current static IP will be unreachable after reset.",
     )
-    _add_host(set_dhcp)
+    set_dhcp.set_defaults(command="set", set_action="dhcp")
+    _add_host_target(set_dhcp, required=True)
     set_dhcp.add_argument("--confirm", action="store_true", help="Skip confirmation prompt")
-    set_dhcp.add_argument(
-        "--no-reset",
-        action="store_true",
-        dest="no_reset",
-        help="Stage the DHCP change without resetting iLO (change will NOT persist across iLO reboots)",
-    )
-
-    set_static = set_sub.add_parser(
+    set_dhcp.add_argument("--no-reset", action="store_true", dest="no_reset",
+                          help="Stage the DHCP change without resetting iLO (change will NOT persist across iLO reboots)")
+    set_static = network_set_sub.add_parser(
         "static",
         help="Switch iLO management NIC from DHCP to a static IP",
         description="Patch the iLO EthernetInterface to disable DHCPv4 and assign a static IP, "
                     "then reset iLO. The current DHCP-assigned IP will be unreachable after reset.",
     )
-    _add_host(set_static)
-    set_static.add_argument("--ip",      metavar="ADDR",    required=True, help="Static IPv4 address")
-    set_static.add_argument("--mask",    metavar="MASK",    required=True, help="Subnet mask (e.g. 255.255.252.0)")
-    set_static.add_argument("--gateway", metavar="GW",      required=True, help="Default gateway")
-    set_static.add_argument("--dns",     metavar="DNS",     action="append", dest="dns",
+    set_static.set_defaults(command="set", set_action="static")
+    _add_host_target(set_static, required=True)
+    set_static.add_argument("--ip", metavar="ADDR", required=True, help="Static IPv4 address")
+    set_static.add_argument("--mask", metavar="MASK", required=True, help="Subnet mask (e.g. 255.255.252.0)")
+    set_static.add_argument("--gateway", metavar="GW", required=True, help="Default gateway")
+    set_static.add_argument("--dns", metavar="DNS", action="append", dest="dns",
                             help="DNS server (repeat for multiple, e.g. --dns 8.8.8.8 --dns 8.8.4.4)")
     set_static.add_argument("--confirm", action="store_true", help="Skip confirmation prompt")
-    set_static.add_argument(
-        "--no-reset",
-        action="store_true",
-        dest="no_reset",
-        help="Stage the static-IP change without resetting iLO (change will NOT persist across iLO reboots)",
-    )
-
-    set_route = set_sub.add_parser(
-        "route",
-        help="Add a static route to the iLO dedicated NIC (static IP mode only)",
-    )
-    _add_host(set_route)
-    set_route.add_argument("--destination", metavar="DEST",    required=True, help="Destination network (e.g. 192.168.10.0)")
-    set_route.add_argument("--mask",        metavar="MASK",    required=True, help="Subnet mask (e.g. 255.255.255.0)")
-    set_route.add_argument("--gateway",     metavar="GW",      required=True, help="Gateway for this route")
+    set_static.add_argument("--no-reset", action="store_true", dest="no_reset",
+                            help="Stage the static-IP change without resetting iLO (change will NOT persist across iLO reboots)")
+    set_route = network_set_sub.add_parser("route", help="Add a static route to the iLO dedicated NIC (static IP mode only)")
+    set_route.set_defaults(command="set", set_action="route")
+    _add_host_target(set_route, required=True)
+    set_route.add_argument("--destination", metavar="DEST", required=True, help="Destination network (e.g. 192.168.10.0)")
+    set_route.add_argument("--mask", metavar="MASK", required=True, help="Subnet mask (e.g. 255.255.255.0)")
+    set_route.add_argument("--gateway", metavar="GW", required=True, help="Gateway for this route")
     set_route.add_argument("--confirm", action="store_true", help="Skip confirmation prompt")
     set_route.add_argument("--no-reset", action="store_true", dest="no_reset",
                            help="Do not reset iLO even if ResetRequired (change may not take effect immediately)")
 
-    desc_p = subparsers.add_parser(
-        "describe",
-        help="Show full details for a single server (identity, iLO, CPU, GPU, memory, firmware)",
-    )
-    desc_p.add_argument("name", metavar="NAME",
-                        help="Server name from hosts-ilo.ini").completer = _host_completer
-    desc_p.add_argument("--ilo-nic", action="store_true", dest="ilo_nic",
-                        help="Show iLO dedicated NIC details (DHCP/static, IP, DNS, routes, LLDP, MAC)")
-    desc_p.add_argument("--raw", action="store_true",
-                        help="With --ilo-nic: dump unprocessed Redfish JSON for Manager EthernetInterfaces")
-    desc_p.add_argument("--firmware-update", action="store_true", dest="firmware_update",
-                        help="Show firmware update status: UpdateService state, last bundle report, component repository")
+    reports_p = subparsers.add_parser("reports", help="Fleet hardware reports")
+    reports_sub = reports_p.add_subparsers(dest="what", metavar="REPORT")
+    reports_sub.required = True
+    for report_name, aliases in (("memory", ["mem"]), ("cpu", []), ("gpu", [])):
+        report_p = reports_sub.add_parser(report_name, aliases=aliases, help=f"{report_name.title()} fleet report")
+        report_action = report_p.add_subparsers(dest="report_action", metavar="ACTION")
+        report_action.required = True
+        report_list = report_action.add_parser("list", help=f"List the {report_name} fleet report")
+        report_list.set_defaults(command="report", what=report_name)
+        _add_host_target(report_list, required=False, allow_hosts_from=True)
+
+    subparsers.add_parser(
+        "init",
+        help="Create a starter hosts-ilo.ini at ~/.config/pcli/hosts-ilo.ini",
+        description="Create ~/.config/pcli/hosts-ilo.ini with example entries to fill in.",
+    ).set_defaults(command="init")
 
     return parser
 

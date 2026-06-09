@@ -27,19 +27,19 @@ class TestIloParserJson:
     def test_parser_json_flag_on_list(self):
         from pcli.ilo.cli import _build_parser
         parser = _build_parser()
-        args = parser.parse_args(["--json", "list", "nic-host"])
+        args = parser.parse_args(["--json", "nic-host", "list"])
         assert args.json_output is True
 
     def test_parser_json_default_false(self):
         from pcli.ilo.cli import _build_parser
         parser = _build_parser()
-        args = parser.parse_args(["list", "nic-host"])
+        args = parser.parse_args(["nic-host", "list"])
         assert args.json_output is False
 
     def test_parser_json_flag_list_firmwares(self):
         from pcli.ilo.cli import _build_parser
         parser = _build_parser()
-        args = parser.parse_args(["--json", "list", "firmwares"])
+        args = parser.parse_args(["--json", "firmware", "list"])
         assert args.json_output is True
 
 
@@ -52,7 +52,7 @@ class TestIloJsonOutput:
 
         with patch("pcli.ilo.cli._load_hosts_or_exit", return_value=[FAKE_HOST]), \
              patch("pcli.ilo.cli._run_parallel_async", new_callable=AsyncMock, return_value=fake_results):
-            cli.main(["--json", "list", "nic-host", "--host", "dl325-gen12"])
+            cli.main(["--json", "nic-host", "list", "dl325-gen12"])
 
         captured = capsys.readouterr()
         result = json.loads(captured.out)
@@ -67,7 +67,7 @@ class TestIloJsonOutput:
 
         with patch("pcli.ilo.cli._load_hosts_or_exit", return_value=[FAKE_HOST]), \
              patch("pcli.ilo.cli._run_parallel_async", new_callable=AsyncMock, return_value=fake_results):
-            cli.main(["--json", "list", "firmwares", "--host", "dl325-gen12"])
+            cli.main(["--json", "firmware", "list", "dl325-gen12"])
 
         captured = capsys.readouterr()
         result = json.loads(captured.out)
@@ -93,7 +93,7 @@ class TestIloJsonOutput:
 
         with patch("pcli.ilo.cli._load_hosts_or_exit", return_value=[FAKE_HOST]), \
              patch("pcli.ilo.cli._run_parallel_async", new_callable=AsyncMock, return_value=fake_results):
-            cli.main(["--json", "list", "nic-host", "--host", "dl325-gen12"])
+            cli.main(["--json", "nic-host", "list", "dl325-gen12"])
 
         captured = capsys.readouterr()
         result = json.loads(captured.out)
@@ -118,7 +118,7 @@ class TestIloJsonOutput:
 
         with patch("pcli.ilo.cli._load_hosts_or_exit", return_value=[FAKE_HOST]), \
              patch("pcli.ilo.cli._run_parallel_async", new_callable=AsyncMock, return_value=fake_results):
-            cli.main(["--json", "list", "nic-host", "--host", "dl325-gen12"])
+            cli.main(["--json", "nic-host", "list", "dl325-gen12"])
 
         captured = capsys.readouterr()
         result = json.loads(captured.out)
@@ -132,7 +132,7 @@ class TestIloJsonOutput:
 
         with patch("pcli.ilo.cli._load_hosts_or_exit", return_value=[FAKE_HOST]), \
              patch("pcli.ilo.cli._run_parallel_async", new_callable=AsyncMock, return_value=fake_results):
-            cli.main(["--json", "list", "nic-host", "--host", "dl325-gen12"])
+            cli.main(["--json", "nic-host", "list", "dl325-gen12"])
 
         captured = capsys.readouterr()
         assert "[bold" not in captured.out

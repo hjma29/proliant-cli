@@ -28,6 +28,7 @@ async def run_describe(host: dict) -> None:
                 system  = await c.get(sys_uri)
                 manager = await c.get(mgr_uri)
                 upd_svc = await c.get("/redfish/v1/UpdateService")
+                proto   = await c.get("/redfish/v1/Managers/1/NetworkProtocol/")
                 fw_list = await inventory.fetch_firmware_inventory_full(c)
                 cpus    = await inventory.fetch_cpu_report_data(c)
                 gpus    = await inventory.fetch_gpu_report_data(c)
@@ -96,6 +97,23 @@ async def run_describe(host: dict) -> None:
     ilo_t.add_row("Hostname", mgr_host)
     ilo_t.add_row("Health",   _h(ilo_status))
     console.print(ilo_t)
+
+    # ── Protocols ─────────────────────────────────────────────────────────────
+    _PROTO_KEYS = ["IPMI", "SSH", "HTTPS", "HTTP", "SNMP", "VirtualMedia", "KVMIP"]
+    proto_rows = [(k, proto.get(k, {})) for k in _PROTO_KEYS if proto.get(k)]
+    if proto_rows:
+        console.print("[bold]Protocols[/bold]")
+        pt = Table(box=rich_box.SIMPLE, show_header=True, header_style="bold cyan", padding=(0, 2))
+        pt.add_column("Protocol", no_wrap=True)
+        pt.add_column("Enabled", justify="center")
+        pt.add_column("Port", justify="right")
+        for name, v in proto_rows:
+            enabled = v.get("ProtocolEnabled")
+            port    = v.get("Port")
+            enabled_str = "[green]Yes[/green]" if enabled else "[dim]No[/dim]"
+            port_str    = str(port) if port else "—"
+            pt.add_row(name, enabled_str, port_str)
+        console.print(pt)
 
     # ── COM ───────────────────────────────────────────────────────────────────
     if cloud:

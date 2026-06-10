@@ -493,6 +493,11 @@ def _build_parser() -> argparse.ArgumentParser:
     set_route.add_argument("--confirm", action="store_true", help="Skip confirmation prompt")
     set_route.add_argument("--no-reset", action="store_true", dest="no_reset",
                            help="Do not reset iLO even if ResetRequired (change may not take effect immediately)")
+    set_ipmi = network_set_sub.add_parser("ipmi", help="Enable or disable IPMI over LAN on iLO")
+    set_ipmi.set_defaults(command="set", set_action="ipmi")
+    _add_host_target(set_ipmi, required=True)
+    set_ipmi.add_argument("state", choices=["enable", "disable"], metavar="STATE",
+                          help="enable or disable IPMI over LAN (port 623)")
 
     reports_p = subparsers.add_parser("reports", help="Fleet hardware reports")
     reports_sub = reports_p.add_subparsers(dest="what", metavar="REPORT")
@@ -547,6 +552,8 @@ async def _async_main(args: argparse.Namespace) -> None:
             await _run_set_static(args)
         elif args.set_action == "route":
             await _run_set_route(args)
+        elif args.set_action == "ipmi":
+            await _run_set_ipmi(args)
     elif args.command == "power":
         await _run_power(args)
     elif args.command == "boot":
@@ -1025,6 +1032,28 @@ async def _run_upgrade(args: argparse.Namespace) -> None:
             url=getattr(args, "url", None),
             filename=getattr(args, "filename", None),
         )
+
+
+async def _run_set_ipmi(args: argparse.Namespace) -> None:
+    host = _load_hosts_or_exit(args.host)[0]
+    enabled = args.state == "enable"
+    try:
+        async with ilo_session(host) as client:
+            resp = await client.patch(
+                "/redfish/v1/Managers/1/NetworkProtocol/",
+                {"IPMI": {"ProtocolEnabled": enabled}},
+            )
+            msg_id = resp.get("error", {}).get("@Message.ExtendedInfo", [{}])[0].get("MessageId", "")
+            if msg_id and "Success" not in msg_id:
+                raise RuntimeError(f"Unexpected iLO response: {msg_id}")
+    except ServerDownOrUnreachableError as exc:
+        print(f"ERROR: {host['name']} unreachable: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except (RuntimeError, TimeoutError, ValueError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
+    state_str = "enabled" if enabled else "disabled"
+    print(f"✓ IPMI over LAN {state_str} on {host['name']} (port 623)")
 
 
 async def _run_power(args: argparse.Namespace) -> None:

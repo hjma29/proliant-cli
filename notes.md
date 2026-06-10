@@ -1,4 +1,15 @@
-# pcli — Project Notes & Technical Reference
+# ⚠️ ARCHIVED — DO NOT UPDATE THIS FILE
+
+> **This file is a backup snapshot as of 2026-06-10.**
+> All notes have been migrated to `~/work/work-notes/`:
+> - HPE ProLiant / pcli topics → **`notes-proliant-cli.md`**
+> - NVIDIA BCM / iLO integration → **`notes-BCM.md`**
+>
+> **Going forward: take all new notes in `~/work/work-notes/` in the appropriate file.**
+
+---
+
+# pcli — Project Notes & Technical Reference (BACKUP)
 
 > **AI context lives in `.github/copilot-instructions.md`** — automatically loaded by Copilot each session.
 > **Implementation internals, auth flows, API edge cases, lessons learned: `notes-agents.md`**
@@ -606,3 +617,152 @@ curl -sk -u Administrator:<pw> -X PATCH https://<ilo-ip>/redfish/v1/Systems/1/ \
 - HTTP path has `/Uri()` suffix; PXE does not — that's how they're distinguished
 - Does NOT use DesiredBootDevices (causes boot order scrambling)
 - After one-time PXE boot, iLO resets override to Disabled/None automatically
+
+---
+
+## NVIDIA BCM — cm-get-redfish-device-info.py HPE Adaptation
+
+**File location:** `/cm/local/apps/cmd/scripts/cm-get-redfish-device-info.py`
+**Original backup:** `cm-get-redfish-device-info.py.bak`
+**Modified:** 2026-04-23 by NVIDIA developer
+
+### High-Level Summary
+
+The original BCM script was designed for NVIDIA DGX servers which follow standard Redfish chassis layout. HPE ProLiant servers (Gen11/iLO6, Gen12/iLO7) expose hardware inventory through a different structure — non-standard PowerShelf chassis, separate Manager/System/Processor endpoints — that the original script could not traverse.
+
+The developer extended the script to handle HPE's Redfish layout while preserving compatibility with existing DGX nodes. After the change, BCM `firmware status` correctly inventories HPE ProLiant servers alongside DGX nodes in a mixed cluster.
+
+**Effort:** ~1–2 days. Moderate change (~120 lines added to a ~250 line script). Research/testing against live iLO6 hardware was the main effort; coding itself was straightforward for someone with Redfish API knowledge.
+
+### Low-Level Changes (diff summary)
+
+1. **HPE PowerShelf detection**
+   - HPE exposes a "PowerShelf" chassis type instead of a standard rack unit chassis
+   - Original code: looked for first chassis with `SerialNumber` field, returned immediately
+   - Modified code: detects PowerShelf hit, sets `powershelf_hit=True`, then enumerates PSUs via `PowerSubsystem/PowerSupplies` sub-path instead of stopping at chassis level
+
+2. **Added `_collect_bmc()` method**
+   - Walks `/redfish/v1/Managers` collection
+   - Filters for `ManagerType == "BMC"` entries
+   - Returns BMC model (iLO 6, iLO 7) as a named device entry
+
+3. **Added `_collect_processors()` method**
+   - Walks `/redfish/v1/Systems` → each system's `Processors` collection
+   - Distinguishes CPU vs GPU by `ProcessorType` field
+   - Names them CPU0, CPU1... / GPU0, GPU1...
+
+4. **Added `_collect_psus()` method**
+   - Walks `{chassis_uri}/PowerSubsystem/PowerSupplies` for each chassis
+   - Extracts PSU serial, part number, manufacturer
+   - Names them `PSU-/0`, `PSU-/1` etc. based on URI suffix
+
+5. **Added helper utilities**
+   - `_get_obj(uri)`: safe GET with exception handling
+   - `_get_collection_member_uris(uri)`: extracts `@odata.id` list from Redfish collections
+   - `_parallel_get(uris)`: multi-threaded GET using `ThreadPoolExecutor(max_workers=8)` for faster inventory collection
+
+6. **Extra device injection after main loop**
+   - After chassis traversal, if `powershelf_hit` is False and result exists, appends BMC + CPU/GPU + PSU devices not already in the output list
+   - Deduplicates by device name
+
+### Verified Working Against
+- HPE ProLiant DL380 Gen11 / iLO 6 (node002): returns 2x CPU, 1x GPU (NVIDIA), 2x PSU
+- HPE ProLiant DL325 Gen12 / iLO 7 (node006): returns 1x CPU (AMD EPYC), 1x PSU
+
+### BCM BMC IP Configuration Note
+The script receives the iLO IP via `CMD_BMCIP` environment variable set by BCM daemon.
+This comes from the node's BMC interface assignment in cmsh:
+```
+cmsh> device; use <node>; interfaces; list   # look for BMC-type interface with iLO IP
+```
+If `CMD_BMCIP` is not set (missing BMC interface in BCM), the script gets no BMC IP and returns `{}`.
+
+---
+
+## NVIDIA BCM — sample_ilo vs sample_redfish.py (Monitoring Scripts)
+
+### Problem
+`/cm/local/apps/cmd/scripts/metrics/sample_ilo` fails with exit code 1 for iLO6/iLO7 nodes.
+NVIDIA support recommended installing `hponcfg` package on compute nodes.
+
+### Why hponcfg Recommendation is Wrong
+
+`sample_ilo` is a **legacy Perl script** written for iLO 2/3/4 era (~2010):
+- Uses `hponcfg` tool to send **RIBCL XML** commands (HPE's old in-band protocol)
+- Requires the HPE iLO kernel driver loaded on the **compute node OS** (checks `/sys/class/iLO`)
+- Runs **in-band** (on the node itself), not over network from headnode
+- RIBCL/hponcfg was officially deprecated by HPE; iLO 6/7 support it only for backward compat
+- Installing hponcfg on Gen11/Gen12 nodes would work technically but is the wrong approach
+
+### Correct Modern Approach
+
+BCM already has the right solution: `/cm/local/apps/cmd/scripts/metrics/sample_redfish.py`
+- Python script using Redfish REST API over HTTPS (out-of-band, headnode → iLO IP)
+- Collects same metrics: temperature, fans, power, health
+- Works with iLO 6 and iLO 7
+- No kernel driver or package installation on compute nodes needed
+
+### Root Cause of sample_redfish.py Failure
+
+`sample_redfish.py` fails with `ModuleNotFoundError: No module named 'redfish'`
+when invoked by cmdaemon, even though the module exists at:
+`/cm/local/apps/python3/lib/python3.12/site-packages/redfish/`
+
+The script shebang is `#!/cm/local/apps/python3/bin/python` — the module IS present
+under that Python installation but the script invocation context may differ from
+interactive shell. Investigation pending.
+
+### Recommended Fix
+1. Investigate why `sample_redfish.py` can't find the `redfish` module when invoked by cmdaemon
+2. Do NOT install `hponcfg` on compute nodes
+3. Do NOT enable `sample_ilo` for Gen11/Gen12 servers
+
+### BCM Monitoring Script Architecture
+```
+cmsh firmware list / firmware status
+  → cm-firmware-manage (dispatcher)
+    → cm-ilo-firmware-manage       ← HPE iLO (set via bmcsettings firmwaremanagemode=iLO)
+    → cm-redfish-firmware-manage   ← generic Redfish (DGX)
+    → cm-powershelf-firmware-manage
+
+cmsh monitoring (metrics collection, every 5 min)
+  → sample_redfish.py    ← CORRECT path for iLO6/iLO7 (currently broken: missing redfish module)
+  → sample_ilo           ← LEGACY path for iLO2/3/4 via hponcfg RIBCL (do not use for Gen11/12)
+```
+
+---
+
+## NVIDIA BCM — sample_redfish.py Root Cause & Debug Method
+
+### How to Enable cmdaemon Debug Logging
+Send SIGUSR1 to enable debug output, SIGUSR2 to disable.
+Get the cmdaemon PID from /var/run/cmdaemon.pid, then signal it.
+
+### hardwareinventoryinfo — How It Actually Works
+Despite appearing to read from cache, hardwareinventoryinfo makes a live Redfish call
+via cm-get-redfish-device-info.py on demand. Confirmed in debug log:
+
+    ProgramRunner: /cm/local/apps/cmd/scripts/cm-get-redfish-device-info.py [DONE] 0 0
+    Parsed hardware inventory for node006
+
+Not visible at normal log level — only appears with debug mode enabled.
+
+### sample_redfish.py Real Root Cause (NOT a missing module)
+Earlier error ModuleNotFoundError: No module named 'redfish' was misleading.
+Real error found via debug mode:
+
+    File "sample_redfish.py", line 1001, in sample
+        if "NVIDIA" in manufacturer:
+    TypeError: argument of type 'NoneType' is not iterable
+
+Root cause: manufacturer field is None for HPE components (CPU, PSU, etc.).
+HPE Redfish responses omit or return null for some manufacturer fields.
+The script assumes manufacturer is always a string -- works for NVIDIA DGX but
+crashes on HPE servers where manufacturer can be None.
+
+Fix needed at line ~1001 in sample_redfish.py:
+
+    Before (broken):   if "NVIDIA" in manufacturer:
+    After (fixed):     if manufacturer and "NVIDIA" in manufacturer:
+
+Status: Fix not yet applied -- needs NVIDIA support ticket or local patch.

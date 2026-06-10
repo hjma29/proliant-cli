@@ -2,7 +2,7 @@
 
 > **This is the single AI context file for this repo** — update it whenever a new bug, gotcha, or schema
 > difference is discovered.
-> Full human-readable reference: `notes.md` (update that for detailed findings with API/Redfish details).
+> **Notes are in `~/work/work-notes/`** — use `notes-proliant-cli.md` for pcli/Redfish findings, `notes-BCM.md` for BCM integration. `notes.md` in this repo is an archived backup — do not update it.
 > User-facing CLI reference: `README.md` (update when commands or flags change).
 
 ---

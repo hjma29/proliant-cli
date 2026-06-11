@@ -46,6 +46,19 @@ async def run_describe(host: dict) -> None:
     health_str = health_obj.get("Health", "—")
     uuid       = system.get("UUID", "—")
 
+    # UID indicator LED — iLO 7 uses LocationIndicatorActive (bool),
+    # iLO 6 uses IndicatorLED (str: "Lit" / "Off" / "Blinking")
+    _uid_active = system.get("LocationIndicatorActive")
+    _uid_led    = system.get("IndicatorLED")
+    if _uid_active is not None:
+        uid_str = "[bold yellow]On[/bold yellow]" if _uid_active else "[dim]Off[/dim]"
+    elif _uid_led is not None:
+        uid_str = "[bold yellow]On[/bold yellow]" if _uid_led == "Lit" else (
+            "[bold yellow]Blinking[/bold yellow]" if _uid_led == "Blinking" else "[dim]Off[/dim]"
+        )
+    else:
+        uid_str = "—"
+
     mgr_model  = manager.get("Model", "—")
     mgr_fw     = manager.get("FirmwareVersion", "—") or "—"
     mgr_host   = manager.get("HostName", "—") or "—"
@@ -85,6 +98,7 @@ async def run_describe(host: dict) -> None:
     id_t.add_row("BIOS",       bios_ver)
     id_t.add_row("Power",      _h(power))
     id_t.add_row("Health",     _h(health_str))
+    id_t.add_row("UID",        uid_str)
     console.print(id_t)
 
     # ── iLO ───────────────────────────────────────────────────────────────────

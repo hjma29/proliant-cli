@@ -385,6 +385,14 @@ def _build_parser() -> argparse.ArgumentParser:
         _add_host_target(action_parser, required=True)
         action_parser.add_argument("--dry-run", action="store_true", dest="dry_run")
 
+    uid_p = subparsers.add_parser("uid", help="Control server UID indicator light")
+    uid_sub = uid_p.add_subparsers(dest="uid_action", metavar="ACTION")
+    uid_sub.required = True
+    for uid_action, uid_help in (("on", "Turn UID light on"), ("off", "Turn UID light off")):
+        uid_ap = uid_sub.add_parser(uid_action, help=uid_help)
+        uid_ap.set_defaults(command="uid", uid_action=uid_action)
+        _add_host_target(uid_ap, required=True)
+
     boot_p = subparsers.add_parser(
         "boot",
         help="Inspect and override server boot behavior",
@@ -556,6 +564,8 @@ async def _async_main(args: argparse.Namespace) -> None:
             await _run_set_ipmi(args)
     elif args.command == "power":
         await _run_power(args)
+    elif args.command == "uid":
+        await _run_uid(args)
     elif args.command == "boot":
         await _run_boot(args)
     elif args.command == "bios":
@@ -1054,6 +1064,32 @@ async def _run_set_ipmi(args: argparse.Namespace) -> None:
         sys.exit(1)
     state_str = "enabled" if enabled else "disabled"
     print(f"✓ IPMI over LAN {state_str} on {host['name']} (port 623)")
+
+
+async def _run_uid(args: argparse.Namespace) -> None:
+    host = _load_hosts_or_exit(args.host)[0]
+    turn_on = args.uid_action == "on"
+    try:
+        async with ilo_session(host) as client:
+            sys_uri = await client.get_system_uri()
+            system  = await client.get(sys_uri)
+            # iLO 7 uses LocationIndicatorActive (bool); iLO 6 uses IndicatorLED (str)
+            if "LocationIndicatorActive" in system:
+                payload = {"LocationIndicatorActive": turn_on}
+            else:
+                payload = {"IndicatorLED": "Lit" if turn_on else "Off"}
+            resp = await client.patch(sys_uri, payload)
+            msg_id = resp.get("error", {}).get("@Message.ExtendedInfo", [{}])[0].get("MessageId", "")
+            if msg_id and "Success" not in msg_id:
+                raise RuntimeError(f"Unexpected iLO response: {msg_id}")
+    except ServerDownOrUnreachableError as exc:
+        print(f"ERROR: {host['name']} unreachable: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except (RuntimeError, TimeoutError, ValueError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
+    state_str = "on" if turn_on else "off"
+    print(f"✓ UID light turned {state_str} on {host['name']}")
 
 
 async def _run_power(args: argparse.Namespace) -> None:

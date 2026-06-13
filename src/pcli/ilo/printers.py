@@ -273,11 +273,6 @@ def print_disk_map_table(results: list[tuple[str, str | None, list]]) -> None:
     bay_w = 80
     total_w = server_w + vol_w + bay_w + 4
     print("\n--- Drive Identity Map (Volume NAA → Physical Bay) ---")
-    print("  On Linux/CoreOS (oc debug node/<n> -- chroot /host), run:")
-    print("    for d in sda sdb sdc sdd; do")
-    print("      echo \"$d: $(cat /sys/block/$d/device/wwid)\"")
-    print("    done")
-    print("  Strip 'naa.' prefix from wwid and match against NAA: column below.")
     print(f"\n{'Server':<{server_w}}   {'LUN  RAID   Capacity  Volume-NAA/EUI':<{vol_w}}   {'Physical Drive Bays (ServiceLabel + Serial)':<{bay_w}}")
     print("-" * total_w)
     for host_name, error, rows in sorted(results, key=lambda r: r[0]):

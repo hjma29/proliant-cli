@@ -151,18 +151,28 @@ async def _run_report_memory(args: argparse.Namespace) -> None:
 class _SuggestingArgumentParser(argparse.ArgumentParser):
     """ArgumentParser that suggests close matches on invalid choice errors."""
 
+    _GREEN  = "\033[32m"
+    _BOLD   = "\033[1m"
+    _RESET  = "\033[0m"
+
     def error(self, message: str) -> None:
         import re
         import sys
+        suggestion = None
         match = re.search(r"invalid choice: '([^']+)' \(choose from ([^)]+)\)", message)
         if match:
             bad = match.group(1)
             choices = [c.strip().strip("'") for c in match.group(2).split(",")]
-            suggestions = difflib.get_close_matches(bad, choices, n=1, cutoff=0.6)
-            if suggestions:
-                message = f"{message}\n\n  Did you mean: '{suggestions[0]}'?"
+            close = difflib.get_close_matches(bad, choices, n=1, cutoff=0.6)
+            if close:
+                suggestion = close[0]
         self.print_usage(sys.stderr)
-        self.exit(2, f"{self.prog}: error: {message}\n")
+        sys.stderr.write(f"{self.prog}: error: {message}\n")
+        if suggestion:
+            sys.stderr.write(
+                f"\n{self._GREEN}{self._BOLD}  Did you mean: '{suggestion}'?{self._RESET}\n"
+            )
+        sys.exit(2)
 
 
 def _build_parser() -> argparse.ArgumentParser:

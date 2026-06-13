@@ -34,6 +34,7 @@ from __future__ import annotations
 # PYTHON_ARGCOMPLETE_OK
 import argparse
 import asyncio
+import difflib
 import json
 import sys
 from collections.abc import Awaitable, Callable
@@ -147,13 +148,30 @@ async def _run_report_memory(args: argparse.Namespace) -> None:
     await run_report_memory(hosts)
 
 
+class _SuggestingArgumentParser(argparse.ArgumentParser):
+    """ArgumentParser that suggests close matches on invalid choice errors."""
+
+    def error(self, message: str) -> None:
+        import re
+        import sys
+        match = re.search(r"invalid choice: '([^']+)' \(choose from ([^)]+)\)", message)
+        if match:
+            bad = match.group(1)
+            choices = [c.strip().strip("'") for c in match.group(2).split(",")]
+            suggestions = difflib.get_close_matches(bad, choices, n=1, cutoff=0.6)
+            if suggestions:
+                message = f"{message}\n\n  Did you mean: '{suggestions[0]}'?"
+        self.print_usage(sys.stderr)
+        self.exit(2, f"{self.prog}: error: {message}\n")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     try:
         _version = _pkg_version("pcli")
     except PackageNotFoundError:
         _version = "dev"
 
-    parser = argparse.ArgumentParser(
+    parser = _SuggestingArgumentParser(
         prog="pcli ilo",
         description="HPE iLO firmware/hardware inventory and update tool",
     )
@@ -209,11 +227,13 @@ def _build_parser() -> argparse.ArgumentParser:
         list_p.add_argument("--raw", action="store_true", help="Dump unprocessed Redfish API response (bypasses pcli field parsing)")
         return list_p
 
-    subparsers = parser.add_subparsers(dest="resource", metavar="RESOURCE")
+    subparsers = parser.add_subparsers(dest="resource", metavar="RESOURCE",
+                                       parser_class=_SuggestingArgumentParser)
     subparsers.required = True
 
     servers_p = subparsers.add_parser("servers", help="Server inventory and details")
-    servers_sub = servers_p.add_subparsers(dest="servers_action", metavar="ACTION")
+    servers_sub = servers_p.add_subparsers(dest="servers_action", metavar="ACTION",
+                                           parser_class=_SuggestingArgumentParser)
     servers_sub.required = True
     servers_list = servers_sub.add_parser("list", help="List servers")
     servers_list.set_defaults(command="list", what="servers")

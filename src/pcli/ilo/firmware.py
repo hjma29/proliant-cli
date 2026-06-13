@@ -66,7 +66,10 @@ async def stage_from_uri(
         raise RuntimeError("AddFromUri action not found — iLO may not support remote staging")
 
     filename = firmware_url.rsplit("/", 1)[-1]
-    payload = {"ImageURI": firmware_url, "UpdateRepository": True, "UpdateTarget": update_target}
+    payload: dict = {"ImageURI": firmware_url, "UpdateRepository": True, "UpdateTarget": update_target}
+    if update_target:
+        # iLO requires TPMOverrideFlag when flashing directly (UpdateTarget=True)
+        payload["TPMOverrideFlag"] = True
     if dry_run:
         return {"dry_run": True, "target": target, "payload": payload}
 

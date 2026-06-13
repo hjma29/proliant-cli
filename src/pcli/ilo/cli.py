@@ -152,6 +152,7 @@ class _SuggestingArgumentParser(argparse.ArgumentParser):
     """ArgumentParser that suggests close matches on invalid choice errors."""
 
     _GREEN  = "\033[32m"
+    _YELLOW = "\033[33m"
     _BOLD   = "\033[1m"
     _RESET  = "\033[0m"
 
@@ -159,19 +160,30 @@ class _SuggestingArgumentParser(argparse.ArgumentParser):
         import re
         import sys
         suggestion = None
-        match = re.search(r"invalid choice: '([^']+)' \(choose from ([^)]+)\)", message)
+        match = re.search(r"(invalid choice: '[^']+') \(choose from ([^)]+)\)", message)
         if match:
-            bad = match.group(1)
-            choices = [c.strip().strip("'") for c in match.group(2).split(",")]
-            close = difflib.get_close_matches(bad, choices, n=1, cutoff=0.6)
+            bad_part = match.group(1)
+            choices_str = match.group(2)
+            choices = [c.strip().strip("'") for c in choices_str.split(",")]
+            close = difflib.get_close_matches(
+                re.search(r"'([^']+)'", bad_part).group(1), choices, n=1, cutoff=0.6
+            )
             if close:
                 suggestion = close[0]
-        self.print_usage(sys.stderr)
-        sys.stderr.write(f"{self.prog}: error: {message}\n")
+            colored_choices = ", ".join(
+                f"{self._YELLOW}{c}{self._RESET}" for c in choices
+            )
+            message = re.sub(
+                r"\(choose from [^)]+\)",
+                f"(choose from {colored_choices})",
+                message,
+            )
         if suggestion:
             sys.stderr.write(
-                f"\n{self._GREEN}{self._BOLD}  Did you mean: '{suggestion}'?{self._RESET}\n"
+                f"\n{self._GREEN}{self._BOLD}  Did you mean: '{suggestion}'?{self._RESET}\n\n"
             )
+        self.print_usage(sys.stderr)
+        sys.stderr.write(f"{self.prog}: error: {message}\n")
         sys.exit(2)
 
 

@@ -48,20 +48,34 @@ async def _expand_members(
     return result
 
 
-async def stage_from_uri(client: ILOClient, firmware_url: str, *, dry_run: bool = False) -> dict:
+async def stage_from_uri(
+    client: ILOClient,
+    firmware_url: str,
+    *,
+    update_target: bool = False,
+    dry_run: bool = False,
+) -> dict:
+    """Stage firmware from a URI into the iLO repository.
+
+    When update_target=True, iLO will also immediately flash and reset itself
+    (iLO firmware only). When False, the file is staged for later task queue flash.
+    """
     actions = await _oem_actions(client)
     target = actions.get("#HpeiLOUpdateServiceExt.AddFromUri", {}).get("target")
     if not target:
         raise RuntimeError("AddFromUri action not found — iLO may not support remote staging")
 
     filename = firmware_url.rsplit("/", 1)[-1]
-    payload = {"ImageURI": firmware_url, "UpdateRepository": True, "UpdateTarget": False}
+    payload = {"ImageURI": firmware_url, "UpdateRepository": True, "UpdateTarget": update_target}
     if dry_run:
         return {"dry_run": True, "target": target, "payload": payload}
 
-    existing = await get_component_repository(client)
-    if any(component.get("Filename") == filename for component in existing):
-        return {"already_staged": True, "Filename": filename}
+    # Only skip re-staging when NOT doing direct flash — for direct flash we always
+    # need to POST so iLO triggers the flash even if the file is already in the repo.
+    if not update_target:
+        existing = await get_component_repository(client)
+        if any(component.get("Filename") == filename for component in existing):
+            return {"already_staged": True, "Filename": filename}
 
     result = await client.post(target, payload)
     return result or {"status": "accepted", "Filename": filename}
@@ -191,3 +205,48 @@ async def wait_for_online(
             pass
         await asyncio.sleep(poll_interval)
     raise TimeoutError(f"Server did not come back online within {timeout + offline_grace}s")
+
+
+async def wait_for_ilo_reset(
+    host: dict,
+    *,
+    offline_grace: int = 20,
+    offline_timeout: int = 60,
+    online_timeout: int = 180,
+    poll_interval: int = 10,
+) -> None:
+    """Wait for iLO to go offline then come back online after a firmware flash.
+
+    Sequence: sleep offline_grace → confirm offline → wait for online.
+    This avoids the race where wait_for_online returns before the reset begins.
+    """
+    await asyncio.sleep(offline_grace)
+
+    # Wait for iLO to go offline
+    deadline = time.monotonic() + offline_timeout
+    went_offline = False
+    while time.monotonic() < deadline:
+        try:
+            async with ilo_session(host) as client:
+                await client.get("/redfish/v1/")
+        except (ServerDownOrUnreachableError, httpx.HTTPError, RuntimeError):
+            went_offline = True
+            break
+        await asyncio.sleep(poll_interval)
+
+    if not went_offline:
+        # iLO didn't go offline — flash may have been immediate or failed silently
+        # Still wait briefly and try to confirm version
+        await asyncio.sleep(10)
+
+    # Wait for iLO to come back online
+    deadline = time.monotonic() + online_timeout
+    while time.monotonic() < deadline:
+        try:
+            async with ilo_session(host) as client:
+                await client.get("/redfish/v1/")
+                return
+        except (ServerDownOrUnreachableError, httpx.HTTPError, RuntimeError):
+            pass
+        await asyncio.sleep(poll_interval)
+    raise TimeoutError(f"iLO did not come back online within {offline_grace + offline_timeout + online_timeout}s")

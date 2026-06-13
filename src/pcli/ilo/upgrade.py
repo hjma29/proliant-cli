@@ -186,27 +186,43 @@ async def run_fw_upgrade(
             is_ilo = candidate.name.lower().startswith("ilo")
             task = progress.add_task(f"{label}  staging…", total=None)
             try:
-                async with ilo_session(host) as client:
-                    await firmware.stage_from_uri(client, candidate.sdr.url)
-                progress.update(task, description=f"{label}  waiting for iLO to download…")
-                async with ilo_session(host) as client:
-                    await firmware.wait_for_stage(client, filename_str, timeout=300, poll_interval=10)
-                progress.update(task, description=f"{label}  queueing for flash…")
-                async with ilo_session(host) as client:
-                    await firmware.add_to_task_queue(client, filename_str)
-                progress.update(task, description=f"[green]✓[/green] {label}  queued  ({candidate.current} → {candidate.sdr.version_str})")
                 if is_ilo:
+                    # Direct flash: UpdateTarget=True tells iLO to download and apply immediately.
+                    # iLO resets itself — no host reboot needed.
+                    async with ilo_session(host) as client:
+                        await firmware.stage_from_uri(client, candidate.sdr.url, update_target=True)
                     progress.update(task, description=f"{label}  iLO restarting (~90s)…")
                     try:
-                        await firmware.wait_for_online(host, offline_grace=15, timeout=180)
-                        progress.update(task, description=f"[green]✓[/green] {label}  iLO back online  ({candidate.current} → {candidate.sdr.version_str})")
+                        await firmware.wait_for_ilo_reset(host)
+                        # Verify the new version is live
+                        async with ilo_session(host) as client:
+                            mgr = await client.get("/redfish/v1/Managers/1/")
+                            new_ver = mgr.get("FirmwareVersion", "?")
+                        progress.update(task, description=f"[green]✓[/green] {label}  iLO back online — {new_ver}  ({candidate.current} → {candidate.sdr.version_str})")
                     except TimeoutError:
-                        progress.update(task, description=f"[yellow]⚠[/yellow] {label}  iLO restart timed out — continuing")
+                        progress.update(task, description=f"[yellow]⚠[/yellow] {label}  iLO restart timed out — check manually")
+                else:
+                    # Non-iLO firmware: stage then queue for host reboot
+                    async with ilo_session(host) as client:
+                        await firmware.stage_from_uri(client, candidate.sdr.url)
+                    progress.update(task, description=f"{label}  waiting for iLO to download…")
+                    async with ilo_session(host) as client:
+                        await firmware.wait_for_stage(client, filename_str, timeout=300, poll_interval=10)
+                    progress.update(task, description=f"{label}  queueing for flash…")
+                    async with ilo_session(host) as client:
+                        await firmware.add_to_task_queue(client, filename_str)
+                    progress.update(task, description=f"[green]✓[/green] {label}  queued  ({candidate.current} → {candidate.sdr.version_str})")
             except Exception as exc:  # noqa: BLE001
                 progress.update(task, description=f"[red]✗[/red] {label}  FAILED: {exc}")
                 console.print(f"[red]ERROR staging {filename_str}: {exc}[/red]")
 
-    if reboot:
+    # Only non-iLO updates need a host reboot — iLO already reset itself above
+    non_ilo_updates = [c for c in updates if not c.name.lower().startswith("ilo")]
+
+    if reboot and not non_ilo_updates:
+        console.print("\n[dim]--reboot ignored: iLO firmware was applied directly (no host reboot needed).[/dim]")
+
+    if reboot and non_ilo_updates:
         console.print(f"\n[bold yellow]Rebooting {host['name']}...[/bold yellow]")
         try:
             async with ilo_session(host) as client:
@@ -255,7 +271,7 @@ async def run_fw_upgrade(
             if stale:
                 await firmware.clear_task_queue(client)
                 console.print(f"  [dim]Cleared {len(stale)} stale task(s) from queue.[/dim]")
-    else:
+    elif non_ilo_updates:
         # Check if any non-iLO component was updated — those need a host restart
         needs_host_restart = any(
             not candidate.name.lower().startswith("ilo") for candidate in updates
@@ -291,3 +307,6 @@ async def run_fw_upgrade(
                 f"  • Use [bold]--reboot[/bold] flag to reboot automatically\n"
                 f"  • Run [bold]pcli ilo firmware queue {host['name']}[/bold] to check queue status"
             )
+    else:
+        # iLO-only update — already applied, no host reboot needed
+        console.print("\n[green]✓ iLO firmware updated. No server reboot required.[/green]")

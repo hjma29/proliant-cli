@@ -80,7 +80,14 @@ async def stage_from_uri(
         if any(component.get("Filename") == filename for component in existing):
             return {"already_staged": True, "Filename": filename}
 
-    result = await client.post(target, payload)
+    try:
+        result = await client.post(target, payload)
+    except RuntimeError as exc:
+        # iLO returns this when a flash is already in progress (e.g. from a prior POST).
+        # The flash is running — treat it as success and let the caller wait for reset.
+        if "FirmwareFlashAlreadyInProgress" in str(exc):
+            return {"flash_already_in_progress": True, "Filename": filename}
+        raise
     return result or {"status": "accepted", "Filename": filename}
 
 

@@ -88,7 +88,12 @@ async def fetch_nic_firmware_inventory(client: ILOClient) -> list[dict]:
 
     entries = []
     seen: set[str] = set()
-    for adapter in await _member_resources(client, na_uri):
+    try:
+        adapters = await _member_resources(client, na_uri)
+    except RuntimeError:
+        # NetworkAdapters endpoint can return 400/404 while iLO is recovering
+        return []
+    for adapter in adapters:
         chip_model = adapter.get("Model", "")
         sku = adapter.get("SKU", "")
         name = sku or chip_model or adapter.get("Name", "N/A")

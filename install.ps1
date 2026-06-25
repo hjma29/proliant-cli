@@ -79,7 +79,8 @@ try {
     if (-not (Test-Path $profileDir)) {
         New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
     }
-    $existing = if (Test-Path $profilePath) { Get-Content $profilePath -Raw } else { "" }
+    $existing = if (Test-Path $profilePath) { (Get-Content $profilePath -Raw) -as [string] } else { "" }
+    if (-not $existing) { $existing = "" }
     # Strip any previous proliant completion block, then append the current one.
     $cleaned = [System.Text.RegularExpressions.Regex]::Replace(
         $existing,

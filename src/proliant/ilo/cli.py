@@ -1054,7 +1054,9 @@ async def _run_get(args: argparse.Namespace) -> None:
         "com":          lambda r: _print_component_table(r, "HPE Compute Ops Management"),
         "full":         print_full_table,
         "disk_map":     print_disk_map_table,
-        "servers":      print_servers_table,
+        "servers":      lambda r: print_servers_table(
+            r, {h["name"]: h["url"].replace("https://", "").replace("http://", "") for h in hosts}
+        ),
         "serial":       print_serial_table,
         "update_method": print_update_method_table,
         "license":      print_license_table,

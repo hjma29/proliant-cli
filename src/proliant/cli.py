@@ -646,6 +646,19 @@ _proliant "$@"
 """
 
 def _get_current_version() -> str:
+    # In a dev checkout (editable/source install), read pyproject.toml directly
+    # so the reported version always matches the source without needing a
+    # reinstall. Installed wheels and frozen EXEs fall back to baked metadata.
+    if not is_frozen():
+        try:
+            import tomllib
+            from pathlib import Path
+            pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+            if pyproject.is_file():
+                with pyproject.open("rb") as fh:
+                    return tomllib.load(fh)["project"]["version"]
+        except Exception:
+            pass
     try:
         return _pkg_version("proliant")
     except PackageNotFoundError:

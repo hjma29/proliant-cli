@@ -67,7 +67,15 @@ class BaseAsyncClient:
         try:
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            detail = cls._error_detail(resp)
+            status = resp.status_code
+            # Auth failures: skip the verbose Redfish ExtendedInfo JSON and
+            # show a plain, actionable reason instead.
+            if status == 401:
+                detail = "check username/password"
+            elif status == 403:
+                detail = "account lacks permission for this operation"
+            else:
+                detail = cls._error_detail(resp)
             raise RuntimeError(
-                f"{method} {uri} failed — HTTP {resp.status_code}: {detail}"
+                f"{method} {uri} failed — HTTP {status}: {detail}"
             ) from exc

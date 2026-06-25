@@ -330,12 +330,32 @@ def print_fleet_table(results: list[tuple[str, str | None, list]],
             print(f"  {'':>{srv_w}}   {vals['_error']}")
 
 
-def print_servers_table(results: list[tuple[str, str | None, list]]) -> None:
-    """Print server list with Serial, OS Name, iLO Name, Model, IP — Rich styled."""
+def _error_hint(error: str) -> str:
+    """Map a captured error string to a short parenthetical hint for the table."""
+    low = error.lower()
+    if "401" in error or "403" in error or "auth" in low or "username/password" in low:
+        return "check authentication?"
+    if "unreachable" in low or "connect" in low:
+        return "unreachable"
+    if "timeout" in low or "timed out" in low:
+        return "timed out"
+    return "error"
+
+
+def print_servers_table(
+    results: list[tuple[str, str | None, list]],
+    addr_map: dict[str, str] | None = None,
+) -> None:
+    """Print server list with Serial, OS Name, iLO Name, Model, IP — Rich styled.
+
+    On an error row the configured IP is shown in the IP column followed by a
+    short hint about the failure (e.g. "(check authentication?)").
+    """
     from rich import box
     from rich.table import Table
     from proliant.common.display import get_console
 
+    addr_map = addr_map or {}
     console = get_console()
     table = Table(
         box=box.SIMPLE_HEAD,
@@ -350,9 +370,11 @@ def print_servers_table(results: list[tuple[str, str | None, list]]) -> None:
 
     for host_name, error, rows in sorted(results, key=lambda r: r[0]):
         if error:
+            ip_addr = addr_map.get(host_name, "—")
+            hint = _error_hint(error)
+            ip_cell = f"{ip_addr}  [red]({hint})[/red]" if ip_addr != "—" else f"[red]({hint})[/red]"
             table.add_row(
-                f"[grey70]{host_name}[/grey70]", "—", "—", "—",
-                f"[red]{error}[/red]",
+                f"[grey70]{host_name}[/grey70]", "—", "—", "—", ip_cell,
             )
             continue
         d = dict(rows)

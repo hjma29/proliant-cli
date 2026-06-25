@@ -8,6 +8,8 @@ Whether you manage a handful of bare-metal servers or a large fleet across multi
 
 ![proliant demo](docs/demo.gif)
 
+![proliant demo](docs/demo.svg)
+
 ## Installation
 
 ### Linux / macOS

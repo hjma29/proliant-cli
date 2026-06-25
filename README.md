@@ -21,7 +21,7 @@ sh -c "$(curl -fsSL https://raw.githubusercontent.com/hjma29/proliant-cli/main/i
 ### Windows
 
 ```powershell
-irm https://raw.githubusercontent.com/hjma29/proliant-cli/main/install.ps1 | iex
+Invoke-RestMethod https://raw.githubusercontent.com/hjma29/proliant-cli/main/install.ps1 | Invoke-Expression
 ```
 
 ## Usage

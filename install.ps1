@@ -66,6 +66,11 @@ Register-ArgumentCompleter -Native -CommandName proliant -ScriptBlock {
     }
     Remove-Item $completion_file, Env:\_ARGCOMPLETE_STDOUT_FILENAME, Env:\ARGCOMPLETE_USE_TEMPFILES, Env:\COMP_LINE, Env:\COMP_POINT, Env:\_ARGCOMPLETE, Env:\_ARGCOMPLETE_SUPPRESS_SPACE, Env:\_ARGCOMPLETE_IFS, Env:\_ARGCOMPLETE_SHELL
 }
+
+# Show completion menu instead of cycling (added by proliant)
+if (-not (Get-PSReadLineKeyHandler | Where-Object { $_.Key -eq 'Tab' -and $_.Function -eq 'MenuComplete' })) {
+    Set-PSReadLineKeyHandler -Key Tab -Function MenuComplete
+}
 '@
 
 try {

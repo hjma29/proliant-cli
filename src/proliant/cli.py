@@ -158,7 +158,7 @@ def _open_new_powershell(exe_dir: str) -> None:
         f'Write-Host "proliant is ready. Type proliant to get started." -ForegroundColor Green'
     )
     subprocess.Popen(
-        [shell, "-NoExit", "-NoLogo", "-Command", ps_cmd],
+        [shell, "-NoExit", "-NoLogo", "-ExecutionPolicy", "RemoteSigned", "-Command", ps_cmd],
         creationflags=subprocess.CREATE_NEW_CONSOLE,
     )
 
@@ -305,7 +305,13 @@ def _win_add_powershell_completion() -> None:
 
 
 def _win_check_execution_policy() -> None:
-    """Warn if PowerShell execution policy will prevent the profile (and completion) from loading."""
+    """Ensure PowerShell can load the profile (and completion) we just wrote.
+
+    A fresh Windows install defaults to Restricted, which blocks the profile.
+    Set CurrentUser scope to RemoteSigned (Microsoft's recommended default,
+    no admin required) so tab completion works. Fall back to a printed hint if
+    the change fails.
+    """
     import subprocess
     import shutil
     exe = shutil.which("pwsh.exe") or shutil.which("powershell.exe")
@@ -318,7 +324,17 @@ def _win_check_execution_policy() -> None:
             capture_output=True, text=True, timeout=10,
         )
         policy = result.stdout.strip()
-        if policy in ("Undefined", "Restricted"):
+        if policy not in ("Undefined", "Restricted"):
+            return  # already permissive enough
+
+        set_result = subprocess.run(
+            [exe, "-NoProfile", "-NonInteractive", "-Command",
+             "Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if set_result.returncode == 0:
+            print("  Set PowerShell execution policy to RemoteSigned (CurrentUser) so tab completion loads.")
+        else:
             print(
                 "\n  ⚠ PowerShell execution policy is set to: " + (policy or "Undefined"),
                 "\n    Tab completion requires your profile to load. Run this once in PowerShell:",

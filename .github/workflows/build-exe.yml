@@ -1,0 +1,148 @@
+name: Build and Release
+
+on:
+  push:
+    tags: ['v*']
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  NUITKA_CACHE_DIR: ${{ github.workspace }}/.nuitka-cache
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: proliant-cli-windows.exe
+          - os: ubuntu-latest
+            artifact: proliant-cli-linux-x86
+          - os: ubuntu-24.04-arm
+            artifact: proliant-cli-linux-arm64
+          - os: macos-latest
+            artifact: proliant-cli-macos
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Cache Nuitka (toolchain downloads + compiled objects)
+        uses: actions/cache@v4
+        with:
+          path: .nuitka-cache
+          key: nuitka-${{ runner.os }}-py3.12-${{ github.run_id }}
+          restore-keys: |
+            nuitka-${{ runner.os }}-py3.12-
+
+      - name: Stamp version from git tag (Linux/macOS)
+        if: runner.os != 'Windows' && startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          perl -i -pe "s/^version = .*/version = \"$VERSION\"/" pyproject.toml
+
+      - name: Stamp version from git tag (Windows)
+        if: runner.os == 'Windows' && startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          (Get-Content pyproject.toml) -replace '^version = .*', "version = `"$version`"" | Set-Content pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          pip install .[all]
+          pip install nuitka ordered-set
+
+      - name: Install libfuse2 (Linux — required for Nuitka onefile)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y libfuse2
+
+      - name: Build binary (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            VERSION=${GITHUB_REF_NAME#v}
+          else
+            VERSION=$(grep '^version' pyproject.toml | sed 's/.*"\(.*\)".*/\1/')
+          fi
+          python -m nuitka \
+            --onefile \
+            --assume-yes-for-downloads \
+            --include-package=proliant \
+            --include-package=proliant.ilo \
+            --include-package=proliant.com \
+            --include-package=proliant.oneview \
+            --include-package=proliant.qs \
+            --include-package=proliant.config \
+            --include-package=proliant.common \
+            --include-package=yaml \
+            --include-package=certifi \
+            --include-package-data=certifi \
+            --include-distribution-metadata=proliant \
+            --company-name=HPE \
+            --product-name=proliant \
+            --product-version=$VERSION \
+            --onefile-tempdir-spec='{CACHE_DIR}/proliant/{VERSION}' \
+            --output-filename=proliant \
+            --output-dir=dist \
+            src/proliant/cli.py
+
+      - name: Build binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq "tag") {
+            $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          } else {
+            $version = (Select-String -Path pyproject.toml -Pattern '^version').Line -replace '.*"(.*)".*', '$1'
+          }
+          python -m nuitka `
+            --onefile `
+            --assume-yes-for-downloads `
+            --include-package=proliant `
+            --include-package=proliant.ilo `
+            --include-package=proliant.com `
+            --include-package=proliant.oneview `
+            --include-package=proliant.qs `
+            --include-package=proliant.config `
+            --include-package=proliant.common `
+            --include-package=yaml `
+            --include-package=certifi `
+            --include-package-data=certifi `
+            --include-distribution-metadata=proliant `
+            --company-name=HPE `
+            --product-name=proliant `
+            --product-version=$version `
+            --onefile-tempdir-spec='{CACHE_DIR}/proliant/{VERSION}' `
+            --output-filename=proliant.exe `
+            --output-dir=dist `
+            src/proliant/cli.py
+
+      - name: Rename binary (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: mv dist/proliant dist/${{ matrix.artifact }}
+
+      - name: Rename binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Rename-Item dist\proliant.exe ${{ matrix.artifact }}
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: dist/${{ matrix.artifact }}
+          generate_release_notes: true

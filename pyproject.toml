@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "proliant"
+version = "0.3.38"
+description = "HPE ProLiant unified CLI — iLO Redfish and Compute Ops Management"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "hjma29"}
+]
+keywords = ["hpe", "proliant", "ilo", "redfish", "compute-ops-management", "greenlake"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System :: Systems Administration",
+]
+# Core deps shared by all subcommands
+dependencies = [
+    "rich>=13.0",
+    "argcomplete>=3.0",
+]
+
+[project.optional-dependencies]
+ilo = [
+    "httpx[http2]>=0.27",
+]
+com = [
+    "httpx[http2]>=0.27",
+    "pyyaml>=6.0",
+]
+qs = [
+    "httpx[http2]>=0.27",
+    "curl-cffi>=0.7",
+    "beautifulsoup4>=4.12",
+    "pdfminer.six>=20221105",
+    "html2text>=2020.1.16",
+]
+all = [
+    "httpx[http2]>=0.27",
+    "curl-cffi>=0.7",
+    "beautifulsoup4>=4.12",
+    "pdfminer.six>=20221105",
+    "html2text>=2020.1.16",
+    "pyyaml>=6.0",
+]
+dev = [
+    "httpx[http2]>=0.27",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "respx>=0.21",
+    "pytest-cov>=4.0",
+]
+
+[project.scripts]
+proliant = "proliant.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["src/proliant"]

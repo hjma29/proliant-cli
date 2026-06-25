@@ -93,6 +93,22 @@ try {
     # silently skip if profile write fails
 }
 
+# Ensure the profile (and tab completion) can actually load on fresh Windows,
+# where the default execution policy (Restricted) silently blocks $PROFILE.
+$policy = Get-ExecutionPolicy -Scope CurrentUser
+if ($policy -in @('Undefined', 'Restricted')) {
+    try {
+        Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
+        Write-Host ""
+        Write-Host "  Set PowerShell execution policy to RemoteSigned (CurrentUser)" -ForegroundColor Yellow
+        Write-Host "  so your profile and tab completion can load." -ForegroundColor Yellow
+    } catch {
+        Write-Host ""
+        Write-Host "  Tab completion needs your profile to load. Run this once:" -ForegroundColor Yellow
+        Write-Host "    Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser" -ForegroundColor Yellow
+    }
+}
+
 Write-Host ""
 Write-Host "Run 'proliant --version' in a new terminal to verify." -ForegroundColor Cyan
 Write-Host ""

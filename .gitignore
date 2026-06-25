@@ -23,3 +23,6 @@ proliant-cli-linux
 # Cursor editor
 .cursor/
 inventory.ini
+
+# Obsidian editor
+.obsidian/

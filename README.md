@@ -4,7 +4,7 @@
 
 Whether you manage a handful of bare-metal servers or a large fleet across multiple management platforms, `proliant` gives you a single consistent interface — cross-platform, no Python required. Query firmware versions across hundreds of iLO nodes in seconds, browse your Compute Ops Management device inventory, inspect servers managed by HPE Synergy OneView, or pull up the latest QuickSpec for any ProLiant model — all without opening a browser or logging into a GUI.
 
-> This is a hobby project — not affiliated with or supported by HPE. Great for exploring and gathering information; exercise the usual caution with any change operations.
+> **Disclaimer:** This is a hobby project — not affiliated with or supported by HPE. Great for exploring and gathering information; exercise the usual caution with any change operations.
 
 ![proliant demo](docs/demo.gif)
 

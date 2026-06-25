@@ -25,7 +25,7 @@ async def _get_memory_inventory(client: "COMClient", server: dict) -> list[dict]
     rid = server["id"]
     name = server.get("name", rid)
     try:
-        inv = await client.get(client.session.com_url(f"/servers/{rid}/inventory"))
+        inv = await client.get(_servers_url(client, f"/servers/{rid}/inventory"))
         dimms = inv.get("memory", {}).get("data", [])
         result = []
         for d in dimms:
@@ -49,10 +49,15 @@ async def _get_memory_inventory(client: "COMClient", server: dict) -> list[dict]
         return []
 
 
+def _servers_url(client: "COMClient", path: str = "") -> str:
+    """Build a COM servers v1 URL (servers API is v1, not v1beta2)."""
+    return f"{client.session.base_url}/compute-ops-mgmt/v1{path}"
+
+
 async def _get_com_servers(client: "COMClient") -> list[dict]:
     """Return list of {id, name} dicts from the COM servers endpoint."""
-    r = await client.get(client.session.com_url("/servers"), params={"limit": 1000})
-    return [{"id": s["id"], "name": s.get("name", s["id"])} for s in r.get("items", [])]
+    items = await client.get_all(_servers_url(client, "/servers"))
+    return [{"id": s["id"], "name": s.get("name", s["id"])} for s in items]
 
 
 async def get_fleet_memory(client: "COMClient") -> list[dict]:
@@ -76,7 +81,7 @@ async def _get_gpu_inventory(client: "COMClient", server: dict) -> list[dict]:
     rid = server["id"]
     name = server.get("name", rid)
     try:
-        inv = await client.get(client.session.com_url(f"/servers/{rid}/inventory"))
+        inv = await client.get(_servers_url(client, f"/servers/{rid}/inventory"))
         procs = inv.get("processor", {}).get("data", [])
         result = []
         for p in procs:

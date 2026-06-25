@@ -13,6 +13,8 @@ import os
 import sys
 from importlib.metadata import version as _pkg_version, PackageNotFoundError
 
+from proliant.common.platform import is_frozen
+
 
 _USAGE = """\
 usage: proliant [-h] [-V] NAMESPACE ...
@@ -72,21 +74,77 @@ Register-ArgumentCompleter -Native -CommandName proliant -ScriptBlock {
 """
 
 
+def _console_pids() -> list[int]:
+    """Return the list of process IDs attached to this console."""
+    import ctypes
+    arr = (ctypes.c_uint * 64)()
+    n = ctypes.windll.kernel32.GetConsoleProcessList(arr, 64)
+    return [arr[i] for i in range(min(n, 64))]
+
+
+def _proc_image_name(pid: int) -> str:
+    """Return the full image path for a PID, or '' on failure."""
+    import ctypes
+    from ctypes import wintypes
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    h = ctypes.windll.kernel32.OpenProcess(
+        PROCESS_QUERY_LIMITED_INFORMATION, False, pid
+    )
+    if not h:
+        return ""
+    try:
+        size = wintypes.DWORD(260)
+        buf = ctypes.create_unicode_buffer(size.value)
+        if ctypes.windll.kernel32.QueryFullProcessImageNameW(
+            h, 0, buf, ctypes.byref(size)
+        ):
+            return buf.value
+        return ""
+    finally:
+        ctypes.windll.kernel32.CloseHandle(h)
+
+
 def _is_explorer_launch() -> bool:
     """Return True if this frozen EXE was launched by double-clicking from Explorer.
 
-    When Explorer spawns a console EXE it creates a brand-new console that is
-    owned solely by this process.  GetConsoleProcessList() therefore returns 1.
-    When launched from an existing PowerShell/cmd window the shell is also in
-    the console, so the count is >= 2.
+    When Explorer spawns a console EXE it creates a brand-new console owned
+    solely by this application.  A Nuitka onefile build runs as TWO processes
+    (bootstrap parent + Python child), both named the same EXE — so a naive
+    GetConsoleProcessList()==1 check fails.  Instead we treat it as an Explorer
+    launch when EVERY process attached to the console is our own EXE; a terminal
+    launch always has a shell (pwsh/cmd/bash) sharing the console.
     """
     try:
-        import ctypes
-        buf = (ctypes.c_uint * 64)()
-        count = ctypes.windll.kernel32.GetConsoleProcessList(buf, 64)
-        return count == 1
+        pids = _console_pids()
+        if not pids:
+            return False
+        self_name = os.path.basename(sys.executable).lower()
+        for pid in pids:
+            img = _proc_image_name(pid)
+            if img and os.path.basename(img).lower() != self_name:
+                return False  # a shell shares the console → terminal launch
+        return True
     except Exception:
         return False
+
+
+def _pause_console(message: str = "Press any key to close this window...") -> None:
+    """Pause until a key is pressed.
+
+    Reads directly from the console (msvcrt.getch / CONIN$) so it works even
+    when the Nuitka onefile child has no usable stdin — unlike input(), which
+    raises EOFError immediately and lets the window close instantly.
+    """
+    print(f"\n{message}")
+    try:
+        import msvcrt
+        msvcrt.getch()
+    except Exception:
+        try:
+            input()
+        except (EOFError, KeyboardInterrupt):
+            pass
+
 
 
 def _open_new_powershell(exe_dir: str) -> None:
@@ -109,7 +167,7 @@ def _windows_first_run_check() -> None:
     """On Windows: set up PATH and tab completion the first time proliant is run."""
     if sys.platform != "win32":
         return
-    if not getattr(sys, "frozen", False):
+    if not is_frozen():
         return  # only for the packaged .exe
 
     exe_dir = os.path.dirname(sys.executable)
@@ -127,7 +185,6 @@ def _windows_first_run_check() -> None:
             print(f"\nSetting up proliant ...")
             print(f"  Adding {exe_dir} to PATH ...")
             _win_add_to_path(exe_dir)
-            print("  Adding tab completion to PowerShell profile ...")
             _win_add_powershell_completion()
             _win_check_execution_policy()
             print("\n  Done!  Opening a new PowerShell window where proliant is ready.")
@@ -136,10 +193,7 @@ def _windows_first_run_check() -> None:
         else:
             print(f"\n  Already installed: {exe_dir}")
             print("  Tab completion and PATH are configured.\n")
-        try:
-            input("Press Enter to close this window...")
-        except (EOFError, KeyboardInterrupt):
-            pass
+        _pause_console()
         sys.exit(0)
 
     # ── Launched from an existing terminal ──────────────────────────────────
@@ -761,7 +815,7 @@ def _run_update() -> None:
         # sys.executable is the Python interpreter when running as a pip script;
         # sys.argv[0] is the actual proliant entry point script.
         # When frozen (Nuitka/PyInstaller), sys.executable IS the binary.
-        if getattr(sys, "frozen", False):
+        if is_frozen():
             current_exe = sys.executable
         else:
             current_exe = os.path.realpath(sys.argv[0])

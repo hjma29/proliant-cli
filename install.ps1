@@ -89,9 +89,8 @@ try {
     ).TrimEnd()
     $newContent = if ($cleaned) { "$cleaned`r`n`r`n$completionBlock`r`n" } else { "$completionBlock`r`n" }
     Set-Content -Path $profilePath -Value $newContent -Encoding UTF8
-    Write-Host "  Completion: enabled in $profilePath" -ForegroundColor Green
 } catch {
-    Write-Host "  Completion: could not configure automatically ($_)" -ForegroundColor Yellow
+    # silently skip if profile write fails
 }
 
 Write-Host ""

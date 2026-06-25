@@ -157,9 +157,17 @@ proliant com get servers  (planned)
 **14. COM firmware bundles API uses old `/compute-ops/` prefix**
 - Current working path: `/compute-ops/v1beta2/firmware-bundles`
 - `/compute-ops` deprecated April 2025 → should migrate to `/compute-ops-mgmt`
-- COM servers API: `/compute-ops-mgmt/v1beta2/servers`
+- COM servers API: `/compute-ops-mgmt/v1/servers` (v1, NOT v1beta2)
+- COM inventory API: `/compute-ops-mgmt/v1/servers/{id}/inventory` (v1 only — v1beta2 path does not exist)
 
-**15. COM FirmwareInventory has no UpdatableBy field**
+**15. GLP API credential quota — login silently fails to store GLP creds if quota is full**
+- On `proliant com login`, `create_glp_api_credential()` auto-creates a temp GLP credential and stores `glp_client_id`/`glp_client_secret` in `token.json`.
+- HPE caps the number of credentials per account (~7). If the quota is full, creation returns `{"message":"Maximum number of tokens created."}` and the code silently stores no GLP creds.
+- Without GLP creds, all `compute-ops-mgmt` API calls return 404 (user tokens lack workspace routing context).
+- `_cleanup_stale_proliant_credentials()` in `login.py` deletes old credentials before creating a new one. It cleans all known prefixes: `GLP-proliant-com-temp-*`, `GLP-hpecom-cli-temp-*`, `GLP-pcli-com-temp-*`.
+- If `proliant com reports gpu` (or any COM API) returns 404 after login, check `token.json` for `glp_client_id`. If missing, credential quota was full — run `proliant com login` again after manually clearing stale credentials.
+
+**16. COM FirmwareInventory has no UpdatableBy field**
 - COM `firmwareInventory` field on server objects is a plain list `[{name, version, deviceContext}]`.
 - No `UpdatableBy` exposed — must be inferred from component name + context patterns.
 - `classify_update_method()` in `ilo/inventory.py` contains the classification rules.

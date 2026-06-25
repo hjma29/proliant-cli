@@ -813,8 +813,15 @@ CREDENTIALS_URI = f"{USER_API_BASE}/authn/v1/token-management/credentials"
 GLP_APP_INSTANCE_ID = "00000000-0000-0000-0000-000000000000"
 
 
+_CLEANUP_PREFIXES = (
+    GLP_CRED_NAME_PREFIX,        # current:  GLP-proliant-com-temp
+    "GLP-hpecom-cli-temp",       # old hpecom tool
+    "GLP-pcli-com-temp",         # old pcli tool
+)
+
+
 async def _cleanup_stale_proliant_credentials(access_token: str, ccs_session: str) -> None:
-    """Delete any stale hpecom-cli-temp credentials from previous sessions."""
+    """Delete any stale proliant credentials from previous sessions (all known name prefixes)."""
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Accept": "application/json",
@@ -823,15 +830,14 @@ async def _cleanup_stale_proliant_credentials(access_token: str, ccs_session: st
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             r = await client.get(CREDENTIALS_URI, headers=headers, cookies=cookies)
-        if r.status_code != 200:
-            return
-        items = r.json()
-        if not isinstance(items, list):
-            items = items.get("items", items.get("credentials", []))
-        for item in items:
-            name = item.get("credential_name", item.get("name", ""))
-            if GLP_CRED_NAME_PREFIX in name:
-                async with httpx.AsyncClient(timeout=15) as client:
+            if r.status_code != 200:
+                return
+            items = r.json()
+            if not isinstance(items, list):
+                items = items.get("items", items.get("credentials", []))
+            for item in items:
+                name = item.get("credential_name", item.get("name", ""))
+                if any(name.startswith(p) for p in _CLEANUP_PREFIXES):
                     await client.delete(
                         f"{CREDENTIALS_URI}/{name}",
                         headers=headers,

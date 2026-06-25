@@ -18,6 +18,8 @@ import os
 import sys
 from pathlib import Path
 
+from proliant.common.platform import is_frozen
+
 
 def _find_config_file() -> Path:
     """Same search order as ilo/config.py — first match wins."""
@@ -25,7 +27,7 @@ def _find_config_file() -> Path:
         return Path(env)
 
     candidates = [Path.cwd() / "inventory.ini"]
-    if getattr(sys, "frozen", False):
+    if is_frozen():
         candidates.append(Path(sys.executable).parent / "inventory.ini")
     else:
         candidates.append(Path(__file__).parent.parent.parent.parent / "inventory.ini")

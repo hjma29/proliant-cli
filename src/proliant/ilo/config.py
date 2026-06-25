@@ -12,6 +12,8 @@ import configparser
 import os
 import sys
 
+from proliant.common.platform import is_frozen
+
 # ---------------------------------------------------------------------------
 # Table display widths (characters).  Adjust here; every print function
 # in cli.py imports these — no magic numbers scattered across the codebase.
@@ -41,8 +43,8 @@ def _find_config_file() -> Path:
     candidates = [
         Path.cwd() / "inventory.ini",
     ]
-    if getattr(sys, "frozen", False):
-        # PyInstaller: check same directory as the binary
+    if is_frozen():
+        # Packaged binary: check same directory as the binary
         candidates.append(Path(sys.executable).parent / "inventory.ini")
     else:
         # Dev: repo root

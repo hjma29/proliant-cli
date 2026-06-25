@@ -1,10 +1,10 @@
 # proliant — HPE ProLiant unified CLI
 
+**proliant** is a unified CLI for HPE ProLiant environments. It lets you retrieve and inspect server inventory and details across **HPE ProLiant iLO**, **Compute Ops Management (COM)**, and **Synergy OneView** — and includes built-in tools to browse **HPE Service Pack for ProLiant (SPP)** release contents and fetch **HPE QuickSpec** documents directly from the terminal.
+
+Whether you manage a handful of bare-metal servers or a large fleet across multiple management platforms, `proliant` gives you a single consistent interface — cross-platform, no Python required. Query firmware versions across hundreds of iLO nodes in seconds, browse your Compute Ops Management device inventory, inspect servers managed by HPE Synergy OneView, or pull up the latest QuickSpec for any ProLiant model — all without opening a browser or logging into a GUI.
+
 > This is a hobby project — not affiliated with or supported by HPE. Great for exploring and gathering information; exercise the usual caution with any change operations.
-
-**proliant** is a unified CLI for HPE ProLiant environments. It lets you retrieve and inspect server inventory and details across **HPE ProLiant iLO**, **Compute Ops Management (COM)**, and **OneView** — and includes built-in tools to browse **HPE Service Pack for ProLiant (SPP)** release contents and fetch **HPE QuickSpec** documents directly from the terminal.
-
-Whether you manage a handful of bare-metal servers or a large fleet across multiple management platforms, `proliant` gives you a single consistent interface — cross-platform, no Python required. Query firmware versions across hundreds of iLO nodes in seconds, browse your Compute Ops Management device inventory, inspect servers managed by HPE OneView, or pull up the latest QuickSpec for any ProLiant model — all without opening a browser or logging into a GUI.
 
 ![proliant demo](docs/demo.gif)
 

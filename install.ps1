@@ -34,10 +34,14 @@ Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
 
 # Add ~/bin to PATH if not already present
 $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
-if ($userPath -notlike "*$InstallDir*") {
-    [Environment]::SetEnvironmentVariable("PATH", "$userPath;$InstallDir", "User")
+# Remove any existing occurrence of InstallDir, then prepend it so a freshly
+# installed proliant always wins over stale copies elsewhere on PATH.
+$entries = ($userPath -split ';') | Where-Object { $_ -and ($_.TrimEnd('\') -ne $InstallDir.TrimEnd('\')) }
+$newPath = (@($InstallDir) + $entries) -join ';'
+if ($newPath -ne $userPath) {
+    [Environment]::SetEnvironmentVariable("PATH", $newPath, "User")
     Write-Host ""
-    Write-Host "  Added $InstallDir to your PATH." -ForegroundColor Yellow
+    Write-Host "  Added $InstallDir to the front of your PATH." -ForegroundColor Yellow
     Write-Host "  Restart your terminal (or open a new PowerShell window) to use 'proliant'." -ForegroundColor Yellow
 }
 

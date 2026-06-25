@@ -30,7 +30,26 @@ if (-not (Test-Path $InstallDir)) {
 }
 
 $dest = Join-Path $InstallDir $BinName
-Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+
+# Download with curl.exe (fast, native progress bar; ships in Win10/11). Fall
+# back to Invoke-WebRequest with the progress bar disabled, which is otherwise
+# the cause of painfully slow downloads in Windows PowerShell 5.1.
+$curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+if ($curl) {
+    & $curl.Source -L --fail --progress-bar -o $dest $url
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Download failed (curl exit $LASTEXITCODE)."
+        exit 1
+    }
+} else {
+    $prev = $ProgressPreference
+    $ProgressPreference = 'SilentlyContinue'
+    try {
+        Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+    } finally {
+        $ProgressPreference = $prev
+    }
+}
 
 # Add ~/bin to PATH if not already present
 $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")

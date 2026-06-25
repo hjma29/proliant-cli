@@ -72,8 +72,41 @@ Register-ArgumentCompleter -Native -CommandName proliant -ScriptBlock {
 """
 
 
+def _is_explorer_launch() -> bool:
+    """Return True if this frozen EXE was launched by double-clicking from Explorer.
+
+    When Explorer spawns a console EXE it creates a brand-new console that is
+    owned solely by this process.  GetConsoleProcessList() therefore returns 1.
+    When launched from an existing PowerShell/cmd window the shell is also in
+    the console, so the count is >= 2.
+    """
+    try:
+        import ctypes
+        buf = (ctypes.c_uint * 64)()
+        count = ctypes.windll.kernel32.GetConsoleProcessList(buf, 64)
+        return count == 1
+    except Exception:
+        return False
+
+
+def _open_new_powershell(exe_dir: str) -> None:
+    """Open a new PowerShell window with exe_dir on PATH so proliant works immediately."""
+    import subprocess
+    import shutil
+    shell = shutil.which("pwsh.exe") or shutil.which("powershell.exe") or "powershell.exe"
+    ps_cmd = (
+        f'$env:PATH = "{exe_dir}" + [IO.Path]::PathSeparator + $env:PATH; '
+        f'Set-Location $env:USERPROFILE; '
+        f'Write-Host "proliant is ready. Type proliant to get started." -ForegroundColor Green'
+    )
+    subprocess.Popen(
+        [shell, "-NoExit", "-NoLogo", "-Command", ps_cmd],
+        creationflags=subprocess.CREATE_NEW_CONSOLE,
+    )
+
+
 def _windows_first_run_check() -> None:
-    """On Windows: offer a one-time PATH setup the first time proliant is run."""
+    """On Windows: set up PATH and tab completion the first time proliant is run."""
     if sys.platform != "win32":
         return
     if not getattr(sys, "frozen", False):
@@ -81,9 +114,36 @@ def _windows_first_run_check() -> None:
 
     exe_dir = os.path.dirname(sys.executable)
 
-    # Skip if already in PATH
     path_dirs = [p.lower().rstrip("\\") for p in os.environ.get("PATH", "").split(os.pathsep)]
-    if exe_dir.lower().rstrip("\\") in path_dirs:
+    already_in_path = exe_dir.lower().rstrip("\\") in path_dirs
+
+    if _is_explorer_launch():
+        # ── Double-clicked from Explorer ────────────────────────────────────
+        # Run setup automatically (no Y/n prompt — opening the EXE is consent)
+        # then pause so the window stays open long enough to read.
+        print("proliant installer")
+        print("=" * 40)
+        if not already_in_path:
+            print(f"\nSetting up proliant ...")
+            print(f"  Adding {exe_dir} to PATH ...")
+            _win_add_to_path(exe_dir)
+            print("  Adding tab completion to PowerShell profile ...")
+            _win_add_powershell_completion()
+            _win_check_execution_policy()
+            print("\n  Done!  Opening a new PowerShell window where proliant is ready.")
+            print("  You can move proliant-cli-windows.exe anywhere — re-run it to update PATH.\n")
+            _open_new_powershell(exe_dir)
+        else:
+            print(f"\n  Already installed: {exe_dir}")
+            print("  Tab completion and PATH are configured.\n")
+        try:
+            input("Press Enter to close this window...")
+        except (EOFError, KeyboardInterrupt):
+            pass
+        sys.exit(0)
+
+    # ── Launched from an existing terminal ──────────────────────────────────
+    if already_in_path:
         return
 
     # Skip if user already answered this prompt (yes or no)
@@ -111,22 +171,7 @@ def _windows_first_run_check() -> None:
     _win_add_powershell_completion()
     _win_check_execution_policy()
     print("✓ Done! Opening a new terminal window...\n")
-
-    # Open PowerShell with the exe dir in PATH so proliant works immediately.
-    # Set PATH inline (registry change not visible until new login session).
-    # Use -NoExit so the window stays open for the user to work in.
-    import subprocess
-    import shutil
-    shell = shutil.which("pwsh.exe") or shutil.which("powershell.exe") or "powershell.exe"
-    ps_cmd = (
-        f'$env:PATH = "{exe_dir}" + [IO.Path]::PathSeparator + $env:PATH; '
-        f'Set-Location "{exe_dir}"; '
-        f'Write-Host "proliant is ready. Type proliant to get started." -ForegroundColor Green'
-    )
-    subprocess.Popen(
-        [shell, "-NoExit", "-NoLogo", "-Command", ps_cmd],
-        creationflags=subprocess.CREATE_NEW_CONSOLE,
-    )
+    _open_new_powershell(exe_dir)
 
 
 def _win_add_to_path(directory: str) -> None:

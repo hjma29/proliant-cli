@@ -2,6 +2,10 @@
 
 > **This is the single AI context file for this repo** — update it whenever a new bug, gotcha, or schema
 > difference is discovered.
+> **Do NOT store durable proliant knowledge in local agent memory (`/memories/…`)** — it lives in
+> per-machine `AppData` and does NOT sync. The maintainer works across multiple machines, so all
+> lasting knowledge MUST go in git-tracked files (this file, `README.md`, or the work-notes repo) so it
+> travels via `git pull`. Use agent memory only for throwaway session state.
 > **Notes are in `~/work/work-notes/`** — use `notes-proliant-cli.md` for proliant/Redfish findings, `notes-BCM.md` for BCM integration. `notes.md` in this repo is an archived backup — do not update it.
 > User-facing CLI reference: `README.md` (update when commands or flags change).
 

@@ -63,6 +63,35 @@ from proliant.com.auth import COMSession, CredentialsError, AuthError
 from proliant.com.client import COMClient
 from proliant.com import devices as _devices
 from proliant.com import workspaces as _workspaces
+
+
+def _prompt_password(prompt: str = "Password: ") -> str:
+    """Prompt for password echoing * per character. Supports typing and paste."""
+    print(prompt, end="", flush=True)
+    if sys.platform == "win32":
+        import msvcrt
+        chars: list[str] = []
+        while True:
+            ch = msvcrt.getwch()
+            if ch in ("\r", "\n"):
+                print()
+                break
+            elif ch == "\x03":  # Ctrl+C
+                print()
+                raise KeyboardInterrupt
+            elif ch in ("\x08", "\x7f"):  # Backspace
+                if chars:
+                    chars.pop()
+                    print("\b \b", end="", flush=True)
+            elif ch in ("\x00", "\xe0"):  # Special/function keys — consume second byte
+                msvcrt.getwch()
+            else:
+                chars.append(ch)
+                print("*", end="", flush=True)
+        return "".join(chars)
+    else:
+        import getpass
+        return getpass.getpass("")
 from proliant.com import firmware as _firmware
 from proliant.com.describe import run_describe as _run_describe
 from proliant.com.reports import run_report_gpu as _run_report_gpu, run_report_memory as _run_report_memory
@@ -127,17 +156,26 @@ async def _cmd_login(args: argparse.Namespace) -> None:
     use_password = getattr(args, "password", False) or not email.lower().endswith("@hpe.com")
 
     if use_password:
-        import getpass as _getpass
-        try:
-            passwd = _getpass.getpass("Password: ")
-        except (KeyboardInterrupt, EOFError):
-            get_console().print("\n[yellow]Login cancelled.[/yellow]")
-            sys.exit(0)
-        try:
-            await password_login(email=email, password=passwd, region=region)
-        except Exception as e:
-            get_console().print(f"[red]Login failed:[/red] {e}")
-            sys.exit(1)
+        for _try in range(3):
+            try:
+                passwd = _prompt_password("Password: ")
+            except (KeyboardInterrupt, EOFError):
+                get_console().print("\n[yellow]Login cancelled.[/yellow]")
+                sys.exit(0)
+            try:
+                await password_login(email=email, password=passwd, region=region)
+                return  # success
+            except Exception as e:
+                msg = str(e)
+                if "Authentication failed" in msg or "401" in msg or "unauthorized" in msg.lower():
+                    if _try < 2:
+                        get_console().print("[red]Wrong password, please try again.[/red]")
+                    else:
+                        get_console().print("[red]Too many failed attempts.[/red]")
+                        sys.exit(1)
+                else:
+                    get_console().print(f"[red]Login failed:[/red] {e}")
+                    sys.exit(1)
         return
 
     try:
@@ -739,7 +777,6 @@ def main(argv: Optional[list[str]] = None) -> None:
             console = get_console()
             console.print(f"\n[yellow]Session expired or not logged in.[/yellow] Please log in to continue.\n")
             try:
-                import getpass as _getpass
                 from rich.prompt import Prompt
                 from proliant.com.login import okta_verify_login, password_login
                 email = Prompt.ask("[bold]HPE GreenLake email[/bold]").strip()
@@ -748,8 +785,25 @@ def main(argv: Optional[list[str]] = None) -> None:
                     sys.exit(1)
                 # gmail / external accounts use password auth; HPE SSO uses Okta Verify
                 if not email.lower().endswith("@hpe.com"):
-                    passwd = _getpass.getpass("Password: ")
-                    run_sync(password_login(email=email, password=passwd, region="us-west"))
+                    for _try in range(3):
+                        try:
+                            passwd = _prompt_password("Password: ")
+                        except (KeyboardInterrupt, EOFError):
+                            console.print("\n[yellow]Login cancelled.[/yellow]")
+                            sys.exit(1)
+                        try:
+                            run_sync(password_login(email=email, password=passwd, region="us-west"))
+                            break  # success
+                        except Exception as _pe:
+                            msg = str(_pe)
+                            if "Authentication failed" in msg or "401" in msg or "unauthorized" in msg.lower():
+                                if _try < 2:
+                                    console.print("[red]Wrong password, please try again.[/red]")
+                                else:
+                                    console.print("[red]Too many failed attempts.[/red]")
+                                    sys.exit(1)
+                            else:
+                                raise
                 else:
                     run_sync(okta_verify_login(email=email, region="us-west"))
                 console.print("\n[green]✓ Logged in.[/green] Continuing...\n")

@@ -55,6 +55,15 @@ IDX_HEADERS = {
     "Accept":       "application/ion+json; okta-version=1.0.0",
 }
 
+# Classic Okta JSON (no OIE ION versioning).  The GreenLake external Okta
+# tenant (auth.hpe.com) routes non-HPE accounts through MTLS certificate
+# auth when the ion+json Accept header is used.  With plain application/json
+# the identify response returns authenticators.value (password) directly.
+CLASSIC_HEADERS = {
+    "Content-Type": "application/json",
+    "Accept":       "application/json",
+}
+
 
 # ---------------------------------------------------------------------------
 # PKCE helpers
@@ -184,20 +193,29 @@ async def _get_state_token(
     return state_token, okta_base
 
 
-async def _idx_post(client: httpx.AsyncClient, url: str, payload: dict) -> dict:
+async def _idx_post(
+    client: httpx.AsyncClient,
+    url: str,
+    payload: dict,
+    headers: Optional[dict] = None,
+) -> dict:
     """POST to Okta IDX endpoint; return parsed JSON."""
-    r = await client.post(url, json=payload, headers=IDX_HEADERS)
+    r = await client.post(url, json=payload, headers=headers or IDX_HEADERS)
     return r.json()
 
 
 async def _idx_introspect(
-    client: httpx.AsyncClient, okta_base: str, state_token: str
+    client: httpx.AsyncClient,
+    okta_base: str,
+    state_token: str,
+    headers: Optional[dict] = None,
 ) -> Optional[dict]:
     """IDX introspect – return data dict or None if session expired."""
     data = await _idx_post(
         client,
         f"{okta_base}/idp/idx/introspect",
         {"stateToken": state_token},
+        headers=headers,
     )
     if "stateHandle" not in data:
         return None  # session expired
@@ -1330,83 +1348,239 @@ async def password_login(email: str, password: str, region: str = "us-west") -> 
             verifier, challenge, state = _pkce()
 
             async with httpx.AsyncClient(follow_redirects=True, timeout=20) as client:
+                _dbg = os.environ.get("PROLIANT_DEBUG")
+
                 # ── Step 1: stateToken ───────────────────────────────────────
                 with console.status("[cyan]Connecting to HPE GreenLake…[/cyan]"):
                     state_token, okta_base = await _get_state_token(client, challenge, state, email)
 
-                # ── Step 2: IDX introspect ───────────────────────────────────
-                idx_data = await _idx_introspect(client, okta_base, state_token)
+                if _dbg:
+                    console.print(f"[dim]DBG step1 okta_base={okta_base}[/dim]")
+
+                # ── Step 2: IDX introspect (classic JSON — avoids OIE MTLS routing) ──
+                # auth.hpe.com routes non-HPE accounts via redirect-idp (MTLS cert) when
+                # the ion+json Accept header opts into OIE IDX v1 policies.  Using plain
+                # application/json matches what HPECOMCmdlets does and returns the
+                # password authenticator directly in authenticators.value.
+                idx_data = await _idx_introspect(
+                    client, okta_base, state_token, headers=CLASSIC_HEADERS
+                )
                 if idx_data is None:
                     raise AuthFlowError("Session expired at auth.hpe.com (introspect)")
 
                 # ── Step 3: Identify (email) ─────────────────────────────────
-                identify = next(
-                    (v for v in idx_data["remediation"]["value"] if v["name"] == "identify"),
-                    None,
+                # Use hardcoded URL as fallback (Lionel's pattern) so we don't fail
+                # if the classic introspect response omits the identify remediation href.
+                identify_href = (
+                    next(
+                        (v["href"] for v in idx_data.get("remediation", {}).get("value", [])
+                         if v["name"] == "identify"),
+                        None,
+                    )
+                    or f"{okta_base}/idp/idx/identify"
                 )
-                if not identify:
-                    raise AuthFlowError("No 'identify' remediation available")
 
                 r3 = await client.post(
-                    identify["href"],
+                    identify_href,
                     json={"identifier": email, "stateHandle": idx_data["stateHandle"]},
-                    headers=IDX_HEADERS,
+                    headers=CLASSIC_HEADERS,
                 )
                 d3 = r3.json()
-                if "remediation" not in d3:
-                    raise AuthFlowError(f"Identify failed: {d3}")
 
-                remediations = [v["name"] for v in d3["remediation"]["value"]]
+                remediations = [v["name"] for v in d3.get("remediation", {}).get("value", [])]
+                authenticators_val = d3.get("authenticators", {}).get("value", [])
+                if _dbg:
+                    console.print(f"[dim]DBG step3 remediations={remediations} authenticators={[a.get('type') for a in authenticators_val]}[/dim]")
 
-                if "redirect-idp" in remediations:
+                # ── Step 4: Authenticate ──────────────────────────────────────
+                #
+                # Three possible identify responses:
+                #
+                # A) Classic format (Accept: application/json, non-SSO accounts):
+                #    authenticators.value contains the password authenticator
+                #    remediation.value contains challenge-authenticator href
+                #    → POST password directly (no select step needed)
+                #
+                # B) redirect-idp (HPE corporate SSO accounts):
+                #    → follow SAML to mylogin.hpe.com → select+challenge flow
+                #
+                # C) OIE format fallback (select-authenticator-authenticate):
+                #    → use existing _password_authenticate helper
+                #
+                success_href: Optional[str] = None
+
+                # ── Path A: classic format — password authenticator in authenticators.value ──
+                pw_auth = next(
+                    (a for a in authenticators_val
+                     if a.get("key") == "okta_password"
+                     or a.get("type") == "password"),
+                    None,
+                )
+                if pw_auth and "challenge-authenticator" in remediations:
+                    challenge_href = next(
+                        v["href"] for v in d3["remediation"]["value"]
+                        if v["name"] == "challenge-authenticator"
+                    )
+                    if _dbg:
+                        console.print(f"[dim]DBG classic-path challenge_href={challenge_href}[/dim]")
+
+                    with console.status("[cyan]Authenticating…[/cyan]"):
+                        # Register device nonce (internal Okta step; best-effort)
+                        try:
+                            await client.post(
+                                f"{okta_base}/api/v1/internal/device/nonce",
+                                headers=CLASSIC_HEADERS,
+                            )
+                        except Exception:
+                            pass
+
+                        r4 = await client.post(
+                            challenge_href,
+                            json={
+                                "credentials": {"passcode": password},
+                                "stateHandle":  d3["stateHandle"],
+                            },
+                            headers=CLASSIC_HEADERS,
+                        )
+
+                    # Wrong password → Okta returns HTTP 401 with errors.E0000004
+                    if r4.status_code == 401:
+                        try:
+                            err = r4.json()
+                        except Exception:
+                            err = {}
+                        msgs = err.get("messages", {}).get("value", [])
+                        for msg in msgs:
+                            key = msg.get("i18n", {}).get("key", "")
+                            if key in ("errors.E0000004", "errors.E0000207"):
+                                raise AuthFlowError(
+                                    "Authentication failed: Incorrect password. "
+                                    "Please verify your credentials and try again."
+                                )
+                        err_code = err.get("errorCode", "")
+                        if err_code in ("E0000004", "E0000207"):
+                            raise AuthFlowError(
+                                "Authentication failed: Incorrect password. "
+                                "Please verify your credentials and try again."
+                            )
+                        raise AuthFlowError(
+                            f"Authentication failed (HTTP 401): "
+                            f"{err.get('errorSummary', r4.text[:200])}"
+                        )
+
+                    d4 = r4.json()
+                    # Wrong password can also come back as 200 with error messages
+                    msgs4 = d4.get("messages", {}).get("value", [])
+                    if any(m.get("class") == "ERROR" for m in msgs4):
+                        txt = msgs4[0].get("message", "Authentication failed") if msgs4 else ""
+                        raise AuthFlowError(
+                            f"Authentication failed: {txt or 'Incorrect password. Please verify your credentials and try again.'}"
+                        )
+
+                    success_href = (
+                        (d4.get("success") or {}).get("href")
+                        or (d4.get("successWithInteractionCode") or {}).get("href")
+                        or (d4.get("successWithInteractionCode") or {}).get("redirectUri")
+                    )
+                    if not success_href:
+                        rem4 = [v["name"] for v in d4.get("remediation", {}).get("value", [])]
+                        raise AuthFlowError(
+                            f"No success href after password challenge. "
+                            f"Remediations: {rem4}"
+                        )
+
+                # ── Path B: redirect-idp (HPE corporate SSO) ──────────────────
+                elif "redirect-idp" in remediations:
                     redirect_idp_entry = next(
                         (v for v in d3["remediation"]["value"] if v["name"] == "redirect-idp"),
                         {}
                     )
-                    # Follow redirect-idp to the second Okta org (auth.hpe.com for
-                    # external accounts), then submit the password authenticator there.
+                    if _dbg:
+                        console.print(f"[dim]DBG redirect-idp href={redirect_idp_entry.get('href')} idp={redirect_idp_entry.get('idp')}[/dim]")
                     with console.status("[cyan]Connecting to HPE authentication…[/cyan]"):
                         d3, okta_base = await _follow_saml_to_workforce(client, redirect_idp_entry)
                     remediations = [v["name"] for v in d3.get("remediation", {}).get("value", [])]
+                    if _dbg:
+                        console.print(f"[dim]DBG after-redirect okta_base={okta_base} remediations={remediations}[/dim]")
+
+                    if "select-authenticator-authenticate" not in remediations and "identify" in remediations:
+                        identify2 = next(
+                            (v for v in d3["remediation"]["value"] if v["name"] == "identify"), None
+                        )
+                        if identify2:
+                            r_id2 = await client.post(
+                                identify2["href"],
+                                json={"identifier": email, "stateHandle": d3["stateHandle"]},
+                                headers=IDX_HEADERS,
+                            )
+                            d3 = r_id2.json()
+                            remediations = [v["name"] for v in d3.get("remediation", {}).get("value", [])]
+                            if _dbg:
+                                console.print(f"[dim]DBG after-2nd-identify remediations={remediations}[/dim]")
+
                     if "select-authenticator-authenticate" not in remediations:
-                        idp_type = str(redirect_idp_entry.get("type", "")).upper()
-                        idp_name = redirect_idp_entry.get("idp", {}).get("name", idp_type or "external IDP")
+                        idp_name = redirect_idp_entry.get("idp", {}).get("name", "external IDP")
                         raise AuthFlowError(
                             f"Password authenticator not available at {idp_name} ({okta_base}). "
                             f"Available: {remediations}. "
                             "This account may require 'proliant com login' (Okta Verify)."
                         )
 
-                if "select-authenticator-authenticate" not in remediations:
-                    raise AuthFlowError(
-                        f"Unexpected remediations after identify: {remediations}"
-                    )
+                    with console.status("[cyan]Authenticating…[/cyan]"):
+                        try:
+                            success_href = await _password_authenticate(
+                                client, okta_base, d3, password
+                            )
+                        except _MFARequired as mfa:
+                            console.print("[dim]Password accepted — MFA required.[/dim]")
+                            poll_href, state_handle, correct_answer = await _select_okta_verify_push(
+                                client, mfa.okta_base, mfa.idx_data
+                            )
+                            console.print()
+                            if correct_answer is not None:
+                                console.print(Panel(
+                                    f"[bold yellow]{correct_answer}[/bold yellow]",
+                                    title="[cyan]Open Okta Verify and tap this number[/cyan]",
+                                    expand=False,
+                                    border_style="cyan",
+                                ))
+                            else:
+                                console.print("[cyan]Push notification sent — approve in Okta Verify.[/cyan]")
+                            console.print()
+                            with console.status("[cyan]Waiting for Okta Verify approval…[/cyan]"):
+                                success_href = await _poll_push(client, poll_href, state_handle)
 
-                # ── Step 4: Submit password ───────────────────────────────────
-                with console.status("[cyan]Authenticating…[/cyan]"):
-                    try:
-                        success_href = await _password_authenticate(
-                            client, okta_base, d3, password
-                        )
-                    except _MFARequired as mfa:
-                        # Password accepted but MFA still needed — try Okta Verify push
-                        console.print("[dim]Password accepted — MFA required.[/dim]")
-                        poll_href, state_handle, correct_answer = await _select_okta_verify_push(
-                            client, mfa.okta_base, mfa.idx_data
-                        )
-                        console.print()
-                        if correct_answer is not None:
-                            console.print(Panel(
-                                f"[bold yellow]{correct_answer}[/bold yellow]",
-                                title="[cyan]Open Okta Verify and tap this number[/cyan]",
-                                expand=False,
-                                border_style="cyan",
-                            ))
-                        else:
-                            console.print("[cyan]Push notification sent — approve in Okta Verify.[/cyan]")
-                        console.print()
-                        with console.status("[cyan]Waiting for Okta Verify approval…[/cyan]"):
-                            success_href = await _poll_push(client, poll_href, state_handle)
+                # ── Path C: OIE select-authenticator-authenticate (fallback) ──
+                elif "select-authenticator-authenticate" in remediations:
+                    with console.status("[cyan]Authenticating…[/cyan]"):
+                        try:
+                            success_href = await _password_authenticate(
+                                client, okta_base, d3, password
+                            )
+                        except _MFARequired as mfa:
+                            console.print("[dim]Password accepted — MFA required.[/dim]")
+                            poll_href, state_handle, correct_answer = await _select_okta_verify_push(
+                                client, mfa.okta_base, mfa.idx_data
+                            )
+                            console.print()
+                            if correct_answer is not None:
+                                console.print(Panel(
+                                    f"[bold yellow]{correct_answer}[/bold yellow]",
+                                    title="[cyan]Open Okta Verify and tap this number[/cyan]",
+                                    expand=False,
+                                    border_style="cyan",
+                                ))
+                            else:
+                                console.print("[cyan]Push notification sent — approve in Okta Verify.[/cyan]")
+                            console.print()
+                            with console.status("[cyan]Waiting for Okta Verify approval…[/cyan]"):
+                                success_href = await _poll_push(client, poll_href, state_handle)
+
+                else:
+                    raise AuthFlowError(
+                        f"Unexpected remediations after identify: {remediations}. "
+                        f"Authenticators: {[a.get('type') for a in authenticators_val]}"
+                    )
 
                 # ── Step 5: Extract auth code ─────────────────────────────────
                 with console.status("[cyan]Completing authorization…[/cyan]"):

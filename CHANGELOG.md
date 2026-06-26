@@ -14,8 +14,7 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 ## v1.0.7 — 2026-06-25
 
 ### Bug Fixes
-- `proliant com login --password`: fixed login failure when HPE authorization redirects through the Pavo SSO broker (`/sso/continue`).
-- `proliant com login --password`: fixed auth code extraction for direct HPE Accounts (no SAML redirect after password).
+- `proliant com login --password`: fixed login failure on accounts that use the HPE GreenLake SSO flow.
 
 ---
 

@@ -139,11 +139,23 @@ jobs:
         shell: pwsh
         run: Rename-Item dist\proliant.exe ${{ matrix.artifact }}
 
+      - name: Extract release notes from CHANGELOG.md
+        if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          # Extract the block between "## v$VERSION" and the next "## v" heading
+          awk "/^## v${VERSION}/{found=1; next} found && /^## v/{exit} found{print}" CHANGELOG.md \
+            > release_notes.txt
+          # Fallback if section not found
+          if [ ! -s release_notes.txt ]; then
+            echo "See CHANGELOG.md for details." > release_notes.txt
+          fi
+
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: dist/${{ matrix.artifact }}
-          # Only one matrix leg generates the changelog, otherwise all 4
-          # parallel jobs each regenerate it → duplicated release notes.
-          generate_release_notes: ${{ matrix.os == 'windows-latest' }}
+          # Only the windows leg writes the release body; other legs just attach their binary.
+          body_path: ${{ matrix.os == 'windows-latest' && 'release_notes.txt' || '' }}

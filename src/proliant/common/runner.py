@@ -65,4 +65,8 @@ async def run_parallel(
 
 def run_sync(coro) -> Any:
     """Run an async coroutine from synchronous code (CLI entry points)."""
-    return asyncio.run(coro)
+    try:
+        return asyncio.run(coro)
+    except KeyboardInterrupt:
+        import sys
+        sys.exit(130)  # conventional exit code for Ctrl+C (128 + SIGINT)

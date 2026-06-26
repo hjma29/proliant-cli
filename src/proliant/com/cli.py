@@ -50,6 +50,7 @@ Note: Run 'proliant com login' before any resource command (like kubectl/gcloud/
 
 # PYTHON_ARGCOMPLETE_OK
 import argparse
+import asyncio
 import difflib
 import json
 import sys
@@ -66,46 +67,23 @@ from proliant.com import workspaces as _workspaces
 
 
 def _prompt_password(prompt: str = "Password: ") -> str:
-    """Prompt for password. Supports paste. Redraws prompt line with * after Enter."""
-    if sys.platform == "win32":
-        import ctypes
-        STD_INPUT_HANDLE  = -10
-        STD_ERROR_HANDLE  = -12
-        ENABLE_ECHO_INPUT = 0x0004
-        ENABLE_VTP        = 0x0004  # ENABLE_VIRTUAL_TERMINAL_PROCESSING (output handle)
-        kernel32 = ctypes.windll.kernel32
-
-        # stdin: disable echo, keep line-input so paste is buffered naturally
-        hi = kernel32.GetStdHandle(STD_INPUT_HANDLE)
-        in_mode = ctypes.c_ulong()
-        kernel32.GetConsoleMode(hi, ctypes.byref(in_mode))
-        old_in_mode = in_mode.value
-        kernel32.SetConsoleMode(hi, old_in_mode & ~ENABLE_ECHO_INPUT)
-
-        # stderr: ensure VT sequences are processed so we can move the cursor up
-        he = kernel32.GetStdHandle(STD_ERROR_HANDLE)
-        err_mode = ctypes.c_ulong()
-        kernel32.GetConsoleMode(he, ctypes.byref(err_mode))
-        old_err_mode = err_mode.value
-        kernel32.SetConsoleMode(he, old_err_mode | ENABLE_VTP)
-
-        try:
-            sys.stderr.write(prompt)
-            sys.stderr.flush()
-            pwd = sys.stdin.readline().rstrip("\r\n")
-        finally:
-            kernel32.SetConsoleMode(hi, old_in_mode)
-            kernel32.SetConsoleMode(he, old_err_mode)
-
-        # Entering a line advances the cursor to the next line even with echo off.
-        # Move up one line (\x1b[1A) and overwrite so the user sees one clean line:
-        #   Password: *****
-        sys.stderr.write("\x1b[1A\r" + prompt + "*" * len(pwd) + "\n")
-        sys.stderr.flush()
-        return pwd
-    else:
+    """Prompt for password with real-time masking and paste support."""
+    try:
+        from prompt_toolkit.shortcuts import prompt as pt_prompt
+        return pt_prompt(prompt, is_password=True)
+    except ImportError:
         import getpass
         return getpass.getpass(prompt)
+
+
+async def _prompt_password_async(prompt: str = "Password: ") -> str:
+    """Async password prompt with real-time masking and paste support."""
+    try:
+        from prompt_toolkit import PromptSession
+        session = PromptSession()
+        return await session.prompt_async(prompt, is_password=True)
+    except ImportError:
+        return await asyncio.to_thread(_prompt_password, prompt)
 from proliant.com import firmware as _firmware
 from proliant.com.describe import run_describe as _run_describe
 from proliant.com.reports import run_report_gpu as _run_report_gpu, run_report_memory as _run_report_memory
@@ -172,7 +150,7 @@ async def _cmd_login(args: argparse.Namespace) -> None:
     if use_password:
         for _try in range(3):
             try:
-                passwd = _prompt_password("Password: ")
+                passwd = await _prompt_password_async("Password: ")
             except (KeyboardInterrupt, EOFError):
                 get_console().print("\n[yellow]Login cancelled.[/yellow]")
                 sys.exit(0)
@@ -187,6 +165,12 @@ async def _cmd_login(args: argparse.Namespace) -> None:
                     else:
                         get_console().print("[red]Too many failed attempts.[/red]")
                         sys.exit(1)
+                elif "password authenticator not available" in msg.lower():
+                    get_console().print("[red]Password login is not available for this account.[/red]")
+                    get_console().print(
+                        "[yellow]HPE returned an SSO/certificate identity provider instead of a password challenge.[/yellow]"
+                    )
+                    sys.exit(1)
                 else:
                     get_console().print(f"[red]Login failed:[/red] {e}")
                     sys.exit(1)

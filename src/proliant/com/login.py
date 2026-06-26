@@ -1457,9 +1457,6 @@ async def password_login(email: str, password: str, region: str = "us-west") -> 
                 return  # success
 
         except AuthFlowError as e:
-            if os.environ.get("PROLIANT_DEBUG"):
-                import traceback
-                console.print("[dim]" + traceback.format_exc() + "[/dim]")
             # Wrong password — retrying with the same password won't help
             if "authentication failed" in str(e).lower():
                 raise

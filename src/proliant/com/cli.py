@@ -736,13 +736,19 @@ def main(argv: Optional[list[str]] = None) -> None:
             console = get_console()
             console.print(f"\n[yellow]Session expired or not logged in.[/yellow] Please log in to continue.\n")
             try:
+                import getpass as _getpass
                 from rich.prompt import Prompt
-                from proliant.com.login import okta_verify_login
+                from proliant.com.login import okta_verify_login, password_login
                 email = Prompt.ask("[bold]HPE GreenLake email[/bold]").strip()
                 if not email:
                     console.print("[red]Email is required.[/red]")
                     sys.exit(1)
-                run_sync(okta_verify_login(email=email, region="us-west"))
+                # gmail / external accounts use password auth; HPE SSO uses Okta Verify
+                if not email.lower().endswith("@hpe.com"):
+                    passwd = _getpass.getpass("Password: ")
+                    run_sync(password_login(email=email, password=passwd, region="us-west"))
+                else:
+                    run_sync(okta_verify_login(email=email, region="us-west"))
                 console.print("\n[green]✓ Logged in.[/green] Continuing...\n")
             except (KeyboardInterrupt, EOFError):
                 console.print("\n[yellow]Login cancelled.[/yellow]")

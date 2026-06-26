@@ -302,3 +302,22 @@ Token storage: `~/.config/hpecom/token.json`
 - Always run `pytest tests/ -q` before committing (40 tests, all must pass)
 - Use `--dry-run` when testing upgrade paths against live servers
 - httpx timeout: connect=10s, read=60s
+
+## Release process
+
+Before tagging a release, always update `CHANGELOG.md` first:
+- Add a new `## vX.Y.Z — YYYY-MM-DD` section at the top (above previous releases).
+- Sections: **New Features** first (if any), then **Bug Fixes**, then **Enhancements** — only include non-empty sections.
+- One brief user-facing bullet per change — what broke / what's new, no internal implementation details.
+- CI extracts the section automatically and uses it as the GitHub Release body.
+
+Example entry:
+```markdown
+## v1.0.9 — 2026-07-01
+
+### New Features
+- `proliant ilo get disk-map`: show physical disk slot layout per server.
+
+### Bug Fixes
+- `proliant com login`: fixed token refresh when ccs-session expires.
+```

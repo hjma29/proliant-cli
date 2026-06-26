@@ -1460,6 +1460,9 @@ async def password_login(email: str, password: str, region: str = "us-west") -> 
             if os.environ.get("PROLIANT_DEBUG"):
                 import traceback
                 console.print("[dim]" + traceback.format_exc() + "[/dim]")
+            # Wrong password — retrying with the same password won't help
+            if "authentication failed" in str(e).lower():
+                raise
             # Don't retry IDP mismatch / wrong-flow errors — they won't change on retry
             if "not available" in str(e).lower() and "authenticator" in str(e).lower():
                 raise

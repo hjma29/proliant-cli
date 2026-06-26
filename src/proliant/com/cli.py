@@ -66,26 +66,41 @@ from proliant.com import workspaces as _workspaces
 
 
 def _prompt_password(prompt: str = "Password: ") -> str:
-    """Prompt for password. Supports paste. Redraws with * count after Enter."""
+    """Prompt for password. Supports paste. Redraws prompt line with * after Enter."""
     if sys.platform == "win32":
         import ctypes
-        STD_INPUT_HANDLE = -10
+        STD_INPUT_HANDLE  = -10
+        STD_ERROR_HANDLE  = -12
         ENABLE_ECHO_INPUT = 0x0004
+        ENABLE_VTP        = 0x0004  # ENABLE_VIRTUAL_TERMINAL_PROCESSING (output handle)
         kernel32 = ctypes.windll.kernel32
-        h = kernel32.GetStdHandle(STD_INPUT_HANDLE)
-        mode = ctypes.c_ulong()
-        kernel32.GetConsoleMode(h, ctypes.byref(mode))
-        old_mode = mode.value
-        # Disable echo only; keep line-input so paste is buffered naturally.
-        kernel32.SetConsoleMode(h, old_mode & ~ENABLE_ECHO_INPUT)
+
+        # stdin: disable echo, keep line-input so paste is buffered naturally
+        hi = kernel32.GetStdHandle(STD_INPUT_HANDLE)
+        in_mode = ctypes.c_ulong()
+        kernel32.GetConsoleMode(hi, ctypes.byref(in_mode))
+        old_in_mode = in_mode.value
+        kernel32.SetConsoleMode(hi, old_in_mode & ~ENABLE_ECHO_INPUT)
+
+        # stderr: ensure VT sequences are processed so we can move the cursor up
+        he = kernel32.GetStdHandle(STD_ERROR_HANDLE)
+        err_mode = ctypes.c_ulong()
+        kernel32.GetConsoleMode(he, ctypes.byref(err_mode))
+        old_err_mode = err_mode.value
+        kernel32.SetConsoleMode(he, old_err_mode | ENABLE_VTP)
+
         try:
             sys.stderr.write(prompt)
             sys.stderr.flush()
             pwd = sys.stdin.readline().rstrip("\r\n")
         finally:
-            kernel32.SetConsoleMode(h, old_mode)
-        # Redraw the line showing * per character so the user sees what was received.
-        sys.stderr.write("\r" + prompt + "*" * len(pwd) + "\n")
+            kernel32.SetConsoleMode(hi, old_in_mode)
+            kernel32.SetConsoleMode(he, old_err_mode)
+
+        # Entering a line advances the cursor to the next line even with echo off.
+        # Move up one line (\x1b[1A) and overwrite so the user sees one clean line:
+        #   Password: *****
+        sys.stderr.write("\x1b[1A\r" + prompt + "*" * len(pwd) + "\n")
         sys.stderr.flush()
         return pwd
     else:

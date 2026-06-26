@@ -184,6 +184,20 @@ proliant com get servers  (planned)
   the `sso-resolve` path version (`v1alpha2` may bump), and the `challenge-authenticator` remediation name.
 - Full flow documented in `~/work/work-notes/notes-proliant-cli.md` → "Okta IDX Login Flows".
 
+**17b. `Accept` header on IDX introspect/identify decides whether password login works at all**
+- `password_login()` MUST send `Accept: application/json` (`CLASSIC_HEADERS` in `com/login.py`) on the
+  `idp/idx/introspect` and `idp/idx/identify` calls. `okta_verify_login()` keeps `IDX_HEADERS` (ion+json).
+- With `Accept: application/ion+json; okta-version=1.0.0` (OIE IDX v1), `auth.hpe.com` routes external
+  (non-`@hpe.com`) accounts through `redirect-idp` → `hpe-greenlake-hub.mtls.okta.com/sso/idps/MTLS`
+  (Certificate-based auth) — the password authenticator is NEVER offered, so CLI login is impossible.
+- With `Accept: application/json` (classic), identify returns `authenticators.value=[password]` +
+  `challenge-authenticator` href directly → password login works. Same stateToken/okta_base/payload —
+  ONLY the header differs, yet it flips the entire Okta sign-in policy.
+- Wrong password → HTTP 401 with `errors.E0000004` (or `E0000207`) → raise clean "Incorrect password".
+- This matches `HPECOMCmdlets`, which sets `-ContentType "application/json"` on all IDX calls.
+- DEBUG LESSON: when two flows produce identical-looking parsed JSON but diverge in behavior, diff the
+  full wire-level HTTP **request including headers** — not just the visible state/payload.
+
 ---
 
 ## COM firmware update mechanism (key facts)

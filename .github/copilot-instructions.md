@@ -1,12 +1,7 @@
 # proliant — Copilot Instructions
 
-> **This is the single AI context file for this repo** — update it whenever a new bug, gotcha, or schema
-> difference is discovered.
-> **Do NOT store durable proliant knowledge in local agent memory (`/memories/…`)** — it lives in
-> per-machine `AppData` and does NOT sync. The maintainer works across multiple machines, so all
-> lasting knowledge MUST go in git-tracked files (this file, `README.md`, or the work-notes repo) so it
-> travels via `git pull`. Use agent memory only for throwaway session state.
-> **Notes are in `~/work/work-notes/`** — use `notes-proliant-cli.md` for proliant/Redfish findings, `notes-BCM.md` for BCM integration. `notes.md` in this repo is an archived backup — do not update it.
+> Engineering context for contributors and AI agents working on this repo.
+> Update whenever a new bug, gotcha, or schema difference is discovered.
 > User-facing CLI reference: `README.md` (update when commands or flags change).
 
 ---
@@ -43,18 +38,6 @@ src/proliant/
 tests/                  pytest — run with: pytest tests/ -q  (40 tests, must pass before commit)
 notes.md                Full findings, gotchas, Redfish + COM API reference
 ```
-
----
-
-## Test servers
-
-| Name | Gen | iLO | COM |
-|------|-----|-----|-----|
-| dl380-gen11 | Gen11 | iLO 6 v1.74 | ❌ blocked (ProductID=NA) |
-| dl345-gen12 | Gen12 | iLO 7 v1.20 | ✅ HPECC_USWEST_1 |
-| dl325-gen12 | Gen12 | iLO 7 v1.21 | ✅ HPECC_USWEST_1 |
-
-Credentials/IPs/serials: see `~/work/work-notes/notes-proliant-cli.md`
 
 ---
 

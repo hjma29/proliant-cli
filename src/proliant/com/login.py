@@ -1236,9 +1236,22 @@ async def password_login(email: str, password: str, region: str = "us-west") -> 
                 remediations = [v["name"] for v in d3["remediation"]["value"]]
 
                 if "redirect-idp" in remediations:
+                    redirect_idp_entry = next(
+                        (v for v in d3["remediation"]["value"] if v["name"] == "redirect-idp"),
+                        {}
+                    )
+                    idp_type = str(redirect_idp_entry.get("type", "")).upper()
+                    idp_name = redirect_idp_entry.get("idp", {}).get("name", idp_type or "external IDP")
+                    idp_href = redirect_idp_entry.get("href", "")
+                    if "google" in idp_type.lower() or "google" in idp_href.lower():
+                        raise AuthFlowError(
+                            f"This account uses Google Sign-In ({idp_name}). "
+                            "Password login is not available for Google-federated accounts. "
+                            "Use 'proliant com login --api-client' with pre-created GreenLake API credentials instead."
+                        )
                     raise AuthFlowError(
-                        "This account uses corporate SSO (HPE employee account). "
-                        "Use 'proliant com login' with Okta Verify instead."
+                        f"This account uses federated SSO ({idp_name}). "
+                        "Use 'proliant com login' (Okta Verify) for HPE employee accounts."
                     )
 
                 if "select-authenticator-authenticate" not in remediations:
@@ -1317,6 +1330,9 @@ async def password_login(email: str, password: str, region: str = "us-west") -> 
                 return  # success
 
         except AuthFlowError as e:
+            # Don't retry IDP mismatch / wrong-flow errors — they won't change on retry
+            if "federated" in str(e).lower() or "google sign-in" in str(e).lower() or "sso" in str(e).lower():
+                raise
             last_error = e
             console.print(f"[yellow]Auth flow error:[/yellow] {e}")
         except Exception as e:

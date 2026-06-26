@@ -245,7 +245,7 @@ async def test_async_main_dispatches_boot():
 def test_run_init_creates_user_config(monkeypatch, tmp_path):
     from proliant.ilo import cli
 
-    monkeypatch.setattr(Path, "cwd", lambda: tmp_path)
+    monkeypatch.setattr("proliant.common.config_dir", lambda: tmp_path)
 
     with patch("rich.prompt.Confirm.ask", side_effect=[False]), \
          patch("proliant.ilo.cli._open_in_editor") as open_editor:

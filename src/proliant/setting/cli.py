@@ -1,14 +1,17 @@
 """
-proliant.config.cli — config subcommands: list inventory, list cli-tree.
+proliant.setting.cli — setting subcommands.
 
 Usage:
-    proliant config list inventory
-    proliant config list cli-tree
+    proliant setting list inventory
+    proliant setting list cli-tree
+    proliant setting telemetry on|off
+    proliant setting uninstall
 """
 from __future__ import annotations
 
 import argparse
 import configparser
+import shutil
 import sys
 from pathlib import Path
 
@@ -184,14 +187,69 @@ def _cmd_list_cli_tree() -> None:
 
 # ── Argument parser ────────────────────────────────────────────────────────────
 
+def _cmd_telemetry(state: str) -> None:
+    """Enable or disable Sentry error telemetry."""
+    from proliant.common import config_dir
+    cfg = config_dir()
+    cfg.mkdir(parents=True, exist_ok=True)
+    enabled = cfg / "telemetry-enabled"
+    disabled = cfg / "telemetry-disabled"
+
+    if state == "on":
+        disabled.unlink(missing_ok=True)
+        enabled.touch()
+        console.print("[green]✓[/green] Telemetry enabled.")
+        console.print("[dim]Error reports will be sent anonymously to help improve proliant.[/dim]")
+    else:
+        enabled.unlink(missing_ok=True)
+        disabled.touch()
+        console.print("[yellow]✓[/yellow] Telemetry disabled. No data will be sent.")
+
+
+def _cmd_uninstall() -> None:
+    """Remove all proliant-cli config and cache directories."""
+    from proliant.common import config_dir, cache_dir
+    cfg = config_dir()
+    cch = cache_dir()
+
+    console.print("[bold]proliant config uninstall[/bold]\n")
+    console.print("This will permanently remove:\n")
+    for d in (cfg, cch):
+        if d.exists():
+            console.print(f"  [red]•[/red] {d}")
+        else:
+            console.print(f"  [dim]•[/dim] {d}  [dim](not found)[/dim]")
+
+    console.print()
+    try:
+        answer = input("Continue? [y/N] ").strip().lower()
+    except (KeyboardInterrupt, EOFError):
+        console.print("\nAborted.")
+        return
+
+    if answer != "y":
+        console.print("Aborted.")
+        return
+
+    for d in (cfg, cch):
+        if d.exists():
+            shutil.rmtree(d)
+            console.print(f"  [green]✓[/green] Removed {d}")
+        else:
+            console.print(f"  [dim]–[/dim] {d} not found, skipped")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="proliant config",
+        prog="proliant setting",
         description="Manage proliant configuration.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 examples:
-  proliant config list inventory    Show all iLO hosts and OneView appliance from inventory.ini
+  proliant setting list inventory    Show all iLO hosts and OneView appliance from inventory.ini
+  proliant setting telemetry on      Enable Sentry error telemetry
+  proliant setting telemetry off     Disable telemetry
+  proliant setting uninstall         Remove all proliant-cli config and cache files
 """,
     )
     sub = p.add_subparsers(dest="cmd", metavar="COMMAND")
@@ -200,6 +258,11 @@ examples:
     list_sub = p_list.add_subparsers(dest="item", metavar="ITEM")
     list_sub.add_parser("inventory", help="Show iLO hosts and OneView appliance")
     list_sub.add_parser("cli-tree",  help="Show full proliant command hierarchy as a tree")
+
+    p_tel = sub.add_parser("telemetry", help="Enable or disable error telemetry")
+    p_tel.add_argument("state", choices=["on", "off"], help="on or off")
+
+    sub.add_parser("uninstall", help="Remove all proliant-cli config and cache directories")
 
     return p
 
@@ -217,5 +280,9 @@ def main(argv: list[str] | None = None) -> None:
             _cmd_list_cli_tree()
         else:
             p.parse_args(["list", "--help"])
+    elif args.cmd == "telemetry":
+        _cmd_telemetry(args.state)
+    elif args.cmd == "uninstall":
+        _cmd_uninstall()
     else:
         p.print_help()

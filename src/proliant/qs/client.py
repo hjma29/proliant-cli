@@ -124,12 +124,8 @@ _CACHE_TTL_LATEST = 7 * 24 * 3600   # 7 days for "latest" content (may change)
 
 
 def _cache_dir() -> Path:
-    import sys
-    if sys.platform == "win32":
-        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-    else:
-        base = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-    d = base / "proliant" / "qs"
+    from proliant.common import cache_dir
+    d = cache_dir() / "qs"
     d.mkdir(parents=True, exist_ok=True)
     return d
 

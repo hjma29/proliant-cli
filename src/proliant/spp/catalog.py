@@ -120,15 +120,11 @@ class SppComponent:
 # ---------------------------------------------------------------------------
 
 def _cache_dir() -> Path:
-    """Return the spp/ directory used for caching catalogs and packages.
-
-    - Frozen exe (PyInstaller/Nuitka): next to the executable so files survive restarts
-    - Dev: repo root / spp/
-    """
-    import sys
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent / "spp"
-    return Path(__file__).parent.parent.parent.parent / "spp"
+    """Return the spp/ subdirectory used for caching catalogs and packages."""
+    from proliant.common import cache_dir
+    d = cache_dir() / "spp"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
 def _catalog_path(gen: str, version: str) -> Path:

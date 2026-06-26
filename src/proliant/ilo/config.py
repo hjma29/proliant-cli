@@ -10,9 +10,6 @@ that imports them — no hunting through multiple files.
 from pathlib import Path
 import configparser
 import os
-import sys
-
-from proliant.common.platform import is_frozen
 
 # ---------------------------------------------------------------------------
 # Table display widths (characters).  Adjust here; every print function
@@ -30,33 +27,26 @@ MAX_WORKERS: int = 10
 # ---------------------------------------------------------------------------
 # Config file — inventory.ini uses simple INI format, no YAML indentation required.
 # Search order (first match wins):
-#   1. PCLI_CONFIG env var           (explicit override)
-#   2. ./inventory.ini                    (same dir where proliant runs — recommended)
-#   3. <binary dir>/inventory.ini         (next to the .exe on Windows)
-#   4. ~/.config/proliant/inventory.ini       (user config dir)
+#   1. PCLI_CONFIG env var                        (explicit override)
+#   2. ./inventory.ini                            (local/project override)
+#   3. ~/.config/proliant-cli/inventory.ini       (default — created by 'proliant ilo init')
 # ---------------------------------------------------------------------------
 
 def _find_config_file() -> Path:
     if env := os.environ.get("PCLI_CONFIG"):
         return Path(env)
 
+    from proliant.common import config_dir
     candidates = [
         Path.cwd() / "inventory.ini",
+        config_dir() / "inventory.ini",
     ]
-    if is_frozen():
-        # Packaged binary: check same directory as the binary
-        candidates.append(Path(sys.executable).parent / "inventory.ini")
-    else:
-        # Dev: repo root
-        candidates.append(Path(__file__).parent.parent.parent.parent / "inventory.ini")
-
-    candidates.append(Path.home() / ".config" / "proliant" / "inventory.ini")
 
     for p in candidates:
         if p.exists():
             return p
-    # Return CWD path so error messages show the most useful location
-    return Path.cwd() / "inventory.ini"
+    # Return config dir path so error messages point to the right place
+    return config_dir() / "inventory.ini"
 
 
 HOSTS_FILE: Path = _find_config_file()

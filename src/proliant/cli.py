@@ -27,7 +27,7 @@ namespaces:
   spp          HPE Service Pack for ProLiant catalog analysis
   oneview      HPE OneView (Synergy & ProLiant fleet management)
   qs           HPE QuickSpecs browser (list revisions, read specs)
-  config       View and manage proliant configuration
+  setting      View and manage proliant configuration
 
 commands:
   update               Download and install the latest proliant release
@@ -47,7 +47,7 @@ examples:
   proliant oneview firmware list                   Fleet firmware inventory via OneView
   proliant qs list --model dl380gen12              List QuickSpec revisions for DL380 Gen12
   proliant qs describe a00073551enw               Read the DL380 Gen12 QuickSpec
-  proliant config list inventory                   Show iLO hosts and OneView in inventory.ini
+  proliant setting list inventory                  Show iLO hosts and OneView in inventory.ini
   proliant update                                  Upgrade proliant to the latest release
 """
 
@@ -377,7 +377,7 @@ _proliant() {
         com)     _proliant__com ;;
         oneview) _proliant__oneview ;;
         qs)      _proliant__qs ;;
-        config)  _proliant__config ;;
+        setting)  _proliant__setting ;;
       esac
       ;;
   esac
@@ -390,7 +390,7 @@ _proliant__ns() {
     'com:HPE GreenLake / Compute Ops Management'
     'oneview:HPE OneView fleet management'
     'qs:HPE QuickSpecs browser'
-    'config:View and manage proliant configuration'
+    'setting:View and manage proliant configuration'
     'update:Upgrade proliant to the latest release'
   )
   _describe 'namespace' ns
@@ -643,8 +643,8 @@ _proliant__oneview_cmds() {
   _describe 'command' cmds
 }
 
-_proliant__config() {
-  _arguments '1: :(list)' '2: :(inventory cli-tree)'
+_proliant__setting() {
+  _arguments '1: :(list telemetry uninstall)' '2: :(inventory cli-tree on off)'
 }
 
 _proliant "$@"
@@ -680,9 +680,8 @@ def _check_for_update_hint() -> None:
     import json
     import time
 
-    cache_dir = os.path.join(
-        os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache")), "proliant"
-    )
+    from proliant.common import cache_dir as _cache_dir
+    cache_dir = str(_cache_dir())
     cache_file = os.path.join(cache_dir, "update-check.json")
 
     current = _get_current_version()
@@ -715,7 +714,8 @@ def _check_for_update_hint() -> None:
                         "ctx=ssl.create_default_context(cafile=certifi.where());"
                         "r=urllib.request.urlopen('https://api.github.com/repos/hjma29/proliant-cli/releases/latest',context=ctx,timeout=5);"
                         "v=json.loads(r.read()).get('tag_name','').lstrip('v');"
-                        "d=os.path.join(os.environ.get('XDG_CACHE_HOME',os.path.expanduser('~/.cache')),'proliant');"
+                        "from pathlib import Path;"
+                        "d=str(Path.home()/'.cache'/'proliant-cli');"
                         "os.makedirs(d,exist_ok=True);"
                         "open(os.path.join(d,'update-check.json'),'w').write(json.dumps({'latest':v,'ts':time.time()}))"
                     ),
@@ -911,9 +911,8 @@ def _run_update() -> None:
             print(f"✓ Updated to {latest_ver}. Run 'proliant --version' to confirm.")
             # Clean up old Nuitka extraction cache dirs (keep only the new version)
             import re as _re
-            _cache_base = os.path.join(
-                os.path.expanduser("~"), ".cache", "proliant"
-            )
+            from proliant.common import cache_dir as _common_cache_dir
+            _cache_base = str(_common_cache_dir())
             if os.path.isdir(_cache_base):
                 for _entry in os.listdir(_cache_base):
                     _entry_path = os.path.join(_cache_base, _entry)
@@ -991,10 +990,10 @@ def _dispatch_oneview(args: list[str]) -> None:
     oneview_main()
 
 
-def _dispatch_config(args: list[str]) -> None:
-    from proliant.config.cli import main as config_main
-    sys.argv = ["proliant config"] + args
-    config_main()
+def _dispatch_setting(args: list[str]) -> None:
+    from proliant.setting.cli import main as setting_main
+    sys.argv = ["proliant setting"] + args
+    setting_main()
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -1039,9 +1038,9 @@ def main(argv: list[str] | None = None) -> None:
             _dispatch_qs(parts[2:])
             return
 
-        if in_subcommand and len(parts) >= 2 and parts[1] == "config":
+        if in_subcommand and len(parts) >= 2 and parts[1] == "setting":
             os.environ["_ARGCOMPLETE"] = "2"
-            _dispatch_config(parts[2:])
+            _dispatch_setting(parts[2:])
             return
 
         # Top-level: use argparse so argcomplete can offer 'ilo', 'com', 'spp', 'oneview'
@@ -1055,7 +1054,7 @@ def main(argv: list[str] | None = None) -> None:
         sub.add_parser("spp",     help="HPE Service Pack for ProLiant analysis")
         sub.add_parser("oneview", help="HPE OneView fleet management")
         sub.add_parser("qs",      help="HPE QuickSpecs browser")
-        sub.add_parser("config",  help="View and manage proliant configuration")
+        sub.add_parser("setting", help="View and manage proliant configuration")
         sub.add_parser("update",              help="Upgrade proliant to the latest release")
         argcomplete.autocomplete(parser)
         return  # autocomplete() exits; reaching here means no completion needed
@@ -1086,8 +1085,8 @@ def main(argv: list[str] | None = None) -> None:
         _dispatch_oneview(list(args[1:]))
     elif namespace == "qs":
         _dispatch_qs(list(args[1:]))
-    elif namespace == "config":
-        _dispatch_config(list(args[1:]))
+    elif namespace == "setting":
+        _dispatch_setting(list(args[1:]))
     elif namespace == "update":
         _run_update()
     else:
@@ -1123,8 +1122,18 @@ def _sentry_scrub(event, hint):  # noqa: ANN001
 
 
 def _init_sentry() -> None:
-    """Initialise Sentry if PROLIANT_TELEMETRY=1 is set."""
-    if not os.environ.get("PROLIANT_TELEMETRY"):
+    """Initialise Sentry if telemetry is enabled.
+
+    Check order:
+    1. ~/.config/proliant-cli/telemetry-disabled  -> always off
+    2. ~/.config/proliant-cli/telemetry-enabled   -> on
+    3. PROLIANT_TELEMETRY=1 env var               -> on (legacy / CI)
+    """
+    from pathlib import Path
+    cfg = Path.home() / ".config" / "proliant-cli"
+    if (cfg / "telemetry-disabled").exists():
+        return
+    if not (cfg / "telemetry-enabled").exists() and not os.environ.get("PROLIANT_TELEMETRY"):
         return
     try:
         import sentry_sdk  # noqa: PLC0415

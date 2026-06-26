@@ -38,7 +38,8 @@ REGION_MAP: dict[str, str] = {
 }
 
 COM_API_VERSION = "v1beta2"
-_CREDS_FILE = Path.home() / ".config" / "proliant" / "com" / "credentials.yml"
+from proliant.common import config_dir as _config_dir
+_CREDS_FILE = _config_dir() / "com" / "credentials.yml"
 _REFRESH_BUFFER = 60  # refresh 60 s before expiry (tokens can be as short as 15 min)
 
 

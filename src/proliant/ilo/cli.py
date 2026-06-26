@@ -704,9 +704,11 @@ def _run_init() -> None:
     from pathlib import Path
     from rich.console import Console
     from rich.prompt import Confirm
+    from proliant.common import config_dir
 
     console = Console()
-    dest = Path.cwd() / "inventory.ini"
+    dest = config_dir() / "inventory.ini"
+    dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
         console.print(f"[green]Already exists:[/green] [bold]{dest}[/bold]")
         console.print("  Edit it to add or update your servers.")

@@ -1240,19 +1240,19 @@ async def password_login(email: str, password: str, region: str = "us-west") -> 
                         (v for v in d3["remediation"]["value"] if v["name"] == "redirect-idp"),
                         {}
                     )
-                    idp_type = str(redirect_idp_entry.get("type", "")).upper()
-                    idp_name = redirect_idp_entry.get("idp", {}).get("name", idp_type or "external IDP")
-                    idp_href = redirect_idp_entry.get("href", "")
-                    if "google" in idp_type.lower() or "google" in idp_href.lower():
+                    # Follow redirect-idp to the second Okta org (auth.hpe.com for
+                    # external accounts), then submit the password authenticator there.
+                    with console.status("[cyan]Connecting to HPE authentication…[/cyan]"):
+                        d3, okta_base = await _follow_saml_to_workforce(client, redirect_idp_entry)
+                    remediations = [v["name"] for v in d3.get("remediation", {}).get("value", [])]
+                    if "select-authenticator-authenticate" not in remediations:
+                        idp_type = str(redirect_idp_entry.get("type", "")).upper()
+                        idp_name = redirect_idp_entry.get("idp", {}).get("name", idp_type or "external IDP")
                         raise AuthFlowError(
-                            f"This account uses Google Sign-In ({idp_name}). "
-                            "Password login is not available for Google-federated accounts. "
-                            "Use 'proliant com login --api-client' with pre-created GreenLake API credentials instead."
+                            f"Password authenticator not available at {idp_name} ({okta_base}). "
+                            f"Available: {remediations}. "
+                            "This account may require 'proliant com login' (Okta Verify)."
                         )
-                    raise AuthFlowError(
-                        f"This account uses federated SSO ({idp_name}). "
-                        "Use 'proliant com login' (Okta Verify) for HPE employee accounts."
-                    )
 
                 if "select-authenticator-authenticate" not in remediations:
                     raise AuthFlowError(
@@ -1331,7 +1331,7 @@ async def password_login(email: str, password: str, region: str = "us-west") -> 
 
         except AuthFlowError as e:
             # Don't retry IDP mismatch / wrong-flow errors — they won't change on retry
-            if "federated" in str(e).lower() or "google sign-in" in str(e).lower() or "sso" in str(e).lower():
+            if "not available" in str(e).lower() and "authenticator" in str(e).lower():
                 raise
             last_error = e
             console.print(f"[yellow]Auth flow error:[/yellow] {e}")

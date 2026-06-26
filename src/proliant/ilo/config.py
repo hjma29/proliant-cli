@@ -99,7 +99,26 @@ def load_hosts(name: str | None = None) -> list[dict]:
         raise FileNotFoundError(HOSTS_FILE)
 
     cfg = configparser.ConfigParser()
-    cfg.read(HOSTS_FILE)
+    try:
+        cfg.read(HOSTS_FILE)
+    except configparser.Error as exc:
+        # Extract line number from the exception message if present
+        import re
+        line_hint = ""
+        m = re.search(r"\[line (\d+)\]", str(exc))
+        if m:
+            line_hint = f" (line {m.group(1)})"
+        raise ValueError(
+            f"inventory.ini has a syntax error{line_hint}: {exc}\n\n"
+            f"  Common cause: a key=value line is outside any section header.\n"
+            f"  Every entry must belong to a [section]. For example:\n\n"
+            f"    [my-server]          # iLO host\n"
+            f"    host = 192.0.2.10\n\n"
+            f"    [my-oneview]         # OneView appliance (skipped by 'proliant ilo')\n"
+            f"    host = 192.0.2.20\n"
+            f"    type = oneview\n\n"
+            f"  Check {HOSTS_FILE}"
+        ) from exc
 
     default_user = cfg.get("defaults", "username", fallback="")
     default_pass = cfg.get("defaults", "password", fallback="")

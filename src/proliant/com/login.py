@@ -673,6 +673,7 @@ async def _pick_workspace(
                 "Select workspace:",
                 choices=names,
                 use_search_filter=True,
+                use_jk_keys=False,
                 instruction="(↑↓ arrows · type to filter · Enter to confirm)",
             ).ask()
 

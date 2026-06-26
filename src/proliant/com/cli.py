@@ -66,50 +66,28 @@ from proliant.com import workspaces as _workspaces
 
 
 def _prompt_password(prompt: str = "Password: ") -> str:
-    """Prompt for password echoing * per character. Supports typing and paste."""
+    """Prompt for password. Supports paste. Redraws with * count after Enter."""
     if sys.platform == "win32":
-        import ctypes, msvcrt
-        STD_INPUT_HANDLE           = -10
-        ENABLE_LINE_INPUT          = 0x0002
-        ENABLE_ECHO_INPUT          = 0x0004
-        ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200  # bracketed-paste sequences
+        import ctypes
+        STD_INPUT_HANDLE = -10
+        ENABLE_ECHO_INPUT = 0x0004
         kernel32 = ctypes.windll.kernel32
         h = kernel32.GetStdHandle(STD_INPUT_HANDLE)
         mode = ctypes.c_ulong()
         kernel32.GetConsoleMode(h, ctypes.byref(mode))
         old_mode = mode.value
-        # Raw mode: disable echo, line-buffering, and VT-input so Windows Terminal
-        # does NOT wrap paste in bracketed-escape sequences (\x1b[200~...\x1b[201~)
-        # which corrupted the password in the original char-by-char loop.
-        kernel32.SetConsoleMode(
-            h, old_mode & ~(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_VIRTUAL_TERMINAL_INPUT)
-        )
+        # Disable echo only; keep line-input so paste is buffered naturally.
+        kernel32.SetConsoleMode(h, old_mode & ~ENABLE_ECHO_INPUT)
         try:
             sys.stderr.write(prompt)
             sys.stderr.flush()
-            chars: list[str] = []
-            while True:
-                ch = msvcrt.getwch()
-                if ch in ("\r", "\n"):
-                    sys.stderr.write("\n")
-                    sys.stderr.flush()
-                    break
-                elif ch == "\x03":  # Ctrl+C
-                    sys.stderr.write("\n")
-                    sys.stderr.flush()
-                    raise KeyboardInterrupt
-                elif ch in ("\x08", "\x7f"):  # Backspace
-                    if chars:
-                        chars.pop()
-                        sys.stderr.write("\b \b")
-                        sys.stderr.flush()
-                elif ord(ch) >= 32:  # printable only — skip stray control chars
-                    chars.append(ch)
-                    sys.stderr.write("*")
-                    sys.stderr.flush()
+            pwd = sys.stdin.readline().rstrip("\r\n")
         finally:
             kernel32.SetConsoleMode(h, old_mode)
-        return "".join(chars)
+        # Redraw the line showing * per character so the user sees what was received.
+        sys.stderr.write("\r" + prompt + "*" * len(pwd) + "\n")
+        sys.stderr.flush()
+        return pwd
     else:
         import getpass
         return getpass.getpass(prompt)

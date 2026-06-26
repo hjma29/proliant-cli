@@ -71,6 +71,11 @@ Register-ArgumentCompleter -Native -CommandName proliant -ScriptBlock {
     }
     Remove-Item $completion_file, Env:\\_ARGCOMPLETE_STDOUT_FILENAME, Env:\\ARGCOMPLETE_USE_TEMPFILES, Env:\\COMP_LINE, Env:\\COMP_POINT, Env:\\_ARGCOMPLETE, Env:\\_ARGCOMPLETE_SUPPRESS_SPACE, Env:\\_ARGCOMPLETE_IFS, Env:\\_ARGCOMPLETE_SHELL
 }
+
+# Show completion menu instead of cycling (added by proliant)
+if (-not (Get-PSReadLineKeyHandler | Where-Object { $_.Key -eq 'Tab' -and $_.Function -eq 'MenuComplete' })) {
+    Set-PSReadLineKeyHandler -Key Tab -Function MenuComplete
+}
 """
 
 
@@ -294,10 +299,10 @@ def _win_add_powershell_completion() -> None:
             if "proliant" in existing and "Register-ArgumentCompleter" in existing:
                 if _POWERSHELL_COMPLETION_BLOCK.strip() in existing:
                     continue  # already up-to-date
-                # Strip old block (comment marker through its closing brace) and
-                # rewrite. Matches both the old static and new dynamic formats.
+                # Strip old block (comment marker through its last closing brace)
+                # covering both the old format (no MenuComplete) and new format.
                 existing = re.sub(
-                    r"\n?# proliant tab completion \(added by proliant\).*?\n\}\n?",
+                    r"\n?# proliant tab completion \(added by proliant\).*?(?:\n\})+\n?",
                     "\n",
                     existing,
                     flags=re.DOTALL,

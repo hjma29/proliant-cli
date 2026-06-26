@@ -9,7 +9,8 @@ build/
 htmlcov/
 *.egg
 hosts-ilo.ini
-spp/
+# SPP catalog/package download cache (not source code)
+/spp/
 .envrc
 ilorest_logs/
 

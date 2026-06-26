@@ -725,7 +725,16 @@ def main(argv: Optional[list[str]] = None) -> None:
     if getattr(args, "json_output", False):
         set_output_mode(OutputMode.JSON)
 
-    run_sync(_async_main(args))
+    try:
+        run_sync(_async_main(args))
+    except AuthError as exc:
+        print(f"\nAuthentication error: {exc}", file=sys.stderr)
+        print("  Run 'proliant com login' to refresh your credentials.\n", file=sys.stderr)
+        sys.exit(1)
+    except CredentialsError as exc:
+        print(f"\nCredentials error: {exc}", file=sys.stderr)
+        print("  Run 'proliant com login' to set up your credentials.\n", file=sys.stderr)
+        sys.exit(1)
 
 
 async def _async_main(args: argparse.Namespace) -> None:

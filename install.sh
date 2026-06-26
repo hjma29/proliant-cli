@@ -4,6 +4,9 @@
 
 set -e
 
+# Silent install ping — counts installs by OS (no personal data sent)
+curl -sf "https://proliant-cli.hjma29.workers.dev/install/unix" >/dev/null 2>&1 &
+
 REPO="hjma29/proliant-cli"
 BIN_NAME="proliant"
 INSTALL_DIR="/usr/local/bin"

@@ -2,6 +2,10 @@
 # Usage: irm https://raw.githubusercontent.com/hjma29/proliant-cli/main/install.ps1 | iex
 
 $ErrorActionPreference = "Stop"
+
+# Silent install ping — counts installs by OS (no personal data sent)
+Start-Job { Invoke-WebRequest "https://proliant-cli.hjma29.workers.dev/install/windows" -UseBasicParsing -ErrorAction SilentlyContinue } | Out-Null
+
 $Repo = "hjma29/proliant-cli"
 $BinName = "proliant.exe"
 $InstallDir = "$env:USERPROFILE\bin"

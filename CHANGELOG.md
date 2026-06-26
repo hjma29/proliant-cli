@@ -7,23 +7,23 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 ## v1.0.8 — 2026-06-26
 
 ### Bug Fixes
-- `proliant com login --password`: fixed login failure for external (non-`@hpe.com`) HPE Accounts. The Okta IDX introspect/identify calls now use `Accept: application/json` (classic) instead of `ion+json` (OIE), which was silently routing external accounts to MTLS certificate auth instead of password login.
+- `proliant com login --password`: fixed login failure for external HPE Accounts (non-`@hpe.com`).
 
 ---
 
 ## v1.0.7 — 2026-06-25
 
 ### Bug Fixes
-- `proliant com login --password`: added Pavo SSO broker (`sso-resolve`) step to resolve the Okta state token when authorization redirects to the `/sso/continue` React SPA. Previously the login flow failed to find the state token and aborted.
-- `proliant com login --password`: fixed code extraction path for direct HPE Accounts — `success.href` now redirects straight to the `callback?code=` URL without a SAML form.
+- `proliant com login --password`: fixed login failure when HPE authorization redirects through the Pavo SSO broker (`/sso/continue`).
+- `proliant com login --password`: fixed auth code extraction for direct HPE Accounts (no SAML redirect after password).
 
 ---
 
 ## v1.0.6
 
-### Enhancements
+### New Features
 - Initial public release of unified `proliant` CLI combining iLO Redfish and COM cloud management.
-- `proliant ilo get firmwares`, `get update-method`, `get network`, `get storage`, `get nic`, `get full`, and related subcommands.
-- `proliant com get devices`, `get bundles`, `login`, `logout`.
+- `proliant ilo`: firmware inventory, update-method classification, network/storage/NIC/CPU/memory inspection, firmware upgrade.
+- `proliant com`: device listing, firmware bundles, login/logout.
 
 ---

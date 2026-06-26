@@ -727,13 +727,21 @@ def main(argv: Optional[list[str]] = None) -> None:
 
     try:
         run_sync(_async_main(args))
-    except AuthError as exc:
-        print(f"\nAuthentication error: {exc}", file=sys.stderr)
-        print("  Run 'proliant com login' to refresh your credentials.\n", file=sys.stderr)
-        sys.exit(1)
-    except CredentialsError as exc:
-        print(f"\nCredentials error: {exc}", file=sys.stderr)
-        print("  Run 'proliant com login' to set up your credentials.\n", file=sys.stderr)
+    except (AuthError, CredentialsError) as exc:
+        console = get_console()
+        console.print(f"\n[yellow]Session expired or not logged in.[/yellow] ({exc})")
+        console.print("Please log in to continue.\n")
+        try:
+            from rich.prompt import Prompt
+            from proliant.com.login import okta_verify_login
+            email = Prompt.ask("[bold]HPE GreenLake email[/bold]").strip()
+            if not email:
+                console.print("[red]Email is required.[/red]")
+                sys.exit(1)
+            run_sync(okta_verify_login(email=email, region="us-west"))
+            console.print("\n[green]✓ Logged in.[/green] Re-run your command to continue.\n")
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[yellow]Login cancelled.[/yellow]")
         sys.exit(1)
 
 

@@ -172,6 +172,18 @@ proliant com get servers  (planned)
 - No `UpdatableBy` exposed — must be inferred from component name + context patterns.
 - `classify_update_method()` in `ilo/inventory.py` contains the classification rules.
 
+**17. `proliant com login --password` uses undocumented internal HPE GreenLake endpoints**
+- The HPE developer portal ONLY documents the API-client-secret flow (personal API client). The
+  interactive email/password login is NOT a published API — it replicates what the GreenLake web UI
+  does internally. HPE can change these endpoints without notice.
+- Key undocumented pieces:
+  - `GET common.cloud.hpe.com/settings.json` → runtime config (`authorityURL`, `oktaURL`, `orgApiGw`, `client_id`)
+  - `GET {orgApiGw}/internal-identity/v1alpha2/sso-resolve?login_hint={email}&track-id={id}` — "Pavo SSO broker": when `/as/authorization.oauth2` lands on the `/sso/continue?track-id=` React SPA (no stateToken), this endpoint resolves the user's IdP and returns an Okta authorize page containing the stateToken.
+  - Client ID `aquila-user-auth` (PingFederate layer) + `0oae329tm8xw7nwZE357` (auth.hpe.com layer)
+- If `proliant com login --password` breaks after an HPE update: check `settings.json` for URL changes,
+  the `sso-resolve` path version (`v1alpha2` may bump), and the `challenge-authenticator` remediation name.
+- Full flow documented in `~/work/work-notes/notes-proliant-cli.md` → "Okta IDX Login Flows".
+
 ---
 
 ## COM firmware update mechanism (key facts)

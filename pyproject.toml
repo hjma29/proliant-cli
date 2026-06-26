@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "proliant"
-version = "1.0.6"
+version = "1.0.7"
 description = "HPE ProLiant unified CLI — iLO Redfish and Compute Ops Management"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -32,6 +32,7 @@ ilo = [
 com = [
     "httpx[http2]>=0.27",
     "pyyaml>=6.0",
+    "questionary>=2.0",
 ]
 qs = [
     "httpx[http2]>=0.27",

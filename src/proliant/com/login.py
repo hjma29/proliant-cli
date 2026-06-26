@@ -16,6 +16,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import os
 import re
 import secrets
 import sys
@@ -89,66 +90,97 @@ def _decode_js_str(raw: str) -> str:
 # Auth flow steps
 # ---------------------------------------------------------------------------
 
+async def _fetch_settings() -> dict:
+    """Fetch HPE GreenLake runtime settings (authority/okta/org-api URLs)."""
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.get(f"{GL_COMMON_URL}/settings.json")
+            if r.status_code == 200:
+                return r.json()
+    except Exception:
+        pass
+    return {}
+
+
+def _find_state_token(html: str) -> Optional[str]:
+    """Scrape an Okta stateToken from an HTML page (multiple known patterns)."""
+    for pat in (
+        r"var\s+stateToken\s*=\s*'([^']+)'",
+        r'var\s+stateToken\s*=\s*"([^"]+)"',
+        r'"stateToken"\s*:\s*"([^"]+)"',
+    ):
+        m = re.search(pat, html)
+        if m:
+            return _decode_js_str(m.group(1))
+    return None
+
+
 async def _get_state_token(
-    client: httpx.AsyncClient, challenge: str, state: str
+    client: httpx.AsyncClient, challenge: str, state: str, email: str = ""
 ) -> Tuple[str, str]:
     """
-    Start the PKCE authorize flow at PingFederate.
-    Follow redirects → auth.hpe.com login page.
-    Extract the stateToken embedded in the page JavaScript.
+    Start the PKCE authorize flow and extract the Okta stateToken.
     Returns (state_token, okta_base_url).
 
-    HPE SSO (2026) inserts an ``internal-identity/v1alpha2`` service in front
-    of Okta. The outer ``/as/authorization.oauth2`` request (which registers
-    our PKCE challenge server-side, keyed by ``state``/track-id) now redirects
-    through that service to an Okta authorize URL carrying ``prompt=none`` for
-    a *silent* SSO check. Since the user is not yet logged in, that silent check
-    fails (``login_required``) and lands on a ``/sso/continue`` interstitial
-    with no stateToken. To drive an interactive login we follow the redirect
-    chain manually, and when we reach the Okta authorize endpoint we strip
-    ``prompt=none`` so Okta renders the login page (with the stateToken).
+    ⚠️  UNDOCUMENTED INTERNAL ENDPOINTS — not a published HPE API contract.
+    These replicate what the GreenLake web UI does. HPE may change them without
+    notice. The official developer portal only documents the API-client-secret flow.
+
+    HPE GreenLake fronts Okta with the "Pavo" SSO broker. The
+    ``/as/authorization.oauth2`` request redirects to a React SPA
+    (``common.cloud.hpe.com/sso/continue?track-id=…``) whose JavaScript
+    normally resolves the user's IdP and bounces to the Okta sign-in page.
+    Since we cannot run that JavaScript, we replicate it: when we land on
+    ``/sso/continue`` we call the broker's ``sso-resolve`` endpoint with the
+    user's ``login_hint`` (email) and ``track-id``. That 302s to the real
+    Okta ``/authorize`` page whose HTML embeds the stateToken.
+
+    If this breaks after an HPE update, check: settings.json for changed URLs,
+    the sso-resolve path version (v1alpha2), and client ID ``aquila-user-auth``.
     """
+    settings   = await _fetch_settings()
+    authority  = settings.get("authorityURL", SSO_URL).rstrip("/")
+    org_api    = settings.get("orgApiGw", "https://aquila-org-api.common.cloud.hpe.com").rstrip("/")
+    client_id  = settings.get("client_id", CLIENT_ID)
+    nonce      = secrets.token_urlsafe(16)
+
     params = {
-        "client_id":              CLIENT_ID,
+        "client_id":              client_id,
         "redirect_uri":           REDIRECT_URI,
         "response_type":          "code",
         "scope":                  "openid profile email",
         "code_challenge":         challenge,
         "code_challenge_method":  "S256",
         "state":                  state,
+        "nonce":                  nonce,
     }
-    url = SSO_URL + "/as/authorization.oauth2?" + urllib.parse.urlencode(params)
-    r = await client.get(url, follow_redirects=False)
+    url = authority + "/as/authorization.oauth2?" + urllib.parse.urlencode(params)
+    r = await client.get(url, follow_redirects=True)
 
-    # Follow the redirect chain manually; intercept the Okta authorize step.
-    for _ in range(12):
-        if r.status_code not in (301, 302, 303, 307, 308):
-            break
-        loc = r.headers.get("location")
-        if not loc:
-            break
-        nxt = httpx.URL(str(r.url)).join(loc)
+    state_token = _find_state_token(r.text)
 
-        # Okta authorize endpoint: strip prompt=none to force interactive login.
-        if "auth.hpe.com" in nxt.host and "/authorize" in nxt.path:
-            q = dict(urllib.parse.parse_qsl(nxt.query.decode()))
-            if q.get("prompt") == "none":
-                q.pop("prompt", None)
-                nxt = nxt.copy_with(query=urllib.parse.urlencode(q).encode())
-                r = await client.get(str(nxt), follow_redirects=True)
-                break
+    # Pavo SSO broker: landed on /sso/continue?track-id=… with no stateToken.
+    # Replicate the SPA's sso-resolve call to reach the Okta sign-in page.
+    if not state_token:
+        final = str(r.url)
+        m = re.search(r"[?&]track-id=([^&]+)", final)
+        if m and email:
+            track_id = urllib.parse.unquote(m.group(1))
+            resolve_url = (
+                f"{org_api}/internal-identity/v1alpha2/sso-resolve"
+                f"?login_hint={urllib.parse.quote(email)}"
+                f"&track-id={urllib.parse.quote(track_id)}"
+            )
+            r = await client.get(resolve_url, follow_redirects=True)
+            state_token = _find_state_token(r.text)
 
-        r = await client.get(str(nxt), follow_redirects=False)
-
-    m = re.search(r'"stateToken"\s*:\s*"([^"]+)"', r.text)
-    if not m:
+    if not state_token:
         raise AuthFlowError(
             "Could not extract stateToken from authorization response.\n"
             f"Final URL: {r.url}"
         )
 
-    state_token = _decode_js_str(m.group(1))
-    okta_base   = str(r.url).split("/oauth2/")[0]  # e.g. https://auth.hpe.com
+    okta_base = str(r.url).split("/oauth2/")[0]  # e.g. https://auth.hpe.com
     return state_token, okta_base
 
 
@@ -183,9 +215,19 @@ async def _follow_saml_to_workforce(
     """
     # GET auth.hpe.com SAML form page
     r4 = await client.get(redirect_idp["href"])
+
     form_action_raw = re.search(r'<form[^>]*action="([^"]+)"', r4.text, re.I)
     if not form_action_raw:
-        raise AuthFlowError("No SAML form found in redirect-idp response")
+        # External accounts can land on an Okta Sign-In Widget page instead of
+        # a server-rendered SAML form. The widget bootstraps from stateToken.
+        m = re.search(r'"stateToken"\s*:\s*"([^"]+)"', r4.text)
+        if not m:
+            raise AuthFlowError("No SAML form or Okta stateToken found in redirect-idp response")
+        okta_base = str(r4.url).split("/sso/")[0]
+        data = await _idx_introspect(client, okta_base, _decode_js_str(m.group(1)))
+        if data is None:
+            raise AuthFlowError("Session expired at auth.hpe.com during widget introspect")
+        return data, okta_base
 
     form_action = unescape(form_action_raw.group(1))
     inputs      = re.findall(r'<input[^>]+name="([^"]*)"[^>]*value="([^"]*)"', r4.text, re.I)
@@ -455,6 +497,12 @@ async def _extract_code_from_redirects(
     # Step 1: GET mylogin success href → HTML with SAMLResponse form
     r = await client.get(start_url, follow_redirects=True)
 
+    # Direct HPE Account (non-federated): the success href redirects straight
+    # to the callback with ?code=… — no intermediate SAMLResponse form.
+    qs0 = urllib.parse.parse_qs(urllib.parse.urlparse(str(r.url)).query)
+    if qs0.get("code"):
+        return qs0["code"][0]
+
     saml_match = re.search(r'<form[^>]+action="([^"]+)"', r.text, re.I)
     if not saml_match:
         raise AuthFlowError(
@@ -533,21 +581,15 @@ async def _exchange_token(
 # Workspace session (ccs-session cookie)
 # ---------------------------------------------------------------------------
 
-async def _setup_workspace_session(
+async def _init_workspace_session(
     access_token: str,
     id_token: str,
-    workspace_name: Optional[str] = None,
-) -> Tuple[str, str]:
+) -> Tuple[list, str]:
     """
-    Create a GreenLake workspace session (ccs-session cookie).
-
-    POSTs the id_token to /authn/v1/session to get the workspace list
-    and the session cookie, then loads the target workspace.
-
-    Returns (workspace_id, ccs_session_cookie).
+    POST /authn/v1/session → returns (active_workspaces_list, initial_ccs_session).
+    Does NOT load a workspace yet.
     """
     async with httpx.AsyncClient(timeout=15) as client:
-        # Step 1: Create session → get ccs-session cookie + workspace list
         r = await client.post(
             f"{USER_API_BASE}/authn/v1/session",
             json={"id_token": id_token},
@@ -561,7 +603,6 @@ async def _setup_workspace_session(
             raise AuthFlowError(
                 f"Workspace session creation failed ({r.status_code}): {r.text[:300]}"
             )
-
         data = r.json()
         workspaces = [
             w for w in data.get("accounts", [])
@@ -569,57 +610,135 @@ async def _setup_workspace_session(
         ]
         if not workspaces:
             raise AuthFlowError("No active workspaces found in HPE GreenLake account.")
-
-        if workspace_name:
-            ws = next((w for w in workspaces if w["company_name"] == workspace_name), None)
-            if not ws:
-                names = [w["company_name"] for w in workspaces]
-                raise AuthFlowError(
-                    f"Workspace '{workspace_name}' not found. Available: {names}"
-                )
-        elif len(workspaces) > 1:
-            # Auto-select first; caller can re-run with explicit name
-            ws = workspaces[0]
-            names = [w["company_name"] for w in workspaces]
-            console.print(
-                f"[dim]Multiple workspaces found: {names}. "
-                f"Connected to '{ws['company_name']}'. "
-                f"Use --workspace to select a different one.[/dim]"
-            )
-        else:
-            ws = workspaces[0]
-
-        workspace_id = ws["platform_customer_id"]
-
-        # Extract ccs-session cookie
-        ccs_cookie = client.cookies.get("ccs-session", domain="aquila-user-api.common.cloud.hpe.com")
-        if not ccs_cookie:
-            # Try any domain
-            for c in client.cookies.jar:
-                if c.name == "ccs-session":
-                    ccs_cookie = c.value
-                    break
-
-        # Step 2: Load the workspace
-        r2 = await client.get(
-            f"{USER_API_BASE}/authn/v1/session/load-account/{workspace_id}",
-            headers={"Authorization": f"Bearer {access_token}"},
-        )
-        if r2.status_code not in (200, 204):
-            raise AuthFlowError(
-                f"Workspace load failed ({r2.status_code}): {r2.text[:300]}"
-            )
-
-        # Re-read ccs-session after load-account (it may have been refreshed)
+        ccs_session = ""
         for c in client.cookies.jar:
             if c.name == "ccs-session":
-                ccs_cookie = c.value
+                ccs_session = c.value
                 break
+        return workspaces, ccs_session
 
-        if not ccs_cookie:
-            raise AuthFlowError("ccs-session cookie not found after workspace session setup.")
 
-        return workspace_id, ws.get("company_name", ""), ccs_cookie, workspaces
+async def _load_workspace(
+    access_token: str,
+    workspace_id: str,
+    ccs_session: str,
+) -> str:
+    """
+    GET /authn/v1/session/load-account/{id} → returns updated ccs_session.
+    """
+    async with httpx.AsyncClient(timeout=15) as client:
+        cookies = {"ccs-session": ccs_session} if ccs_session else None
+        r = await client.get(
+            f"{USER_API_BASE}/authn/v1/session/load-account/{workspace_id}",
+            headers={"Authorization": f"Bearer {access_token}"},
+            cookies=cookies,
+        )
+        if r.status_code not in (200, 204):
+            raise AuthFlowError(
+                f"Workspace load failed ({r.status_code}): {r.text[:300]}"
+            )
+        for c in client.cookies.jar:
+            if c.name == "ccs-session":
+                return c.value
+        return ccs_session  # unchanged if cookie not refreshed
+
+
+async def _pick_workspace(
+    workspaces: list,
+    workspace_name: Optional[str] = None,
+) -> dict:
+    """
+    Select a workspace by name or interactively (arrow keys + type to search).
+    Returns the chosen workspace dict.
+    """
+    if len(workspaces) == 1:
+        return workspaces[0]
+
+    if workspace_name:
+        ws = next((w for w in workspaces if w["company_name"] == workspace_name), None)
+        if not ws:
+            names = [w["company_name"] for w in workspaces]
+            raise AuthFlowError(
+                f"Workspace '{workspace_name}' not found. Available: {names}"
+            )
+        return ws
+
+    # Interactive picker — run questionary in a thread (it blocks; needs no running loop)
+    names = [w["company_name"] for w in workspaces]
+    try:
+        import questionary
+
+        def _ask() -> Optional[str]:
+            return questionary.select(
+                "Select workspace:",
+                choices=names,
+                use_search_filter=True,
+                instruction="(↑↓ arrows · type to filter · Enter to confirm)",
+            ).ask()
+
+        chosen = await asyncio.to_thread(_ask)
+    except ImportError:
+        # Fallback: numbered list
+        console.print("\n[bold]Available workspaces:[/bold]")
+        for i, name in enumerate(names, 1):
+            console.print(f"  [cyan]{i:2}.[/cyan] {name}")
+        from rich.prompt import Prompt
+        while True:
+            answer = Prompt.ask("\nWorkspace number or partial name").strip()
+            if answer.isdigit():
+                idx = int(answer) - 1
+                if 0 <= idx < len(workspaces):
+                    chosen = names[idx]
+                    break
+            else:
+                matches = [n for n in names if answer.lower() in n.lower()]
+                if len(matches) == 1:
+                    chosen = matches[0]
+                    break
+                elif matches:
+                    console.print(f"[yellow]Ambiguous: {matches}[/yellow]")
+                else:
+                    console.print("[red]No match found.[/red]")
+            chosen = None
+
+    if chosen is None:  # Ctrl+C in questionary
+        console.print("[yellow]No workspace selected — using first available.[/yellow]")
+        return workspaces[0]
+
+    return next(w for w in workspaces if w["company_name"] == chosen)
+
+
+async def _setup_workspace_session(
+    access_token: str,
+    id_token: str,
+    workspace_name: Optional[str] = None,
+) -> Tuple[str, str, str, list]:
+    """
+    Full workspace session setup (non-interactive). Auto-selects first workspace
+    when multiple exist. Used by refresh_token_if_needed and legacy callers.
+    Returns (workspace_id, workspace_name, ccs_session, workspaces).
+    """
+    workspaces, ccs_session = await _init_workspace_session(access_token, id_token)
+
+    if workspace_name:
+        ws = next((w for w in workspaces if w["company_name"] == workspace_name), None)
+        if not ws:
+            names = [w["company_name"] for w in workspaces]
+            raise AuthFlowError(
+                f"Workspace '{workspace_name}' not found. Available: {names}"
+            )
+    else:
+        ws = workspaces[0]
+        if len(workspaces) > 1:
+            names = [w["company_name"] for w in workspaces]
+            console.print(
+                f"[dim]Multiple workspaces: {names}. "
+                f"Using '{ws['company_name']}'. Pass --workspace to choose.[/dim]"
+            )
+
+    workspace_id = ws["platform_customer_id"]
+    ccs_session = await _load_workspace(access_token, workspace_id, ccs_session)
+    return workspace_id, ws.get("company_name", ""), ccs_session, workspaces
 
 
 # ---------------------------------------------------------------------------
@@ -1048,7 +1167,7 @@ async def okta_verify_login(email: str, region: str = "us-west") -> None:
             async with httpx.AsyncClient(follow_redirects=True, timeout=20) as client:
                 # ── Step 1: stateToken ───────────────────────────────────────
                 with console.status("[cyan]Connecting to HPE GreenLake…[/cyan]"):
-                    state_token, okta_base = await _get_state_token(client, challenge, state)
+                    state_token, okta_base = await _get_state_token(client, challenge, state, email)
 
                 # ── Step 2: IDX introspect ───────────────────────────────────
                 idx_data = await _idx_introspect(client, okta_base, state_token)
@@ -1139,9 +1258,12 @@ async def okta_verify_login(email: str, region: str = "us-west") -> None:
                 if id_token and access_token:
                     try:
                         with console.status("[cyan]Connecting to workspace…[/cyan]"):
-                            workspace_id, workspace_name, ccs_session, ws_list = await _setup_workspace_session(
-                                access_token, id_token
-                            )
+                            ws_list, init_ccs = await _init_workspace_session(access_token, id_token)
+                        ws = await _pick_workspace(ws_list)
+                        workspace_id   = ws["platform_customer_id"]
+                        workspace_name = ws.get("company_name", "")
+                        with console.status(f"[cyan]Loading '{workspace_name}'…[/cyan]"):
+                            ccs_session = await _load_workspace(access_token, workspace_id, init_ccs)
                     except AuthFlowError as e:
                         console.print(f"[yellow]Warning: workspace session setup failed: {e}[/yellow]")
 
@@ -1209,7 +1331,7 @@ async def password_login(email: str, password: str, region: str = "us-west") -> 
             async with httpx.AsyncClient(follow_redirects=True, timeout=20) as client:
                 # ── Step 1: stateToken ───────────────────────────────────────
                 with console.status("[cyan]Connecting to HPE GreenLake…[/cyan]"):
-                    state_token, okta_base = await _get_state_token(client, challenge, state)
+                    state_token, okta_base = await _get_state_token(client, challenge, state, email)
 
                 # ── Step 2: IDX introspect ───────────────────────────────────
                 idx_data = await _idx_introspect(client, okta_base, state_token)
@@ -1300,8 +1422,12 @@ async def password_login(email: str, password: str, region: str = "us-west") -> 
                 if id_token and access_token:
                     try:
                         with console.status("[cyan]Connecting to workspace…[/cyan]"):
-                            workspace_id, workspace_name, ccs_session, ws_list = \
-                                await _setup_workspace_session(access_token, id_token)
+                            ws_list, init_ccs = await _init_workspace_session(access_token, id_token)
+                        ws = await _pick_workspace(ws_list)
+                        workspace_id   = ws["platform_customer_id"]
+                        workspace_name = ws.get("company_name", "")
+                        with console.status(f"[cyan]Loading '{workspace_name}'…[/cyan]"):
+                            ccs_session = await _load_workspace(access_token, workspace_id, init_ccs)
                     except AuthFlowError as e:
                         console.print(f"[yellow]Warning: workspace session setup failed: {e}[/yellow]")
 
@@ -1330,12 +1456,18 @@ async def password_login(email: str, password: str, region: str = "us-west") -> 
                 return  # success
 
         except AuthFlowError as e:
+            if os.environ.get("PROLIANT_DEBUG"):
+                import traceback
+                console.print("[dim]" + traceback.format_exc() + "[/dim]")
             # Don't retry IDP mismatch / wrong-flow errors — they won't change on retry
             if "not available" in str(e).lower() and "authenticator" in str(e).lower():
                 raise
             last_error = e
             console.print(f"[yellow]Auth flow error:[/yellow] {e}")
         except Exception as e:
+            if os.environ.get("PROLIANT_DEBUG"):
+                import traceback
+                console.print("[dim]" + traceback.format_exc() + "[/dim]")
             last_error = e
             console.print(f"[red]Unexpected error:[/red] {e}")
 

@@ -998,6 +998,7 @@ def _dispatch_config(args: list[str]) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
+    _init_sentry()
     _windows_first_run_check()
 
     args = argv if argv is not None else sys.argv[1:]
@@ -1093,6 +1094,48 @@ def main(argv: list[str] | None = None) -> None:
         print(f"proliant: unknown namespace '{namespace}'\n", file=sys.stderr)
         print(_USAGE)
         sys.exit(2)
+
+
+# ── Sentry opt-in telemetry ─────────────────────────────────────────────────
+# Enable by setting PROLIANT_TELEMETRY=1 in your environment.
+# No personal data (IPs, hostnames, credentials) is ever sent — see _sentry_scrub.
+_SENTRY_DSN = (
+    "https://1e25c8a5cf6f0d2ff916d46a4631d67a"
+    "@o4511633310220288.ingest.us.sentry.io/4511633321164801"
+)
+
+
+def _sentry_scrub(event, hint):  # noqa: ANN001
+    """Strip IPs, hostnames and credential patterns before sending."""
+    import re
+    _IP = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
+    _CRED = re.compile(r'(password|secret|token|key|auth)\s*[=:]\s*\S+', re.IGNORECASE)
+
+    def _scrub(text: str) -> str:
+        text = _IP.sub('<ip>', text)
+        text = _CRED.sub(r'\1=<redacted>', text)
+        return text
+
+    for exc in event.get('exception', {}).get('values', []):
+        if exc.get('value'):
+            exc['value'] = _scrub(str(exc['value']))
+    return event
+
+
+def _init_sentry() -> None:
+    """Initialise Sentry if PROLIANT_TELEMETRY=1 is set."""
+    if not os.environ.get("PROLIANT_TELEMETRY"):
+        return
+    try:
+        import sentry_sdk  # noqa: PLC0415
+        sentry_sdk.init(
+            dsn=_SENTRY_DSN,
+            before_send=_sentry_scrub,
+            send_default_pii=False,
+            traces_sample_rate=0.0,
+        )
+    except ImportError:
+        pass
 
 
 if __name__ == "__main__":

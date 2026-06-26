@@ -48,6 +48,7 @@ all = [
     "pdfminer.six>=20221105",
     "html2text>=2020.1.16",
     "pyyaml>=6.0",
+    "sentry-sdk>=2.0",
 ]
 dev = [
     "httpx[http2]>=0.27",
@@ -55,6 +56,7 @@ dev = [
     "pytest-asyncio>=0.23",
     "respx>=0.21",
     "pytest-cov>=4.0",
+    "sentry-sdk>=2.0",
 ]
 
 [project.scripts]

@@ -98,7 +98,7 @@ def _workspace_names_completer(prefix, **kwargs):
 # ---------------------------------------------------------------------------
 
 async def _cmd_login(args: argparse.Namespace) -> None:
-    from proliant.com.login import okta_verify_login
+    from proliant.com.login import okta_verify_login, password_login
     from rich.prompt import Prompt
 
     # ── Agent / service-account login (client credentials) ────────────────
@@ -106,7 +106,7 @@ async def _cmd_login(args: argparse.Namespace) -> None:
         await _cmd_login_agent(args)
         return
 
-    # ── Interactive Okta Verify login ──────────────────────────────────────
+    # ── Interactive login — auto-detect flow from email domain ─────────────
     email = getattr(args, "email", None) or ""
     if not email:
         try:
@@ -121,10 +121,13 @@ async def _cmd_login(args: argparse.Namespace) -> None:
 
     region = getattr(args, "region", None) or "us-west"
 
-    # ── Username + password login (external/gmail accounts) ────────────────
-    if getattr(args, "password", False):
+    # Non-HPE accounts (gmail etc.) use username + password.
+    # HPE accounts use Okta Verify push.
+    # --password flag overrides auto-detection (forces password flow).
+    use_password = getattr(args, "password", False) or not email.lower().endswith("@hpe.com")
+
+    if use_password:
         import getpass as _getpass
-        from proliant.com.login import password_login
         try:
             passwd = _getpass.getpass("Password: ")
         except (KeyboardInterrupt, EOFError):

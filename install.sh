@@ -74,7 +74,7 @@ case ":$PATH:" in
     else
       RC_FILE="$HOME/.bashrc"
     fi
-    if ! grep -q "\.local/bin" "$RC_FILE" 2>/dev/null; then
+    if ! grep -qE "^[^#]*\.local/bin" "$RC_FILE" 2>/dev/null; then
       printf '\n# proliant: add ~/.local/bin to PATH\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$RC_FILE"
       echo "  PATH      : added \$HOME/.local/bin to $RC_FILE"
       echo "  Note      : run 'source $RC_FILE' or open a new terminal"

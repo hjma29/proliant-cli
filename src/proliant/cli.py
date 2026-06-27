@@ -834,7 +834,10 @@ def _run_update() -> None:
         print(f"ERROR: No asset '{asset_name}' found in release {latest_tag}.", file=sys.stderr)
         sys.exit(1)
 
-    print(f"  Downloading {asset_name}...")
+    total_size = asset.get("size", 0)
+    size_mb = f"{total_size / 1_048_576:.1f} MB" if total_size else ""
+    print(f"  Downloading {asset_name}{' (' + size_mb + ')' if size_mb else ''}...")
+
     # Use the API assets endpoint with Accept: application/octet-stream for private repos
     asset_api_url = asset["url"]
     dl_headers = {**headers, "Accept": "application/octet-stream"}
@@ -844,7 +847,22 @@ def _run_update() -> None:
         try:
             req = urllib.request.Request(asset_api_url, headers=dl_headers)
             with urllib.request.urlopen(req, timeout=120, context=ssl_ctx) as resp, open(tmp_path, "wb") as f:
-                shutil.copyfileobj(resp, f)
+                downloaded = 0
+                block = 65536
+                bar_width = 30
+                while True:
+                    chunk = resp.read(block)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total_size:
+                        pct = downloaded / total_size
+                        filled = int(bar_width * pct)
+                        bar = "█" * filled + "░" * (bar_width - filled)
+                        done_mb = downloaded / 1_048_576
+                        print(f"\r  [{bar}] {pct*100:5.1f}%  {done_mb:.1f}/{total_size/1_048_576:.1f} MB", end="", flush=True)
+                print()  # newline after progress bar
         except Exception as e:
             print(f"ERROR: Download failed: {e}", file=sys.stderr)
             sys.exit(1)
@@ -919,7 +937,6 @@ def _run_update() -> None:
                     if os.path.isdir(_entry_path) and _entry != latest_ver:
                         try:
                             shutil.rmtree(_entry_path)
-                            print(f"  Removed old cache: {_entry_path}")
                         except Exception:
                             pass
             # Tab completion is handled by install.sh — no action needed on update

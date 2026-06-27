@@ -55,43 +55,34 @@ TMP=$(mktemp)
 curl -fL --progress-bar "$DOWNLOAD_URL" -o "$TMP"
 chmod +x "$TMP"
 
-# Install — use sudo to write to /usr/local/bin, fall back to ~/.local/bin if sudo unavailable
-if command -v sudo > /dev/null 2>&1; then
-  sudo install -m 755 "$TMP" "$INSTALL_DIR/$BIN_NAME"
-  rm -f "$TMP"
-  echo ""
-  echo "  Installed : $INSTALL_DIR/$BIN_NAME  (system-wide)"
-  echo "  PATH      : already in PATH (no changes needed)"
-else
-  INSTALL_DIR="$HOME/.local/bin"
-  mkdir -p "$INSTALL_DIR"
-  mv "$TMP" "$INSTALL_DIR/$BIN_NAME"
-  echo ""
-  echo "  Installed : $INSTALL_DIR/$BIN_NAME  (user-only, no sudo)"
+# Install to ~/.local/bin (no sudo required)
+INSTALL_DIR="$HOME/.local/bin"
+mkdir -p "$INSTALL_DIR"
+mv "$TMP" "$INSTALL_DIR/$BIN_NAME"
+echo ""
+echo "  Installed : $INSTALL_DIR/$BIN_NAME"
 
-  # Check if ~/.local/bin is already in PATH
-  case ":$PATH:" in
-    *":$INSTALL_DIR:"*)
-      echo "  PATH      : already contains $INSTALL_DIR"
-      ;;
-    *)
-      # Auto-add to shell rc file
-      SHELL_NAME=$(basename "$SHELL")
-      if [ "$SHELL_NAME" = "zsh" ]; then
-        RC_FILE="$HOME/.zshrc"
-      else
-        RC_FILE="$HOME/.bashrc"
-      fi
-      if ! grep -q "\.local/bin" "$RC_FILE" 2>/dev/null; then
-        printf '\n# proliant: add ~/.local/bin to PATH\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$RC_FILE"
-        echo "  PATH      : added \$HOME/.local/bin to $RC_FILE"
-        echo "  Note      : run 'source $RC_FILE' or open a new terminal"
-      else
-        echo "  PATH      : $RC_FILE already references .local/bin (no changes made)"
-      fi
-      ;;
-  esac
-fi
+# Check if ~/.local/bin is already in PATH
+case ":$PATH:" in
+  *":$INSTALL_DIR:"*)
+    echo "  PATH      : already contains $INSTALL_DIR"
+    ;;
+  *)
+    SHELL_NAME=$(basename "$SHELL")
+    if [ "$SHELL_NAME" = "zsh" ]; then
+      RC_FILE="$HOME/.zshrc"
+    else
+      RC_FILE="$HOME/.bashrc"
+    fi
+    if ! grep -q "\.local/bin" "$RC_FILE" 2>/dev/null; then
+      printf '\n# proliant: add ~/.local/bin to PATH\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$RC_FILE"
+      echo "  PATH      : added \$HOME/.local/bin to $RC_FILE"
+      echo "  Note      : run 'source $RC_FILE' or open a new terminal"
+    else
+      echo "  PATH      : $RC_FILE already references .local/bin (no changes made)"
+    fi
+    ;;
+esac
 
 echo "  Version:   $VERSION"
 echo ""

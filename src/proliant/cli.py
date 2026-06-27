@@ -918,14 +918,29 @@ def _run_update() -> None:
             try:
                 os.replace(tmp_path, current_exe)
             except PermissionError:
-                # Binary installed in a root-owned dir (e.g. /usr/local/bin) — retry with sudo
+                # Binary in a root-owned dir — relocate to ~/.local/bin instead of sudo
                 import subprocess as _sp
-                print(f"  Need sudo to write to {current_exe} (enter your password if prompted):")
-                result = _sp.run(["sudo", "mv", tmp_path, current_exe])
-                if result.returncode != 0:
-                    print("ERROR: sudo mv failed. Try: sudo proliant update", file=sys.stderr)
-                    sys.exit(1)
-                _sp.run(["sudo", "chmod", "755", current_exe], check=False)
+                local_bin = os.path.expanduser("~/.local/bin")
+                os.makedirs(local_bin, exist_ok=True)
+                new_exe = os.path.join(local_bin, "proliant")
+                import shutil as _shutil
+                _shutil.copy2(tmp_path, new_exe)
+                os.chmod(new_exe, 0o755)
+                os.remove(tmp_path)
+                print(f"  Installed to {new_exe} (no sudo needed).")
+                # Ensure ~/.local/bin is in PATH via shell rc
+                shell = os.environ.get("SHELL", "")
+                rc = os.path.expanduser("~/.zshrc") if "zsh" in shell else os.path.expanduser("~/.bashrc")
+                path_line = 'export PATH="$HOME/.local/bin:$PATH"'
+                try:
+                    content = open(rc).read() if os.path.exists(rc) else ""
+                    if ".local/bin" not in content:
+                        with open(rc, "a") as f:
+                            f.write(f"\n# proliant: add ~/.local/bin to PATH\n{path_line}\n")
+                        print(f"  Added ~/.local/bin to PATH in {rc} — open a new terminal to use it.")
+                except Exception:
+                    print(f"  Add this to your shell rc: {path_line}")
+                current_exe = new_exe
             print(f"✓ Updated to {latest_ver}. Run 'proliant --version' to confirm.")
             # Clean up old Nuitka extraction cache dirs (keep only the new version)
             import re as _re

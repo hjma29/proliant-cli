@@ -340,7 +340,7 @@ def _fetch_from_psnow_pdf(doc_id: str, ver: str = "") -> tuple[str, list[str]]:
     Download the QuickSpec PDF and convert to markdown.
     If *ver* is given, scrapes the versioned psnow page to get the right download URL.
     Extracts sections by scanning for known QuickSpec section title strings.
-    Results are cached to disk (~/.cache/proliant/qs/).
+    Results are cached to disk (~/.cache/proliant-cli/qs/).
     """
     cached = _qs_cache_read(doc_id, ver)
     if cached is not None:
@@ -424,7 +424,7 @@ def fetch_quickspec_markdown(doc_id: str, ver: str = "") -> tuple[str, list[str]
     For older PSNow-style pages the QuickSpec PDF is downloaded and converted.
     Only the QuickSpec body is returned (nav, footer, "Recommended for you"
     are stripped).
-    Results are cached to disk (~/.cache/proliant/qs/).
+    Results are cached to disk (~/.cache/proliant-cli/qs/).
     """
     # Check disk cache first — versioned PDFs are cached forever, latest for 7 days
     cached = _qs_cache_read(doc_id, ver)

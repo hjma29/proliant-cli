@@ -34,14 +34,15 @@ from rich.prompt import Prompt
 from rich import box
 
 from proliant.com.auth import REGION_MAP, CredentialsError
+from proliant.common import config_dir as _config_dir
 
 console = Console()
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-CREDS_FILE        = Path.home() / ".config" / "proliant" / "com" / "credentials.yml"
-TOKEN_CACHE       = Path.home() / ".config" / "proliant" / "com" / "token.json"
+CREDS_FILE        = _config_dir() / "com" / "credentials.yml"
+TOKEN_CACHE       = _config_dir() / "com" / "token.json"
 GL_COMMON_URL     = "https://common.cloud.hpe.com"
 SSO_URL           = "https://sso.common.cloud.hpe.com"
 USER_API_BASE     = "https://aquila-user-api.common.cloud.hpe.com"
@@ -771,7 +772,7 @@ def save_token(token: dict, region: str = "us-west",
                glp_client_id: str = "",
                glp_client_secret: str = "",
                glp_credential_name: str = "") -> None:
-    """Persist the user OAuth token to ~/.config/proliant/com/token.json."""
+    """Persist the user OAuth token to ~/.config/proliant-cli/com/token.json."""
     TOKEN_CACHE.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "access_token":        token.get("access_token"),

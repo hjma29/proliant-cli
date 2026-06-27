@@ -286,7 +286,7 @@ async def _ensure_session(args: argparse.Namespace) -> COMSession:
     Credential priority:
       1. --client-id / --client-secret flags
       2. HPECOM_CLIENT_ID / HPECOM_CLIENT_SECRET env vars
-      3. ~/.config/proliant/com/credentials.yml
+      3. ~/.config/proliant-cli/com/credentials.yml
       4. Cached token from a previous 'proliant com login'
       5. ↳ none found → exit with message (like gcloud/aws/az)
     """

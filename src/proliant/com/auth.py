@@ -6,7 +6,7 @@ OAuth2 Client Credentials flow for HPE GreenLake / Compute Ops Management.
 Credentials can be supplied via (in priority order):
   1. Explicit args:  COMSession(client_id=..., client_secret=..., region=...)
   2. Environment:    HPECOM_CLIENT_ID, HPECOM_CLIENT_SECRET, HPECOM_REGION
-  3. Credentials file: ~/.config/proliant/com/credentials.yml
+  3. Credentials file: ~/.config/proliant-cli/com/credentials.yml
 
 Region values:
   us-west       -> https://us-west2-api.compute.cloud.hpe.com

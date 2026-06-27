@@ -31,7 +31,7 @@ def _find_config_file() -> Path:
         candidates.append(Path(sys.executable).parent / "inventory.ini")
     else:
         candidates.append(Path(__file__).parent.parent.parent.parent / "inventory.ini")
-    candidates.append(Path.home() / ".config" / "proliant" / "inventory.ini")
+    candidates.append(Path.home() / ".config" / "proliant-cli" / "inventory.ini")
 
     for p in candidates:
         if p.exists():

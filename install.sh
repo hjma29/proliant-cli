@@ -88,7 +88,7 @@ echo "  Version:   $VERSION"
 echo ""
 
 # ── Tab completion setup ────────────────────────────────────────────────────
-echo "Setting up tab completion..."
+echo "Setting up tab completion (dynamic)..."
 
 SHELL_NAME=$(basename "${SHELL:-sh}")
 
@@ -144,7 +144,7 @@ EOF
   FPATH_LINE="fpath=($COMPLETIONS_DIR \$fpath)"
 
   if grep -qF "$COMPLETIONS_DIR" "$RC_FILE" 2>/dev/null; then
-    echo "✓ Tab completion updated: $COMPLETIONS_DIR/_proliant"
+    echo "✓ Tab completion enabled (dynamic)"
   else
     # Insert before oh-my-zsh source line if present, else append
     if grep -q 'oh-my-zsh.sh' "$RC_FILE" 2>/dev/null; then
@@ -155,7 +155,7 @@ $FPATH_LINE
     else
       printf '\n# proliant tab completion\n%s\nautoload -Uz compinit && compinit\n' "$FPATH_LINE" >> "$RC_FILE"
     fi
-    echo "✓ Tab completion installed: $COMPLETIONS_DIR/_proliant"
+    echo "✓ Tab completion enabled (dynamic)"
     echo "  Run: source $RC_FILE"
   fi
 

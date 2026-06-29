@@ -61,23 +61,35 @@ def load_oneview_config() -> dict[str, str]:
     cfg = configparser.ConfigParser()
     cfg.read(config_file)
 
-    if not cfg.has_section("oneview"):
+    # Find the OneView section: either literally named [oneview] or any section
+    # with 'type = oneview' (the pattern documented in inventory.ini comments).
+    ov_section: str | None = None
+    if cfg.has_section("oneview"):
+        ov_section = "oneview"
+    else:
+        for section in cfg.sections():
+            if cfg.get(section, "type", fallback="").strip().lower() == "oneview":
+                ov_section = section
+                break
+
+    if ov_section is None:
         raise ValueError(
-            f"No [oneview] section found in {config_file}.\n"
+            f"No OneView section found in {config_file}.\n"
             "Add one:\n\n"
-            "  [oneview]\n"
+            "  [my-oneview]\n"
             "  host     = <oneview-appliance-ip>\n"
             "  username = Administrator\n"
             "  password = yourpassword\n"
+            "  type     = oneview\n"
         )
 
-    host = cfg.get("oneview", "host", fallback="").strip()
+    host = cfg.get(ov_section, "host", fallback="").strip()
     if not host:
-        raise ValueError(f"[oneview] section in {config_file} is missing the 'host' key")
+        raise ValueError(f"[{ov_section}] section in {config_file} is missing the 'host' key")
 
     return {
         "host": host,
         "url": f"https://{host}",
-        "username": cfg.get("oneview", "username", fallback="Administrator"),
-        "password": cfg.get("oneview", "password", fallback=""),
+        "username": cfg.get(ov_section, "username", fallback="Administrator"),
+        "password": cfg.get(ov_section, "password", fallback=""),
     }

@@ -541,7 +541,268 @@ async def _cmd_report_memory(args: argparse.Namespace) -> None:
     print_memory_report(rows, source="OneView")
 
 
-# ── argument parser ───────────────────────────────────────────────────────────
+# ── proliant oneview li list ──────────────────────────────────────────────────
+
+async def _async_li_list() -> None:
+    from proliant.oneview.interconnects import list_lis
+
+    async with _load_client() as client:
+        with get_console().status("[dim]Fetching logical interconnects…[/dim]"):
+            lis = await list_lis(client)
+
+    if not lis:
+        get_console().print("[yellow]No logical interconnects found.[/yellow]")
+        return
+
+    if get_output_mode() == OutputMode.JSON:
+        print_json(lis)
+        return
+
+    table = make_table(
+        f"Logical Interconnects  ({len(lis)} total)",
+        ("Name",        {"min_width": 24, "no_wrap": True}),
+        ("LIG",         {"no_wrap": True}),
+        ("Consistency", {"justify": "center", "no_wrap": True}),
+        ("Stacking",    {"justify": "center", "no_wrap": True}),
+        ("Status",      {"justify": "center", "no_wrap": True}),
+        ("State",       {"justify": "center", "no_wrap": True}),
+    )
+    for li in lis:
+        cons = li["consistency"]
+        cons_s = f"[green]{cons}[/green]" if cons == "Consistent" else f"[yellow]{cons}[/yellow]"
+        table.add_row(
+            li["name"], li["lig_name"], cons_s, li["stacking"],
+            _status_style(li["status"]), li["state"],
+        )
+    get_console().print(table)
+
+
+async def _cmd_li_list(args: argparse.Namespace) -> None:
+    await _async_li_list()
+
+
+# ── proliant oneview lig list ─────────────────────────────────────────────────
+
+async def _async_lig_list() -> None:
+    from proliant.oneview.interconnects import list_ligs
+
+    async with _load_client() as client:
+        with get_console().status("[dim]Fetching logical interconnect groups…[/dim]"):
+            ligs = await list_ligs(client)
+
+    if not ligs:
+        get_console().print("[yellow]No logical interconnect groups found.[/yellow]")
+        return
+
+    if get_output_mode() == OutputMode.JSON:
+        print_json(ligs)
+        return
+
+    table = make_table(
+        f"Logical Interconnect Groups  ({len(ligs)} total)",
+        ("Name",   {"min_width": 28, "no_wrap": True}),
+        ("Status", {"justify": "center", "no_wrap": True}),
+        ("State",  {"justify": "center", "no_wrap": True}),
+    )
+    for lg in ligs:
+        table.add_row(lg["name"], _status_style(lg["status"]), lg["state"])
+    get_console().print(table)
+
+
+async def _cmd_lig_list(args: argparse.Namespace) -> None:
+    await _async_lig_list()
+
+
+# ── proliant oneview interconnects list ───────────────────────────────────────
+
+async def _async_interconnects_list() -> None:
+    from proliant.oneview.interconnects import list_interconnects
+
+    async with _load_client() as client:
+        with get_console().status("[dim]Fetching interconnects…[/dim]"):
+            ics = await list_interconnects(client)
+
+    if not ics:
+        get_console().print("[yellow]No interconnects found.[/yellow]")
+        return
+
+    if get_output_mode() == OutputMode.JSON:
+        print_json(ics)
+        return
+
+    table = make_table(
+        f"Interconnects  ({len(ics)} total)",
+        ("Name",   {"min_width": 24, "no_wrap": True}),
+        ("Model",  {"min_width": 18, "no_wrap": True}),
+        ("LI",     {"no_wrap": True}),
+        ("Status", {"justify": "center", "no_wrap": True}),
+        ("State",  {"justify": "center", "no_wrap": True}),
+        ("Serial", {"style": "dim", "no_wrap": True}),
+    )
+    for ic in ics:
+        table.add_row(
+            ic["name"], ic["model"], ic["li_name"],
+            _status_style(ic["status"]), ic["state"], ic["serial"],
+        )
+    get_console().print(table)
+
+
+async def _cmd_interconnects_list(args: argparse.Namespace) -> None:
+    await _async_interconnects_list()
+
+
+# ── proliant oneview mac list ─────────────────────────────────────────────────
+
+async def _async_mac_list(address: str, vlan: int) -> None:
+    from proliant.oneview.interconnects import get_mac_table
+
+    async with _load_client() as client:
+        filter_desc = []
+        if address:
+            filter_desc.append(f"mac={address}")
+        if vlan:
+            filter_desc.append(f"vlan={vlan}")
+        desc = ", ".join(filter_desc) if filter_desc else "no filter"
+        with get_console().status(f"[dim]Querying MAC table ({desc}) across all VCs…[/dim]"):
+            entries = await get_mac_table(client, address=address, vlan=vlan)
+
+    if not entries:
+        get_console().print("[yellow]No MAC entries found.[/yellow]")
+        return
+
+    if get_output_mode() == OutputMode.JSON:
+        print_json(entries)
+        return
+
+    table = make_table(
+        f"MAC Address Table  ({len(entries)} entries)",
+        ("MAC Address",    {"no_wrap": True, "min_width": 18}),
+        ("Interconnect",   {"no_wrap": True}),
+        ("Port",           {"no_wrap": True}),
+        ("Network",        {"no_wrap": True}),
+        ("VLAN",           {"justify": "right", "no_wrap": True}),
+        ("Type",           {"no_wrap": True}),
+    )
+    for e in entries:
+        table.add_row(
+            e["mac"], e["ic_name"], e["port"],
+            e["network"], e["vlan"], e["entry_type"],
+        )
+    get_console().print(table)
+
+
+async def _cmd_mac_list(args: argparse.Namespace) -> None:
+    await _async_mac_list(address=args.address or "", vlan=args.vlan or 0)
+
+
+# ── proliant oneview enclosures list ─────────────────────────────────────────
+
+async def _async_enclosures_list() -> None:
+    from proliant.oneview.enclosures import list_enclosures
+
+    async with _load_client() as client:
+        with get_console().status("[dim]Fetching enclosures…[/dim]"):
+            encs = await list_enclosures(client)
+
+    if not encs:
+        get_console().print("[yellow]No enclosures found.[/yellow]")
+        return
+
+    if get_output_mode() == OutputMode.JSON:
+        print_json(encs)
+        return
+
+    table = make_table(
+        f"Enclosures  ({len(encs)} total)",
+        ("Name",   {"min_width": 20, "no_wrap": True}),
+        ("Model",  {"no_wrap": True}),
+        ("Serial", {"no_wrap": True}),
+        ("Status", {"justify": "center", "no_wrap": True}),
+        ("State",  {"justify": "center", "no_wrap": True}),
+    )
+    for e in encs:
+        table.add_row(e["name"], e["model"], e["serial"], _status_style(e["status"]), e["state"])
+    get_console().print(table)
+
+
+async def _cmd_enclosures_list(args: argparse.Namespace) -> None:
+    await _async_enclosures_list()
+
+
+# ── proliant oneview enclosure-groups list ────────────────────────────────────
+
+async def _async_enclosure_groups_list() -> None:
+    from proliant.oneview.enclosures import list_enclosure_groups
+
+    async with _load_client() as client:
+        with get_console().status("[dim]Fetching enclosure groups…[/dim]"):
+            egs = await list_enclosure_groups(client)
+
+    if not egs:
+        get_console().print("[yellow]No enclosure groups found.[/yellow]")
+        return
+
+    if get_output_mode() == OutputMode.JSON:
+        print_json(egs)
+        return
+
+    table = make_table(
+        f"Enclosure Groups  ({len(egs)} total)",
+        ("Name",   {"min_width": 24, "no_wrap": True}),
+        ("LIGs",   {"no_wrap": False}),
+        ("Status", {"justify": "center", "no_wrap": True}),
+    )
+    for eg in egs:
+        ligs = ", ".join(eg["lig_names"]) if eg["lig_names"] else "—"
+        table.add_row(eg["name"], ligs, _status_style(eg["status"]))
+    get_console().print(table)
+
+
+async def _cmd_enclosure_groups_list(args: argparse.Namespace) -> None:
+    await _async_enclosure_groups_list()
+
+
+# ── proliant oneview logical-enclosures list ──────────────────────────────────
+
+async def _async_logical_enclosures_list() -> None:
+    from proliant.oneview.enclosures import list_logical_enclosures
+
+    async with _load_client() as client:
+        with get_console().status("[dim]Fetching logical enclosures…[/dim]"):
+            les = await list_logical_enclosures(client)
+
+    if not les:
+        get_console().print("[yellow]No logical enclosures found.[/yellow]")
+        return
+
+    if get_output_mode() == OutputMode.JSON:
+        print_json(les)
+        return
+
+    table = make_table(
+        f"Logical Enclosures  ({len(les)} total)",
+        ("Name",             {"min_width": 20, "no_wrap": True}),
+        ("Enclosure Group",  {"no_wrap": True}),
+        ("Enclosures",       {"no_wrap": False}),
+        ("Logical ICs",      {"no_wrap": False}),
+        ("Status",           {"justify": "center", "no_wrap": True}),
+        ("State",            {"justify": "center", "no_wrap": True}),
+    )
+    for le in les:
+        encs = ", ".join(le["enclosures"]) if le["enclosures"] else "—"
+        lis  = ", ".join(le["lis"]) if le["lis"] else "—"
+        table.add_row(
+            le["name"], le["eg_name"], encs, lis,
+            _status_style(le["status"]), le["state"],
+        )
+    get_console().print(table)
+
+
+async def _cmd_logical_enclosures_list(args: argparse.Namespace) -> None:
+    await _async_logical_enclosures_list()
+
+
+
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -557,6 +818,14 @@ examples:
   proliant oneview networksets list                      All network sets
   proliant oneview uplinksets list                       All uplink sets
   proliant oneview server-profiles list                  All server profiles
+  proliant oneview li list                               Logical interconnects
+  proliant oneview lig list                              Logical interconnect groups
+  proliant oneview interconnects list                    Interconnect hardware
+  proliant oneview mac list --address 00:11:22:33:44:55  MAC forwarding table by address
+  proliant oneview mac list --vlan 100                   MAC forwarding table by VLAN
+  proliant oneview enclosures list                       Physical enclosures
+  proliant oneview enclosure-groups list                 Enclosure groups
+  proliant oneview logical-enclosures list               Logical enclosures
   proliant oneview uplinksets describe "pvlan-uplinkset" Full uplink set detail
   proliant oneview networksets describe "network-set-for-FM"
   proliant oneview server-profiles describe "ocp-single-node"
@@ -618,6 +887,49 @@ examples:
     p_sp_desc = s_profiles.add_parser("describe", help="Describe a server profile")
     p_sp_desc.add_argument("name", metavar="NAME", help="Name of the server profile")
     p_sp_desc.set_defaults(func=_cmd_describe, resource="server-profile")
+
+    # ── logical interconnects ─────────────────────────────────────────────
+    p_li = sub.add_parser("li", help="List logical interconnects")
+    s_li = p_li.add_subparsers(dest="what", metavar="ACTION")
+    s_li.required = True
+    s_li.add_parser("list", help="List all logical interconnects").set_defaults(func=_cmd_li_list)
+
+    p_lig = sub.add_parser("lig", help="List logical interconnect groups")
+    s_lig = p_lig.add_subparsers(dest="what", metavar="ACTION")
+    s_lig.required = True
+    s_lig.add_parser("list", help="List all logical interconnect groups").set_defaults(func=_cmd_lig_list)
+
+    p_ics = sub.add_parser("interconnects", aliases=["interconnect"], help="List interconnect hardware")
+    s_ics = p_ics.add_subparsers(dest="what", metavar="ACTION")
+    s_ics.required = True
+    s_ics.add_parser("list", help="List all interconnect hardware").set_defaults(func=_cmd_interconnects_list)
+
+    # ── mac address table ─────────────────────────────────────────────────
+    p_mac = sub.add_parser("mac", help="Query MAC forwarding-information-base")
+    s_mac = p_mac.add_subparsers(dest="what", metavar="ACTION")
+    s_mac.required = True
+    p_mac_list = s_mac.add_parser("list", help="Show MAC address table entries")
+    p_mac_list.add_argument("--address", "-a", metavar="MAC",
+        help="Filter by MAC address (e.g. 00:9C:02:73:33:6D)")
+    p_mac_list.add_argument("--vlan", "-v", metavar="VLAN", type=int,
+        help="Filter by VLAN ID (e.g. 100)")
+    p_mac_list.set_defaults(func=_cmd_mac_list)
+
+    # ── enclosures ────────────────────────────────────────────────────────
+    p_encs = sub.add_parser("enclosures", aliases=["enclosure"], help="List physical enclosures")
+    s_encs = p_encs.add_subparsers(dest="what", metavar="ACTION")
+    s_encs.required = True
+    s_encs.add_parser("list", help="List all enclosures").set_defaults(func=_cmd_enclosures_list)
+
+    p_egs = sub.add_parser("enclosure-groups", aliases=["enclosure-group"], help="List enclosure groups")
+    s_egs = p_egs.add_subparsers(dest="what", metavar="ACTION")
+    s_egs.required = True
+    s_egs.add_parser("list", help="List all enclosure groups").set_defaults(func=_cmd_enclosure_groups_list)
+
+    p_les = sub.add_parser("logical-enclosures", aliases=["logical-enclosure"], help="List logical enclosures")
+    s_les = p_les.add_subparsers(dest="what", metavar="ACTION")
+    s_les.required = True
+    s_les.add_parser("list", help="List all logical enclosures").set_defaults(func=_cmd_logical_enclosures_list)
 
     # ── reports ───────────────────────────────────────────────────────────
     p_reports = sub.add_parser("reports", help="Fleet hardware reports")

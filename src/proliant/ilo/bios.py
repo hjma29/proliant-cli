@@ -158,7 +158,7 @@ def format_bios(attrs: dict[str, Any], host: str, pending: bool = False) -> list
             continue
         width_label = max(len(label) for _, label in rows)
         lines.append(f"\n  {title}")
-        lines.append(f"  {'─' * (width_label + 22)}")
+        lines.append(f"  {'-' * (width_label + 22)}")
         for key, label in rows:
             if key in attrs:
                 lines.append(f"  {label:<{width_label}}  {attrs[key]}")

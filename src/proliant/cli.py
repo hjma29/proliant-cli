@@ -1029,6 +1029,16 @@ def _dispatch_setting(args: list[str]) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
+    # On Windows, stdout/stderr may default to CP1252 when piped, which can't
+    # encode Unicode chars used in Rich tables (✓, —, …).  Reconfigure to
+    # UTF-8 with replacement so we never raise UnicodeEncodeError at runtime.
+    if sys.platform == "win32":
+        import io
+        if hasattr(sys.stdout, "buffer"):
+            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+        if hasattr(sys.stderr, "buffer"):
+            sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+
     _init_sentry()
     _windows_first_run_check()
 

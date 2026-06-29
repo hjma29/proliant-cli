@@ -49,7 +49,9 @@ def _state_style(state: str) -> str:
     return f"[yellow]{state}[/yellow]"
 
 
-def _status_style(status: str) -> str:
+def _status_style(status: str | None) -> str:
+    if not status:
+        return ""
     s = status.lower()
     if s == "ok":
         return "[green]OK[/green]"

@@ -23,6 +23,7 @@ classifiers = [
 dependencies = [
     "rich>=13.0",
     "argcomplete>=3.0",
+    "sentry-sdk>=2.0",
 ]
 
 [project.optional-dependencies]

@@ -90,6 +90,9 @@ proliant oneview firmware list
 proliant oneview networks list
 proliant oneview server-profiles list
 proliant oneview reports memory
+proliant oneview mac list --network-name <name>          # MAC table with owning profile/connection
+proliant oneview map --network-name <name>               # End-to-end fabric map for a network
+proliant oneview map --mac <address>                     # Trace how a MAC travels through Synergy
 ```
 
 ### SPP (Service Pack for ProLiant)

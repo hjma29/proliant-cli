@@ -731,6 +731,53 @@ async def _cmd_mac_list(args: argparse.Namespace) -> None:
     )
 
 
+# ── proliant oneview map ──────────────────────────────────────────────────────
+
+async def _async_map_network(network_name: str) -> None:
+    from proliant.oneview.topology import build_network_map, render_network_map
+
+    async with _load_client() as client:
+        with get_console().status(f"[dim]Building topology map for {network_name}…[/dim]"):
+            nm = await build_network_map(client, network_name)
+
+    if get_output_mode() == OutputMode.JSON:
+        print_json(nm)
+        return
+    get_console().print(render_network_map(nm))
+
+
+async def _async_map_mac(mac: str) -> None:
+    from proliant.oneview.topology import trace_mac, render_network_map
+
+    async with _load_client() as client:
+        with get_console().status(f"[dim]Tracing MAC {mac} across the fabric…[/dim]"):
+            maps = await trace_mac(client, mac)
+
+    if get_output_mode() == OutputMode.JSON:
+        print_json(maps)
+        return
+    if not maps:
+        get_console().print(f"[yellow]MAC {mac} not found in any forwarding table.[/yellow]")
+        return
+    for nm in maps:
+        get_console().print(render_network_map(nm, mac=mac))
+
+
+async def _cmd_map(args: argparse.Namespace) -> None:
+    network_name = getattr(args, "network_name", None)
+    mac = getattr(args, "mac", None)
+    if not network_name and not mac:
+        get_console().print("[red]Error:[/red] specify either --network-name or --mac")
+        sys.exit(1)
+    if network_name and mac:
+        get_console().print("[red]Error:[/red] specify only one of --network-name or --mac")
+        sys.exit(1)
+    if mac:
+        await _async_map_mac(mac)
+    else:
+        await _async_map_network(network_name)
+
+
 # ── proliant oneview enclosures list ─────────────────────────────────────────
 
 async def _async_enclosures_list() -> None:
@@ -953,6 +1000,16 @@ examples:
         help="Filter by network name substring (e.g. ACI-Tunnel-Net)")
     arg_nn.completer = _oneview_network_name_completer
     p_mac_list.set_defaults(func=_cmd_mac_list)
+
+    # ── topology map (end-to-end troubleshooting) ──────────────────────────
+    p_map = sub.add_parser("map",
+        help="End-to-end connectivity map for a network or MAC address")
+    arg_map_nn = p_map.add_argument("--network-name", "-n", metavar="NAME", dest="network_name",
+        help="Map how a network travels through the fabric (e.g. VLAN-160)")
+    arg_map_nn.completer = _oneview_network_name_completer
+    p_map.add_argument("--mac", "-m", metavar="MAC", dest="mac",
+        help="Trace how a MAC address travels through the fabric")
+    p_map.set_defaults(func=_cmd_map)
 
     # ── enclosures ────────────────────────────────────────────────────────
     p_encs = sub.add_parser("enclosures", aliases=["enclosure"], help="List physical enclosures")

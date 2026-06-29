@@ -96,6 +96,7 @@ def parse_mac_entry(raw: dict) -> dict:
         "ic_uri":     raw.get("interconnectUri", ""),
         "port":       raw.get("networkInterface", ""),
         "network":    raw.get("networkName", ""),
+        "net_uri":    raw.get("networkUri", ""),
         "vlan":       raw.get("externalVlan", ""),
         "entry_type": raw.get("entryType", ""),
         "profile":    "",
@@ -122,42 +123,87 @@ def _downlink_port_num(iface: str) -> int | None:
 
 async def build_profile_maps(
     client: "OneViewClient",
-) -> tuple[dict[str, tuple[str, str]], dict[tuple[str, int], str]]:
+) -> tuple[
+    dict[str, tuple[str, str]],
+    dict[tuple[str, int], str],
+    dict[tuple[str, int], list[tuple[str, str, frozenset]]],
+]:
     """Build server-profile lookup maps for MAC table enrichment.
 
-    Returns ``(mac_map, port_map)``:
+    Returns ``(mac_map, port_map, port_conns)``:
       * ``mac_map``  — ``mac.lower()`` → ``(profile_name, connection_name)``;
         exact match for a connection's assigned virtual MAC.
       * ``port_map`` — ``(interconnect_uri, interconnectPort)`` → ``profile_name``;
         resolves any MAC learned on a downlink to the owning server profile,
         even VM/guest MACs behind the server.
+      * ``port_conns`` — ``(interconnect_uri, interconnectPort)`` → list of
+        ``(connection_name, network_uri, netset_member_uris)``; used to pin the
+        specific connection by matching the learned network/VLAN.
     """
-    profiles = await client.get_all("/rest/server-profiles")
+    profiles, netsets = await asyncio.gather(
+        client.get_all("/rest/server-profiles"),
+        client.get_all("/rest/network-sets"),
+    )
+    ns_members = {
+        ns["uri"]: frozenset(ns.get("networkUris") or [])
+        for ns in netsets
+        if ns.get("uri")
+    }
+
     mac_map: dict[str, tuple[str, str]] = {}
     port_map: dict[tuple[str, int], str] = {}
+    port_conns: dict[tuple[str, int], list[tuple[str, str, frozenset]]] = {}
     for p in profiles:
         pname = p.get("name", "") or ""
         cs = p.get("connectionSettings") or {}
         for c in cs.get("connections") or p.get("connections") or []:
             mac = (c.get("mac") or "").lower()
+            cname = c.get("name", "") or ""
             if mac:
-                mac_map[mac] = (pname, c.get("name", "") or "")
+                mac_map[mac] = (pname, cname)
             ic = c.get("interconnectUri")
             port = c.get("interconnectPort")
             if ic and isinstance(port, int):
-                port_map[(ic, port)] = pname
-    return mac_map, port_map
+                key = (ic, port)
+                port_map.setdefault(key, pname)
+                nu = c.get("networkUri") or ""
+                port_conns.setdefault(key, []).append(
+                    (cname, nu, ns_members.get(nu, frozenset()))
+                )
+    return mac_map, port_map, port_conns
+
+
+def _resolve_connection(
+    net_uri: str,
+    conns: list[tuple[str, str, frozenset]],
+) -> str:
+    """Pick the connection on a downlink that carries the learned network.
+
+    Direct network match wins; falls back to network-set membership.  Returns
+    "" when ambiguous or unmatched (e.g. the learned VLAN is on no connection).
+    """
+    if not net_uri:
+        return ""
+    for cname, nu, _members in conns:
+        if nu and nu == net_uri:
+            return cname
+    for cname, _nu, members in conns:
+        if net_uri in members:
+            return cname
+    return ""
 
 
 def enrich_mac_entries(
     entries: list[dict],
     mac_map: dict[str, tuple[str, str]],
     port_map: dict[tuple[str, int], str],
+    port_conns: dict[tuple[str, int], list[tuple[str, str, frozenset]]],
 ) -> None:
     """Populate ``profile`` / ``connection`` on each MAC entry, in place.
 
-    Exact MAC match resolves both profile and connection.  Otherwise a
-    downlink port maps to the owning server profile (connection unknown).
+    Exact MAC match resolves both profile and connection.  Otherwise a downlink
+    port maps to the owning server profile, and the connection is resolved by
+    matching the entry's learned network against that profile's connections.
     """
     for e in entries:
         mac = (e.get("mac") or "").lower()
@@ -165,10 +211,15 @@ def enrich_mac_entries(
             e["profile"], e["connection"] = mac_map[mac]
             continue
         port_num = _downlink_port_num(e.get("port", ""))
-        if port_num is not None:
-            prof = port_map.get((e.get("ic_uri", ""), port_num))
-            if prof:
-                e["profile"] = prof
+        if port_num is None:
+            continue
+        key = (e.get("ic_uri", ""), port_num)
+        prof = port_map.get(key)
+        if prof:
+            e["profile"] = prof
+            e["connection"] = _resolve_connection(
+                e.get("net_uri", ""), port_conns.get(key, [])
+            )
 
 
 async def get_mac_table(
@@ -209,7 +260,7 @@ async def get_mac_table(
         try:
             maps["v"] = await build_profile_maps(client)
         except Exception:
-            maps["v"] = ({}, {})
+            maps["v"] = ({}, {}, {})
 
     await asyncio.gather(_load_profiles(), *[_query_one(li) for li in active_lis])
 
@@ -222,7 +273,7 @@ async def get_mac_table(
             seen.add(key)
             unique.append(m)
 
-    mac_map, port_map = maps.get("v", ({}, {}))
-    enrich_mac_entries(unique, mac_map, port_map)
+    mac_map, port_map, port_conns = maps.get("v", ({}, {}, {}))
+    enrich_mac_entries(unique, mac_map, port_map, port_conns)
 
     return sorted(unique, key=lambda m: (m["mac"], m["ic_name"]))

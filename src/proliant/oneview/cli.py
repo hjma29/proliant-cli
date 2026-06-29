@@ -602,12 +602,11 @@ async def _async_lig_list() -> None:
 
     table = make_table(
         f"Logical Interconnect Groups  ({len(ligs)} total)",
-        ("Name",   {"min_width": 28, "no_wrap": True}),
-        ("Status", {"justify": "center", "no_wrap": True}),
-        ("State",  {"justify": "center", "no_wrap": True}),
+        ("Name",  {"min_width": 28, "no_wrap": True}),
+        ("State", {"justify": "center", "no_wrap": True}),
     )
     for lg in ligs:
-        table.add_row(lg["name"], _status_style(lg["status"]), lg["state"])
+        table.add_row(lg["name"], lg["state"])
     get_console().print(table)
 
 

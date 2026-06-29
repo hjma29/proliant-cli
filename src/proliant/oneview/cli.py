@@ -692,6 +692,9 @@ async def _async_mac_list(address: str, vlan: int) -> None:
 
 
 async def _cmd_mac_list(args: argparse.Namespace) -> None:
+    if not args.address and not args.vlan:
+        get_console().print("[red]Error:[/red] specify at least one of --address or --vlan")
+        sys.exit(1)
     await _async_mac_list(address=args.address or "", vlan=args.vlan or 0)
 
 
@@ -952,7 +955,14 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     if getattr(args, "json_output", False):
         set_output_mode(OutputMode.JSON)
-    run_sync(args.func(args))
+    try:
+        run_sync(args.func(args))
+    except (ValueError, RuntimeError) as exc:
+        from rich.markup import escape
+        get_console().print(f"[red]Error:[/red] {escape(str(exc))}", highlight=False)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        sys.exit(130)
 
 
 if __name__ == "__main__":

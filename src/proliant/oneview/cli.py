@@ -31,6 +31,24 @@ def _load_client():
     return OneViewClient(cfg["host"], cfg["username"], cfg["password"])
 
 
+def _oneview_network_name_completer(prefix: str, **kwargs) -> list[str]:
+    """Tab-complete --network-name by querying OneView ethernet networks."""
+    try:
+        from proliant.oneview.config import load_oneview_config
+        from proliant.oneview.client import OneViewClient
+
+        cfg = load_oneview_config()
+
+        async def _fetch() -> list[str]:
+            async with OneViewClient(cfg["host"], cfg["username"], cfg["password"]) as client:
+                nets = await client.get_all("/rest/ethernet-networks")
+                return [n["name"] for n in nets if n.get("name", "").lower().startswith(prefix.lower())]
+
+        return asyncio.run(_fetch())
+    except Exception:
+        return []
+
+
 def _power_style(state: str) -> str:
     s = state.lower()
     if s == "on":
@@ -927,8 +945,9 @@ examples:
         help="Filter by MAC address (e.g. 00:9C:02:73:33:6D)")
     p_mac_list.add_argument("--vlan", "-v", metavar="VLAN", type=int,
         help="Filter by VLAN ID (e.g. 100)")
-    p_mac_list.add_argument("--network-name", "-n", metavar="NAME", dest="network_name",
+    arg_nn = p_mac_list.add_argument("--network-name", "-n", metavar="NAME", dest="network_name",
         help="Filter by network name substring (e.g. ACI-Tunnel-Net)")
+    arg_nn.completer = _oneview_network_name_completer
     p_mac_list.set_defaults(func=_cmd_mac_list)
 
     # ── enclosures ────────────────────────────────────────────────────────

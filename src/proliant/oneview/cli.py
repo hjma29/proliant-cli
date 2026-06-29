@@ -704,6 +704,8 @@ async def _async_mac_list(address: str, vlan: int, network_name: str = "") -> No
         ("MAC Address",    {"no_wrap": True, "min_width": 18}),
         ("Interconnect",   {"no_wrap": True}),
         ("Port",           {"no_wrap": True}),
+        ("Server Profile", {"no_wrap": True}),
+        ("Connection",     {"no_wrap": True}),
         ("Network",        {"no_wrap": True}),
         ("VLAN",           {"justify": "right", "no_wrap": True}),
         ("Type",           {"no_wrap": True}),
@@ -711,6 +713,8 @@ async def _async_mac_list(address: str, vlan: int, network_name: str = "") -> No
     for e in entries:
         table.add_row(
             e["mac"], e["ic_name"], e["port"],
+            e.get("profile") or "[dim]—[/dim]",
+            e.get("connection") or "[dim]—[/dim]",
             e["network"], e["vlan"], e["entry_type"],
         )
     get_console().print(table)

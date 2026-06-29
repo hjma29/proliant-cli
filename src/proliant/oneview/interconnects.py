@@ -93,11 +93,82 @@ def parse_mac_entry(raw: dict) -> dict:
     return {
         "mac":        raw.get("macAddress", ""),
         "ic_name":    raw.get("interconnectName", ""),
+        "ic_uri":     raw.get("interconnectUri", ""),
         "port":       raw.get("networkInterface", ""),
         "network":    raw.get("networkName", ""),
         "vlan":       raw.get("externalVlan", ""),
         "entry_type": raw.get("entryType", ""),
+        "profile":    "",
+        "connection": "",
     }
+
+
+def _downlink_port_num(iface: str) -> int | None:
+    """Return the interconnect downlink port number from a FIB port label.
+
+    Downlink labels are server-facing, e.g. ``downlink 6:1-2`` → 6.  The
+    leading number equals the ``interconnectPort`` of the server profile
+    connection cabled to that downlink.  Uplink labels (``Q5:2``) → None.
+    """
+    s = (iface or "").strip().lower()
+    if not s.startswith("downlink"):
+        return None
+    head = s[len("downlink"):].strip().split(":", 1)[0].strip()
+    try:
+        return int(head)
+    except ValueError:
+        return None
+
+
+async def build_profile_maps(
+    client: "OneViewClient",
+) -> tuple[dict[str, tuple[str, str]], dict[tuple[str, int], str]]:
+    """Build server-profile lookup maps for MAC table enrichment.
+
+    Returns ``(mac_map, port_map)``:
+      * ``mac_map``  — ``mac.lower()`` → ``(profile_name, connection_name)``;
+        exact match for a connection's assigned virtual MAC.
+      * ``port_map`` — ``(interconnect_uri, interconnectPort)`` → ``profile_name``;
+        resolves any MAC learned on a downlink to the owning server profile,
+        even VM/guest MACs behind the server.
+    """
+    profiles = await client.get_all("/rest/server-profiles")
+    mac_map: dict[str, tuple[str, str]] = {}
+    port_map: dict[tuple[str, int], str] = {}
+    for p in profiles:
+        pname = p.get("name", "") or ""
+        cs = p.get("connectionSettings") or {}
+        for c in cs.get("connections") or p.get("connections") or []:
+            mac = (c.get("mac") or "").lower()
+            if mac:
+                mac_map[mac] = (pname, c.get("name", "") or "")
+            ic = c.get("interconnectUri")
+            port = c.get("interconnectPort")
+            if ic and isinstance(port, int):
+                port_map[(ic, port)] = pname
+    return mac_map, port_map
+
+
+def enrich_mac_entries(
+    entries: list[dict],
+    mac_map: dict[str, tuple[str, str]],
+    port_map: dict[tuple[str, int], str],
+) -> None:
+    """Populate ``profile`` / ``connection`` on each MAC entry, in place.
+
+    Exact MAC match resolves both profile and connection.  Otherwise a
+    downlink port maps to the owning server profile (connection unknown).
+    """
+    for e in entries:
+        mac = (e.get("mac") or "").lower()
+        if mac in mac_map:
+            e["profile"], e["connection"] = mac_map[mac]
+            continue
+        port_num = _downlink_port_num(e.get("port", ""))
+        if port_num is not None:
+            prof = port_map.get((e.get("ic_uri", ""), port_num))
+            if prof:
+                e["profile"] = prof
 
 
 async def get_mac_table(
@@ -109,6 +180,7 @@ async def get_mac_table(
 
     OneView returns the forwarding table per LI (Virtual Connect domain).
     Requires at least one of address or vlan to avoid pulling the full table.
+    Entries are enriched with the owning server profile / connection name.
     """
     raw_lis = await client.get_all("/rest/logical-interconnects")
     # Only VC stacking LIs (NotApplicable = standalone/non-VC)
@@ -124,6 +196,7 @@ async def get_mac_table(
 
     results: list[dict] = []
     lock = asyncio.Lock()
+    maps: dict[str, tuple] = {}
 
     async def _query_one(li: dict) -> None:
         uri = li.get("uri", "") + "/forwarding-information-base"
@@ -132,7 +205,13 @@ async def get_mac_table(
         async with lock:
             results.extend(entries)
 
-    await asyncio.gather(*[_query_one(li) for li in active_lis])
+    async def _load_profiles() -> None:
+        try:
+            maps["v"] = await build_profile_maps(client)
+        except Exception:
+            maps["v"] = ({}, {})
+
+    await asyncio.gather(_load_profiles(), *[_query_one(li) for li in active_lis])
 
     # Deduplicate
     seen: set[tuple] = set()
@@ -142,5 +221,8 @@ async def get_mac_table(
         if key not in seen:
             seen.add(key)
             unique.append(m)
+
+    mac_map, port_map = maps.get("v", ({}, {}))
+    enrich_mac_entries(unique, mac_map, port_map)
 
     return sorted(unique, key=lambda m: (m["mac"], m["ic_name"]))

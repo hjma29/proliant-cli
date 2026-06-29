@@ -654,7 +654,7 @@ async def _cmd_interconnects_list(args: argparse.Namespace) -> None:
 
 # ── proliant oneview mac list ─────────────────────────────────────────────────
 
-async def _async_mac_list(address: str, vlan: int) -> None:
+async def _async_mac_list(address: str, vlan: int, network_name: str = "") -> None:
     from proliant.oneview.interconnects import get_mac_table
 
     async with _load_client() as client:
@@ -663,9 +663,15 @@ async def _async_mac_list(address: str, vlan: int) -> None:
             filter_desc.append(f"mac={address}")
         if vlan:
             filter_desc.append(f"vlan={vlan}")
+        if network_name:
+            filter_desc.append(f"network={network_name}")
         desc = ", ".join(filter_desc) if filter_desc else "no filter"
         with get_console().status(f"[dim]Querying MAC table ({desc}) across all VCs…[/dim]"):
             entries = await get_mac_table(client, address=address, vlan=vlan)
+
+    if network_name:
+        nl = network_name.lower()
+        entries = [e for e in entries if nl in e["network"].lower()]
 
     if not entries:
         get_console().print("[yellow]No MAC entries found.[/yellow]")
@@ -693,10 +699,14 @@ async def _async_mac_list(address: str, vlan: int) -> None:
 
 
 async def _cmd_mac_list(args: argparse.Namespace) -> None:
-    if not args.address and not args.vlan:
-        get_console().print("[red]Error:[/red] specify at least one of --address or --vlan")
+    if not args.address and not args.vlan and not getattr(args, "network_name", None):
+        get_console().print("[red]Error:[/red] specify at least one of --address, --vlan, or --network-name")
         sys.exit(1)
-    await _async_mac_list(address=args.address or "", vlan=args.vlan or 0)
+    await _async_mac_list(
+        address=args.address or "",
+        vlan=args.vlan or 0,
+        network_name=getattr(args, "network_name", "") or "",
+    )
 
 
 # ── proliant oneview enclosures list ─────────────────────────────────────────
@@ -917,6 +927,8 @@ examples:
         help="Filter by MAC address (e.g. 00:9C:02:73:33:6D)")
     p_mac_list.add_argument("--vlan", "-v", metavar="VLAN", type=int,
         help="Filter by VLAN ID (e.g. 100)")
+    p_mac_list.add_argument("--network-name", "-n", metavar="NAME", dest="network_name",
+        help="Filter by network name substring (e.g. ACI-Tunnel-Net)")
     p_mac_list.set_defaults(func=_cmd_mac_list)
 
     # ── enclosures ────────────────────────────────────────────────────────

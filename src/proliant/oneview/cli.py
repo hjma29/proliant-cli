@@ -745,30 +745,78 @@ async def _cmd_mac_list(args: argparse.Namespace) -> None:
     )
 
 
-# ── proliant oneview map ──────────────────────────────────────────────────────
+# ── proliant oneview networks/mac describe ────────────────────────────────────
 
-async def _async_map_network(network_name: str, diagram: bool = False,
-                             vlan: int | None = None) -> None:
+def _fmt_bw(mbps: int) -> str:
+    if not mbps:
+        return "—"
+    if mbps >= 1000:
+        return f"{mbps / 1000:g} Gb/s"
+    return f"{mbps} Mb/s"
+
+
+def _vlan_label(vlan, ntype: str) -> str:
+    if ntype in ("Tunnel", "Untagged"):
+        return ntype
+    return str(vlan) if vlan else "—"
+
+
+async def _async_describe_network(network_name: str, diagram: bool = False) -> None:
+    from proliant.oneview.network import describe_network
     from proliant.oneview.topology import (
         build_network_map, render_network_map, render_network_map_ascii,
     )
+    from rich.panel import Panel
 
-    label = network_name or f"VLAN {vlan}"
     async with _load_client() as client:
-        with get_console().status(f"[dim]Building topology map for {label}…[/dim]"):
-            nm = await build_network_map(client, network_name, vlan=vlan)
+        with get_console().status(f"[dim]Fetching network '{network_name}'…[/dim]"):
+            ov = await describe_network(client, network_name)
+        with get_console().status(f"[dim]Building topology map for {ov['name']}…[/dim]"):
+            nm = await build_network_map(client, ov["name"])
 
     if get_output_mode() == OutputMode.JSON:
-        print_json(nm)
+        print_json({"overview": ov, "mapping": nm})
         return
+
+    smart = "[green]Yes[/green]" if ov["smart_link"] else "No"
+    priv = "Yes" if ov["private"] else "No"
+    member_of = ", ".join(ov["member_of"]) if ov["member_of"] else "[dim]no network sets[/dim]"
+    get_console().print(Panel(
+        f"[bold]{ov['name']}[/bold]\n"
+        f"Type:        {ov['type']}\n"
+        f"VLAN:        {_vlan_label(ov['vlan'], ov['type'])}\n"
+        f"Purpose:     {ov['purpose'] or '—'}\n"
+        f"Bandwidth:   {_fmt_bw(ov['pref_bw_mbps'])} preferred  |  {_fmt_bw(ov['max_bw_mbps'])} maximum\n"
+        f"Smart Link:  {smart}  |  Private: {priv}\n"
+        f"Member of:   {member_of}\n"
+        f"Status: {_status_style(ov['status'])}  |  State: {ov['state']}",
+        title="Network", border_style="cyan",
+    ))
+
+    if ov["used_profiles"] or ov["used_templates"]:
+        usage = make_table(
+            f"Used By  ({len(ov['used_profiles'])} profiles, {len(ov['used_templates'])} templates)",
+            ("Kind", {"no_wrap": True}),
+            ("Name", {"no_wrap": True}),
+            box_style=box.SIMPLE_HEAD, header_style="bold",
+        )
+        for nm_p in ov["used_profiles"]:
+            usage.add_row("Server Profile", nm_p)
+        for nm_t in ov["used_templates"]:
+            usage.add_row("[cyan]Profile Template[/cyan]", nm_t)
+        get_console().print(usage)
+    else:
+        get_console().print("[dim]Not used by any server profile or template.[/dim]")
+
+    get_console().rule("[bold]Mapping[/bold]", style="cyan")
     if diagram:
         get_console().print(render_network_map_ascii(nm, color=True),
                             markup=True, highlight=False)
-        return
-    get_console().print(render_network_map(nm))
+    else:
+        get_console().print(render_network_map(nm))
 
 
-async def _async_map_mac(mac: str, diagram: bool = False) -> None:
+async def _async_describe_mac(mac: str, diagram: bool = False) -> None:
     from proliant.oneview.topology import (
         trace_mac, render_network_map, render_network_map_ascii,
     )
@@ -793,22 +841,12 @@ async def _async_map_mac(mac: str, diagram: bool = False) -> None:
             get_console().print(render_network_map(nm, mac=mac))
 
 
-async def _cmd_map(args: argparse.Namespace) -> None:
-    network_name = getattr(args, "network_name", None)
-    mac = getattr(args, "mac", None)
-    vlan = getattr(args, "vlan", None)
-    diagram = getattr(args, "diagram", False)
-    selectors = [bool(network_name), bool(mac), vlan is not None]
-    if not any(selectors):
-        get_console().print("[red]Error:[/red] specify one of --network-name, --vlan or --mac")
-        sys.exit(1)
-    if sum(selectors) > 1:
-        get_console().print("[red]Error:[/red] specify only one of --network-name, --vlan or --mac")
-        sys.exit(1)
-    if mac:
-        await _async_map_mac(mac, diagram=diagram)
-    else:
-        await _async_map_network(network_name or "", diagram=diagram, vlan=vlan)
+async def _cmd_network_describe(args: argparse.Namespace) -> None:
+    await _async_describe_network(args.name, diagram=getattr(args, "diagram", False))
+
+
+async def _cmd_mac_describe(args: argparse.Namespace) -> None:
+    await _async_describe_mac(args.address, diagram=getattr(args, "diagram", False))
 
 
 # ── proliant oneview enclosures list ─────────────────────────────────────────
@@ -931,6 +969,7 @@ examples:
   proliant oneview firmware list                         Fleet firmware (all servers)
   proliant oneview firmware list --server "Enc1, bay 1"
   proliant oneview networks list                         All ethernet networks
+  proliant oneview networks describe VLAN-160            Network overview + fabric mapping
   proliant oneview networksets list                      All network sets
   proliant oneview uplinksets list                       All uplink sets
   proliant oneview server-profiles list                  All server profiles
@@ -939,6 +978,7 @@ examples:
   proliant oneview interconnects list                    Interconnect hardware
   proliant oneview mac list --address 00:11:22:33:44:55  MAC forwarding table by address
   proliant oneview mac list --vlan 100                   MAC forwarding table by VLAN
+  proliant oneview mac describe 00:11:22:33:44:55        Trace a MAC end-to-end through the fabric
   proliant oneview enclosures list                       Physical enclosures
   proliant oneview enclosure-groups list                 Enclosure groups
   proliant oneview logical-enclosures list               Logical enclosures
@@ -971,11 +1011,19 @@ examples:
         help='Server name (e.g. "Enc1, bay 1"). Omit for all servers.')
     p_fw.set_defaults(func=_cmd_firmware_list)
 
-    p_networks = sub.add_parser("networks", aliases=["network"], help="List ethernet networks")
+    p_networks = sub.add_parser("networks", aliases=["network"], help="List or describe ethernet networks")
     s_networks = p_networks.add_subparsers(dest="what", metavar="ACTION")
     s_networks.required = True
     p_net = s_networks.add_parser("list", help="List all ethernet networks")
     p_net.set_defaults(func=_cmd_networks_list)
+    p_net_desc = s_networks.add_parser("describe",
+        help="Network overview + end-to-end fabric mapping")
+    arg_net_name = p_net_desc.add_argument("name", metavar="NAME",
+        help="Name of the ethernet network (e.g. VLAN-160)")
+    arg_net_name.completer = _oneview_network_name_completer
+    p_net_desc.add_argument("--diagram", "-d", action="store_true", dest="diagram",
+        help="Render the mapping as a top-down ASCII box diagram instead of a tree")
+    p_net_desc.set_defaults(func=_cmd_network_describe)
 
     p_networksets = sub.add_parser("networksets", aliases=["networkset"], help="List or describe network sets")
     s_networksets = p_networksets.add_subparsers(dest="what", metavar="ACTION")
@@ -1034,19 +1082,13 @@ examples:
     arg_nn.completer = _oneview_network_name_completer
     p_mac_list.set_defaults(func=_cmd_mac_list)
 
-    # ── topology map (end-to-end troubleshooting) ──────────────────────────
-    p_map = sub.add_parser("map",
-        help="End-to-end connectivity map for a network or MAC address")
-    arg_map_nn = p_map.add_argument("--network-name", "-n", metavar="NAME", dest="network_name",
-        help="Map how a network travels through the fabric (e.g. VLAN-160)")
-    arg_map_nn.completer = _oneview_network_name_completer
-    p_map.add_argument("--vlan", "-v", metavar="VLAN", dest="vlan", type=int,
-        help="Map a network by its VLAN ID (e.g. 160)")
-    p_map.add_argument("--mac", "-m", metavar="MAC", dest="mac",
-        help="Trace how a MAC address travels through the fabric")
-    p_map.add_argument("--diagram", "-d", action="store_true", dest="diagram",
-        help="Render a top-down ASCII box diagram instead of a tree")
-    p_map.set_defaults(func=_cmd_map)
+    p_mac_desc = s_mac.add_parser("describe",
+        help="Trace a MAC address end-to-end through the fabric")
+    p_mac_desc.add_argument("address", metavar="MAC",
+        help="MAC address to trace (e.g. 00:9C:02:73:33:6D)")
+    p_mac_desc.add_argument("--diagram", "-d", action="store_true", dest="diagram",
+        help="Render as a top-down ASCII box diagram instead of a tree")
+    p_mac_desc.set_defaults(func=_cmd_mac_describe)
 
     # ── enclosures ────────────────────────────────────────────────────────
     p_encs = sub.add_parser("enclosures", aliases=["enclosure"], help="List physical enclosures")

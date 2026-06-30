@@ -240,3 +240,75 @@ async def describe_network_set(client: "OneViewClient", name: str) -> dict:
         "native_network": net_map.get(native_uri, {}).get("name", "") if native_uri else "",
         "networks":       networks,
     }
+
+
+async def describe_network(client: "OneViewClient", name: str) -> dict:
+    """Return full detail for a single ethernet network, with usage resolved.
+
+    Mirrors the OneView GUI network "Overview": VLAN/type/purpose, preferred and
+    maximum bandwidth (from the connection template), smart-link/private flags,
+    the network sets it belongs to ("Member of"), and the server profiles and
+    profile templates that consume it ("Used by").
+    """
+    raw_nets, raw_sets, profiles, templates = await asyncio.gather(
+        client.get_all("/rest/ethernet-networks"),
+        client.get_all("/rest/network-sets"),
+        client.get_all("/rest/server-profiles"),
+        client.get_all("/rest/server-profile-templates"),
+    )
+    matched = [n for n in raw_nets if n.get("name", "").lower() == name.lower()]
+    if not matched:
+        known = ", ".join(sorted(n.get("name", "") for n in raw_nets))
+        raise ValueError(f"Network '{name}' not found. Known: {known}")
+    n = matched[0]
+    net_uri = n.get("uri", "")
+
+    # Bandwidth lives on the network's connection template (values in Mbps).
+    pref_bw = max_bw = 0
+    ct_uri = n.get("connectionTemplateUri")
+    if ct_uri:
+        try:
+            ct = await client.get(ct_uri)
+            bw = ct.get("bandwidth", {}) or {}
+            pref_bw = bw.get("typicalBandwidth", 0) or 0
+            max_bw = bw.get("maximumBandwidth", 0) or 0
+        except Exception:
+            pass
+
+    # Network-set membership ("Member of") + the set URIs that contain this net.
+    member_of: list[str] = []
+    containing_set_uris: set[str] = set()
+    for s in raw_sets:
+        if net_uri in (s.get("networkUris") or []):
+            member_of.append(s.get("name", ""))
+            if s.get("uri"):
+                containing_set_uris.add(s["uri"])
+    member_of.sort()
+
+    def _uses(obj: dict) -> bool:
+        cs = obj.get("connectionSettings") or {}
+        for c in cs.get("connections") or obj.get("connections") or []:
+            cu = c.get("networkUri") or ""
+            if cu == net_uri or cu in containing_set_uris:
+                return True
+        return False
+
+    used_profiles = sorted(p.get("name", "") for p in profiles if _uses(p))
+    used_templates = sorted(t.get("name", "") for t in templates if _uses(t))
+
+    return {
+        "name":          n.get("name", ""),
+        "vlan":          n.get("vlanId", 0),
+        "type":          n.get("ethernetNetworkType", ""),
+        "purpose":       n.get("purpose", ""),
+        "status":        n.get("status", ""),
+        "state":         n.get("state", ""),
+        "smart_link":    n.get("smartLink", False),
+        "private":       n.get("privateNetwork", False),
+        "pref_bw_mbps":  pref_bw,
+        "max_bw_mbps":   max_bw,
+        "member_of":     member_of,
+        "used_profiles": used_profiles,
+        "used_templates": used_templates,
+        "uri":           net_uri,
+    }

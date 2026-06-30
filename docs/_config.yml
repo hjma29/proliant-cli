@@ -13,6 +13,14 @@ description: >-
 #   jekyll-theme-cayman    (gradient hero, single column)
 theme: jekyll-theme-minimal
 
+# Canonical URL pieces — used by jekyll-sitemap to emit absolute URLs.
+url: https://hjma29.github.io
+baseurl: /proliant-cli
+
+# GitHub Pages supported plugin (no Actions/deps): generates /sitemap.xml.
+plugins:
+  - jekyll-sitemap
+
 # Files in /docs that are not part of the website
 exclude:
   - demo.tape

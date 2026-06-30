@@ -31,13 +31,52 @@ def parse_network(raw: dict) -> dict:
         "state":      raw.get("state", ""),
         "smart_link": raw.get("smartLink", False),
         "private":    raw.get("privateNetwork", False),
+        "internal_vlan": 0,
         "uri":        raw.get("uri", ""),
     }
 
 
+async def get_internal_vlans(client: "OneViewClient") -> dict[str, int]:
+    """Map ``networkUri`` → internal VLAN ID across all logical interconnects.
+
+    Virtual Connect assigns each provisioned network — including *tunnel*
+    networks, which have no user VLAN — an internal VLAN ID used to carry it
+    across the fabric.  For a tunnel this is the reserved VLAN (e.g. 4094) seen
+    in the MAC table.  Sourced from ``GET {li_uri}/internalVlans``.
+    """
+    lis = await client.get_all("/rest/logical-interconnects")
+
+    async def _one(li: dict) -> list[dict]:
+        uri = li.get("uri", "")
+        if not uri:
+            return []
+        try:
+            return await client.get_all(uri + "/internalVlans")
+        except Exception:
+            return []
+
+    results = await asyncio.gather(*[_one(li) for li in lis])
+    out: dict[str, int] = {}
+    for rows in results:
+        for r in rows:
+            nu = r.get("generalNetworkUri", "")
+            iv = r.get("internalVlanId")
+            if nu and isinstance(iv, int) and iv > 0:
+                out[nu] = iv
+    return out
+
+
 async def list_networks(client: "OneViewClient") -> list[dict]:
-    raw = await client.get_all("/rest/ethernet-networks")
-    return sorted([parse_network(n) for n in raw], key=lambda n: n["name"])
+    raw, internal = await asyncio.gather(
+        client.get_all("/rest/ethernet-networks"),
+        get_internal_vlans(client),
+    )
+    nets = []
+    for n in raw:
+        d = parse_network(n)
+        d["internal_vlan"] = internal.get(n.get("uri", ""), 0)
+        nets.append(d)
+    return sorted(nets, key=lambda n: n["name"])
 
 
 # ── network sets ──────────────────────────────────────────────────────────────

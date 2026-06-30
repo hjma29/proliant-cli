@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from proliant.common.display import OutputMode, set_output_mode
-from proliant.qs.client import QSEntry
+from proliant.qs.client import QSEntry, QSVersion
 
 
 @pytest.fixture(autouse=True)
@@ -41,6 +41,21 @@ Some overview text here.
 
 FAKE_SECTIONS = ["Summary of Changes", "Overview"]
 
+FAKE_VERSIONS = [
+    QSVersion(
+        doc_id="a00073551enw",
+        title="HPE ProLiant DL380 Gen12 QuickSpecs",
+        version_num="11",
+        date="2024-04-01",
+    ),
+    QSVersion(
+        doc_id="a00073551enw",
+        title="HPE ProLiant DL380 Gen12 QuickSpecs",
+        version_num="10",
+        date="2024-01-01",
+    ),
+]
+
 
 class TestQsParserJson:
     def test_parser_accepts_json_flag(self):
@@ -67,6 +82,7 @@ class TestQsListJson:
         from proliant.qs import cli
 
         with patch("proliant.qs.cli.search_quickspecs", return_value=[FAKE_ENTRY]), \
+             patch("proliant.qs.cli.fetch_quickspec_versions", return_value=FAKE_VERSIONS), \
              patch("proliant.qs.cli.fetch_quickspec_markdown", return_value=(FAKE_MARKDOWN, FAKE_SECTIONS)):
             cli.main(["--json", "list", "--model", "dl380gen12"])
 
@@ -80,6 +96,7 @@ class TestQsListJson:
         from proliant.qs import cli
 
         with patch("proliant.qs.cli.search_quickspecs", return_value=[FAKE_ENTRY]), \
+             patch("proliant.qs.cli.fetch_quickspec_versions", return_value=FAKE_VERSIONS), \
              patch("proliant.qs.cli.fetch_quickspec_markdown", return_value=(FAKE_MARKDOWN, FAKE_SECTIONS)):
             cli.main(["--json", "list", "--model", "dl380gen12"])
 
@@ -98,6 +115,7 @@ class TestQsListJson:
         from proliant.qs import cli
 
         with patch("proliant.qs.cli.search_quickspecs", return_value=[FAKE_ENTRY]), \
+             patch("proliant.qs.cli.fetch_quickspec_versions", return_value=FAKE_VERSIONS), \
              patch("proliant.qs.cli.fetch_quickspec_markdown", return_value=(FAKE_MARKDOWN, FAKE_SECTIONS)):
             cli.main(["--json", "list", "--model", "dl380gen12"])
 

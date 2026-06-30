@@ -251,7 +251,12 @@ async def _async_networks_list() -> None:
     )
 
     for n in nets:
-        vlan = str(n["vlan"]) if n["vlan"] else "—"
+        if n["vlan"]:
+            vlan = str(n["vlan"])
+        elif n.get("internal_vlan"):
+            vlan = f"[grey50]{n['internal_vlan']} (int)[/grey50]"
+        else:
+            vlan = "—"
         table.add_row(
             n["name"], vlan, n["type"], n["purpose"],
             _status_style(n["status"]),
@@ -711,11 +716,13 @@ async def _async_mac_list(address: str, vlan: int, network_name: str = "") -> No
         ("Type",           {"no_wrap": True}),
     )
     for e in entries:
+        vlan_cell = (f"[grey50]{e['vlan']}[/grey50]"
+                     if e.get("internal_vlan") else str(e["vlan"]))
         table.add_row(
             e["mac"], e["ic_name"], e["port"],
             e.get("profile") or "[dim]—[/dim]",
             e.get("connection") or "[dim]—[/dim]",
-            e["network"], e["vlan"], e["entry_type"],
+            e["network"], vlan_cell, e["entry_type"],
         )
     get_console().print(table)
 
@@ -733,21 +740,31 @@ async def _cmd_mac_list(args: argparse.Namespace) -> None:
 
 # ── proliant oneview map ──────────────────────────────────────────────────────
 
-async def _async_map_network(network_name: str) -> None:
-    from proliant.oneview.topology import build_network_map, render_network_map
+async def _async_map_network(network_name: str, diagram: bool = False,
+                             vlan: int | None = None) -> None:
+    from proliant.oneview.topology import (
+        build_network_map, render_network_map, render_network_map_ascii,
+    )
 
+    label = network_name or f"VLAN {vlan}"
     async with _load_client() as client:
-        with get_console().status(f"[dim]Building topology map for {network_name}…[/dim]"):
-            nm = await build_network_map(client, network_name)
+        with get_console().status(f"[dim]Building topology map for {label}…[/dim]"):
+            nm = await build_network_map(client, network_name, vlan=vlan)
 
     if get_output_mode() == OutputMode.JSON:
         print_json(nm)
         return
+    if diagram:
+        get_console().print(render_network_map_ascii(nm, color=True),
+                            markup=True, highlight=False)
+        return
     get_console().print(render_network_map(nm))
 
 
-async def _async_map_mac(mac: str) -> None:
-    from proliant.oneview.topology import trace_mac, render_network_map
+async def _async_map_mac(mac: str, diagram: bool = False) -> None:
+    from proliant.oneview.topology import (
+        trace_mac, render_network_map, render_network_map_ascii,
+    )
 
     async with _load_client() as client:
         with get_console().status(f"[dim]Tracing MAC {mac} across the fabric…[/dim]"):
@@ -759,23 +776,32 @@ async def _async_map_mac(mac: str) -> None:
     if not maps:
         get_console().print(f"[yellow]MAC {mac} not found in any forwarding table.[/yellow]")
         return
-    for nm in maps:
-        get_console().print(render_network_map(nm, mac=mac))
+    for i, nm in enumerate(maps):
+        if i:
+            get_console().rule(style="dim")
+        if diagram:
+            get_console().print(render_network_map_ascii(nm, mac=mac, color=True),
+                                markup=True, highlight=False)
+        else:
+            get_console().print(render_network_map(nm, mac=mac))
 
 
 async def _cmd_map(args: argparse.Namespace) -> None:
     network_name = getattr(args, "network_name", None)
     mac = getattr(args, "mac", None)
-    if not network_name and not mac:
-        get_console().print("[red]Error:[/red] specify either --network-name or --mac")
+    vlan = getattr(args, "vlan", None)
+    diagram = getattr(args, "diagram", False)
+    selectors = [bool(network_name), bool(mac), vlan is not None]
+    if not any(selectors):
+        get_console().print("[red]Error:[/red] specify one of --network-name, --vlan or --mac")
         sys.exit(1)
-    if network_name and mac:
-        get_console().print("[red]Error:[/red] specify only one of --network-name or --mac")
+    if sum(selectors) > 1:
+        get_console().print("[red]Error:[/red] specify only one of --network-name, --vlan or --mac")
         sys.exit(1)
     if mac:
-        await _async_map_mac(mac)
+        await _async_map_mac(mac, diagram=diagram)
     else:
-        await _async_map_network(network_name)
+        await _async_map_network(network_name or "", diagram=diagram, vlan=vlan)
 
 
 # ── proliant oneview enclosures list ─────────────────────────────────────────
@@ -1007,8 +1033,12 @@ examples:
     arg_map_nn = p_map.add_argument("--network-name", "-n", metavar="NAME", dest="network_name",
         help="Map how a network travels through the fabric (e.g. VLAN-160)")
     arg_map_nn.completer = _oneview_network_name_completer
+    p_map.add_argument("--vlan", "-v", metavar="VLAN", dest="vlan", type=int,
+        help="Map a network by its VLAN ID (e.g. 160)")
     p_map.add_argument("--mac", "-m", metavar="MAC", dest="mac",
         help="Trace how a MAC address travels through the fabric")
+    p_map.add_argument("--diagram", "-d", action="store_true", dest="diagram",
+        help="Render a top-down ASCII box diagram instead of a tree")
     p_map.set_defaults(func=_cmd_map)
 
     # ── enclosures ────────────────────────────────────────────────────────

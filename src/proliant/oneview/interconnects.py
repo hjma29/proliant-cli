@@ -101,6 +101,7 @@ def parse_mac_entry(raw: dict) -> dict:
         "entry_type": raw.get("entryType", ""),
         "profile":    "",
         "connection": "",
+        "internal_vlan": False,
     }
 
 
@@ -173,6 +174,59 @@ async def build_profile_maps(
     return mac_map, port_map, port_conns
 
 
+async def build_tunnel_port_map(
+    client: "OneViewClient",
+) -> dict[tuple[str, str], str]:
+    """Map ``(interconnect_uri, uplink_port)`` → tunnel network name.
+
+    Virtual Connect carries a *tunnel* network transparently and represents it
+    with an internal VLAN (e.g. 4094), so MACs learned on a tunnel uplink come
+    back from the FIB with a blank ``networkName`` and that internal VLAN.  This
+    map lets the MAC table attribute such entries to the owning tunnel network.
+    """
+    uplinks, nets, ics = await asyncio.gather(
+        client.get_all("/rest/uplink-sets"),
+        client.get_all("/rest/ethernet-networks"),
+        client.get_all("/rest/interconnects"),
+    )
+    net_type = {n["uri"]: n.get("ethernetNetworkType", "")
+                for n in nets if n.get("uri")}
+    net_name = {n["uri"]: n.get("name", "") for n in nets if n.get("uri")}
+
+    ic_by_encl_bay: dict[tuple[str, str], str] = {}
+    for ic in ics:
+        entries = (ic.get("interconnectLocation") or {}).get("locationEntries", [])
+        loc = {e.get("type"): e.get("value") for e in entries}
+        if loc.get("Enclosure") and loc.get("Bay") and ic.get("uri"):
+            ic_by_encl_bay[(loc["Enclosure"], loc["Bay"])] = ic["uri"]
+
+    out: dict[tuple[str, str], str] = {}
+    for u in uplinks:
+        # A tunnel uplink set either declares the type itself or carries a
+        # single Tunnel-type ethernet network.
+        tunnel_name = ""
+        if u.get("ethernetNetworkType") == "Tunnel":
+            for nu in u.get("networkUris") or []:
+                tunnel_name = net_name.get(nu, "")
+                if tunnel_name:
+                    break
+        if not tunnel_name:
+            for nu in u.get("networkUris") or []:
+                if net_type.get(nu) == "Tunnel":
+                    tunnel_name = net_name.get(nu, "")
+                    break
+        if not tunnel_name:
+            continue
+        for pci in u.get("portConfigInfos") or []:
+            loc = {e.get("type"): e.get("value")
+                   for e in (pci.get("location") or {}).get("locationEntries", [])}
+            ic_uri = ic_by_encl_bay.get((loc.get("Enclosure", ""), loc.get("Bay", "")))
+            port = loc.get("Port", "")
+            if ic_uri and port:
+                out[(ic_uri, port)] = tunnel_name
+    return out
+
+
 def _resolve_connection(
     net_uri: str,
     conns: list[tuple[str, str, frozenset]],
@@ -198,14 +252,25 @@ def enrich_mac_entries(
     mac_map: dict[str, tuple[str, str]],
     port_map: dict[tuple[str, int], str],
     port_conns: dict[tuple[str, int], list[tuple[str, str, frozenset]]],
+    tunnel_ports: dict[tuple[str, str], str] | None = None,
 ) -> None:
     """Populate ``profile`` / ``connection`` on each MAC entry, in place.
 
     Exact MAC match resolves both profile and connection.  Otherwise a downlink
     port maps to the owning server profile, and the connection is resolved by
     matching the entry's learned network against that profile's connections.
+
+    Entries learned on a *tunnel* uplink come back with a blank network name
+    (Virtual Connect uses an internal VLAN for tunnels); they are attributed to
+    the owning tunnel network via ``tunnel_ports``.
     """
+    tunnel_ports = tunnel_ports or {}
     for e in entries:
+        if not e.get("network"):
+            tname = tunnel_ports.get((e.get("ic_uri", ""), e.get("port", "")))
+            if tname:
+                e["network"] = tname
+                e["internal_vlan"] = True
         mac = (e.get("mac") or "").lower()
         if mac in mac_map:
             e["profile"], e["connection"] = mac_map[mac]
@@ -262,7 +327,15 @@ async def get_mac_table(
         except Exception:
             maps["v"] = ({}, {}, {})
 
-    await asyncio.gather(_load_profiles(), *[_query_one(li) for li in active_lis])
+    async def _load_tunnels() -> None:
+        try:
+            maps["t"] = await build_tunnel_port_map(client)
+        except Exception:
+            maps["t"] = {}
+
+    await asyncio.gather(
+        _load_profiles(), _load_tunnels(), *[_query_one(li) for li in active_lis]
+    )
 
     # Deduplicate
     seen: set[tuple] = set()
@@ -274,6 +347,7 @@ async def get_mac_table(
             unique.append(m)
 
     mac_map, port_map, port_conns = maps.get("v", ({}, {}, {}))
-    enrich_mac_entries(unique, mac_map, port_map, port_conns)
+    tunnel_ports = maps.get("t", {})
+    enrich_mac_entries(unique, mac_map, port_map, port_conns, tunnel_ports)
 
     return sorted(unique, key=lambda m: (m["mac"], m["ic_name"]))

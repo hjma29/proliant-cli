@@ -1,0 +1,28 @@
+---
+---
+
+@import "{{ site.theme }}";
+
+/* Widen the layout on large screens. Minimal's defaults are
+   .wrapper 860px / header 270px / section ~500px — too narrow for
+   command output and tables. These overrides keep the left sidebar
+   but give the main body much more room. */
+@media print, screen and (min-width: 961px) {
+  .wrapper {
+    width: 1140px;
+  }
+
+  header {
+    width: 270px;
+  }
+
+  section {
+    width: 800px;
+  }
+}
+
+/* Let wide demo images / tables use the full content width. */
+section img,
+section table {
+  max-width: 100%;
+}

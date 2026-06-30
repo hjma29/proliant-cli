@@ -761,11 +761,9 @@ def _vlan_label(vlan, ntype: str) -> str:
     return str(vlan) if vlan else "—"
 
 
-async def _async_describe_network(network_name: str, diagram: bool = False) -> None:
+async def _async_describe_network(network_name: str) -> None:
     from proliant.oneview.network import describe_network
-    from proliant.oneview.topology import (
-        build_network_map, render_network_map, render_network_map_ascii,
-    )
+    from proliant.oneview.topology import build_network_map, render_network_map
     from rich.panel import Panel
 
     async with _load_client() as client:
@@ -809,17 +807,11 @@ async def _async_describe_network(network_name: str, diagram: bool = False) -> N
         get_console().print("[dim]Not used by any server profile or template.[/dim]")
 
     get_console().rule("[bold]Mapping[/bold]", style="cyan")
-    if diagram:
-        get_console().print(render_network_map_ascii(nm, color=True),
-                            markup=True, highlight=False)
-    else:
-        get_console().print(render_network_map(nm))
+    get_console().print(render_network_map(nm))
 
 
-async def _async_describe_mac(mac: str, diagram: bool = False) -> None:
-    from proliant.oneview.topology import (
-        trace_mac, render_network_map, render_network_map_ascii,
-    )
+async def _async_describe_mac(mac: str) -> None:
+    from proliant.oneview.topology import trace_mac, render_network_map
 
     async with _load_client() as client:
         with get_console().status(f"[dim]Tracing MAC {mac} across the fabric…[/dim]"):
@@ -834,19 +826,15 @@ async def _async_describe_mac(mac: str, diagram: bool = False) -> None:
     for i, nm in enumerate(maps):
         if i:
             get_console().rule(style="dim")
-        if diagram:
-            get_console().print(render_network_map_ascii(nm, mac=mac, color=True),
-                                markup=True, highlight=False)
-        else:
-            get_console().print(render_network_map(nm, mac=mac))
+        get_console().print(render_network_map(nm, mac=mac))
 
 
 async def _cmd_network_describe(args: argparse.Namespace) -> None:
-    await _async_describe_network(args.name, diagram=getattr(args, "diagram", False))
+    await _async_describe_network(args.name)
 
 
 async def _cmd_mac_describe(args: argparse.Namespace) -> None:
-    await _async_describe_mac(args.address, diagram=getattr(args, "diagram", False))
+    await _async_describe_mac(args.address)
 
 
 # ── proliant oneview enclosures list ─────────────────────────────────────────
@@ -1021,8 +1009,6 @@ examples:
     arg_net_name = p_net_desc.add_argument("name", metavar="NAME",
         help="Name of the ethernet network (e.g. VLAN-160)")
     arg_net_name.completer = _oneview_network_name_completer
-    p_net_desc.add_argument("--diagram", "-d", action="store_true", dest="diagram",
-        help="Render the mapping as a top-down ASCII box diagram instead of a tree")
     p_net_desc.set_defaults(func=_cmd_network_describe)
 
     p_networksets = sub.add_parser("networksets", aliases=["networkset"], help="List or describe network sets")
@@ -1086,8 +1072,6 @@ examples:
         help="Trace a MAC address end-to-end through the fabric")
     p_mac_desc.add_argument("address", metavar="MAC",
         help="MAC address to trace (e.g. 00:9C:02:73:33:6D)")
-    p_mac_desc.add_argument("--diagram", "-d", action="store_true", dest="diagram",
-        help="Render as a top-down ASCII box diagram instead of a tree")
     p_mac_desc.set_defaults(func=_cmd_mac_describe)
 
     # ── enclosures ────────────────────────────────────────────────────────

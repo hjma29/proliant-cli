@@ -33,3 +33,17 @@ section table {
 header footer {
   display: none;
 }
+
+/* Bump the base font one size up (Minimal defaults to 14px). */
+body {
+  font-size: 16px;
+}
+
+section p,
+section ul,
+section ol,
+section li,
+section table,
+section dl {
+  font-size: 16px;
+}

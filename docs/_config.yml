@@ -1,0 +1,18 @@
+# GitHub Pages site config for proliant-cli
+# Zero-maintenance: GitHub builds this natively with Jekyll — no Actions, no
+# dependencies to manage. Edit Markdown in this folder and push; the site
+# rebuilds automatically.
+title: proliant-cli
+description: >-
+  HPE ProLiant unified CLI — iLO Redfish, Compute Ops Management,
+  and Synergy OneView from your terminal.
+# Clean, professional GitHub-native theme (GitHub's own design system).
+# To try an alternative, swap this one line — all are zero-maintenance:
+#   jekyll-theme-primer    (clean, documentation style — current)
+#   jekyll-theme-minima    (classic, plain)
+#   jekyll-theme-architect (structured, slightly more formal)
+theme: jekyll-theme-primer
+
+# Files in /docs that are not part of the website
+exclude:
+  - demo.tape

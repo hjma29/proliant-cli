@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import re
 import sys
 
 
@@ -677,6 +678,18 @@ async def _cmd_interconnects_list(args: argparse.Namespace) -> None:
 
 # ── proliant oneview mac list ─────────────────────────────────────────────────
 
+def _short_ic_name(name: str) -> str:
+    """Compact OneView's interconnect name for table display.
+
+    OneView reports interconnects as ``<enclosure>, interconnect <bay>``
+    (e.g. ``Enclosure-01, interconnect 6``).  Shorten the verbose middle to
+    ``<enclosure> IC<bay>`` → ``Enclosure-01 IC6``.  Unrecognised names are
+    returned unchanged.
+    """
+    m = re.match(r"^(.*),\s*interconnect\s*(\d+)\s*$", name or "", re.IGNORECASE)
+    return f"{m.group(1)} IC{m.group(2)}" if m else (name or "")
+
+
 async def _async_mac_list(address: str, vlan: int, network_name: str = "") -> None:
     from proliant.oneview.interconnects import get_mac_table
 
@@ -711,18 +724,12 @@ async def _async_mac_list(address: str, vlan: int, network_name: str = "") -> No
         ("Port",           {"no_wrap": True}),
         ("Server Profile", {"no_wrap": True}),
         ("Connection",     {"no_wrap": True}),
-        ("Network",        {"no_wrap": True}),
-        ("VLAN",           {"justify": "right", "no_wrap": True}),
-        ("Type",           {"no_wrap": True}),
     )
     for e in entries:
-        vlan_cell = (f"[grey50]{e['vlan']}[/grey50]"
-                     if e.get("internal_vlan") else str(e["vlan"]))
         table.add_row(
-            e["mac"], e["ic_name"], e["port"],
+            e["mac"], _short_ic_name(e["ic_name"]), e["port"],
             e.get("profile") or "[dim]—[/dim]",
             e.get("connection") or "[dim]—[/dim]",
-            e["network"], vlan_cell, e["entry_type"],
         )
     get_console().print(table)
 

@@ -26,3 +26,10 @@ section img,
 section table {
   max-width: 100%;
 }
+
+/* Hide the theme's sidebar footer:
+   "This project is maintained by hjma29" and
+   "Hosted on GitHub Pages — Theme by orderedlist". */
+header footer {
+  display: none;
+}

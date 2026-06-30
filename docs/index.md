@@ -7,6 +7,8 @@ description: HPE ProLiant unified CLI — one terminal for iLO, COM, and OneView
 
 _HPE ProLiant unified CLI — one terminal for iLO, COM, and OneView._
 
+**[⭐ View the project on GitHub → github.com/hjma29/proliant-cli](https://github.com/hjma29/proliant-cli)**
+
 **proliant** is a unified, cross-platform CLI for HPE ProLiant environments. From a
 single terminal you can inspect server inventory and firmware across **iLO
 (Redfish)**, **Compute Ops Management (COM)**, and **Synergy OneView**, browse

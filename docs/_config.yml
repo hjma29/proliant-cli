@@ -6,12 +6,12 @@ title: proliant-cli
 description: >-
   HPE ProLiant unified CLI — iLO Redfish, Compute Ops Management,
   and Synergy OneView from your terminal.
-# Clean, professional GitHub-native theme (GitHub's own design system).
+# Clean, professional GitHub-native theme with a left sidebar pane.
 # To try an alternative, swap this one line — all are zero-maintenance:
-#   jekyll-theme-primer    (clean, documentation style — current)
-#   jekyll-theme-minima    (classic, plain)
-#   jekyll-theme-architect (structured, slightly more formal)
-theme: jekyll-theme-primer
+#   jekyll-theme-minimal   (left sidebar + "View on GitHub" button — current)
+#   jekyll-theme-primer    (clean, single-column documentation style)
+#   jekyll-theme-cayman    (gradient hero, single column)
+theme: jekyll-theme-minimal
 
 # Files in /docs that are not part of the website
 exclude:

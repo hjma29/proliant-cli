@@ -35,14 +35,16 @@ if (-not (Test-Path $InstallDir)) {
 
 $dest = Join-Path $InstallDir $BinName
 
-# Download with curl.exe (fast, native progress bar; ships in Win10/11). Fall
-# back to Invoke-WebRequest with the progress bar disabled, which is otherwise
-# the cause of painfully slow downloads in Windows PowerShell 5.1.
+# Download with curl.exe (ships in Win10/11). Use quiet output because curl's
+# progress meter writes to stderr, which becomes a terminating NativeCommandError
+# under Windows PowerShell when $ErrorActionPreference is Stop.
 $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
 if ($curl) {
-    & $curl.Source -L --fail --progress-bar -o $dest $url
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "Download failed (curl exit $LASTEXITCODE)."
+    $curlOutput = & $curl.Source -L --fail --silent --show-error -o $dest $url 2>&1
+    $curlExit = $LASTEXITCODE
+    if ($curlExit -ne 0) {
+        if ($curlOutput) { $curlOutput | ForEach-Object { Write-Error $_ } }
+        Write-Error "Download failed (curl exit $curlExit)."
         exit 1
     }
 } else {
@@ -111,6 +113,10 @@ if (-not (Get-PSReadLineKeyHandler | Where-Object { $_.Key -eq 'Tab' -and $_.Fun
 
 try {
     $profilePath = $PROFILE.CurrentUserAllHosts
+    if (-not $profilePath) {
+        $profileFolder = if ($PSVersionTable.PSEdition -eq 'Core') { 'PowerShell' } else { 'WindowsPowerShell' }
+        $profilePath = Join-Path ([Environment]::GetFolderPath('MyDocuments')) "$profileFolder\profile.ps1"
+    }
     $profileDir = Split-Path -Parent $profilePath
     if (-not (Test-Path $profileDir)) {
         New-Item -ItemType Directory -Path $profileDir -Force | Out-Null

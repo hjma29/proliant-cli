@@ -185,9 +185,7 @@ def _windows_first_run_check() -> None:
         return  # only for the packaged .exe
 
     exe_dir = os.path.dirname(sys.executable)
-
-    path_dirs = [p.lower().rstrip("\\") for p in os.environ.get("PATH", "").split(os.pathsep)]
-    already_in_path = exe_dir.lower().rstrip("\\") in path_dirs
+    already_in_path = _win_path_contains(exe_dir)
 
     if _is_explorer_launch():
         # ── Double-clicked from Explorer ────────────────────────────────────
@@ -240,6 +238,32 @@ def _windows_first_run_check() -> None:
     _win_check_execution_policy()
     print("✓ Done! Opening a new terminal window...\n")
     _open_new_powershell(exe_dir)
+
+
+def _win_user_path() -> str:
+    try:
+        import winreg
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_READ)
+        try:
+            current, _ = winreg.QueryValueEx(key, "Path")
+            return current or ""
+        except FileNotFoundError:
+            return ""
+        finally:
+            winreg.CloseKey(key)
+    except Exception:
+        return ""
+
+
+def _win_path_contains(directory: str) -> bool:
+    target = directory.lower().rstrip("\\")
+    path_values = [os.environ.get("PATH", ""), _win_user_path()]
+    return any(
+        entry.lower().rstrip("\\") == target
+        for value in path_values
+        for entry in value.split(os.pathsep)
+        if entry
+    )
 
 
 def _win_add_to_path(directory: str) -> None:

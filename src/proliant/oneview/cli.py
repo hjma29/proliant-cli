@@ -763,7 +763,7 @@ def _vlan_label(vlan, ntype: str) -> str:
 
 async def _async_describe_network(network_name: str) -> None:
     from proliant.oneview.network import describe_network
-    from proliant.oneview.topology import build_network_map, render_network_map
+    from proliant.oneview.topology import build_network_map, render_network_map_ascii
     from rich.panel import Panel
 
     async with _load_client() as client:
@@ -807,7 +807,7 @@ async def _async_describe_network(network_name: str) -> None:
         get_console().print("[dim]Not used by any server profile or template.[/dim]")
 
     get_console().rule("[bold]Mapping[/bold]", style="cyan")
-    get_console().print(render_network_map(nm))
+    get_console().print(render_network_map_ascii(nm, color=True), markup=True, highlight=False)
 
 
 async def _async_describe_mac(mac: str) -> None:

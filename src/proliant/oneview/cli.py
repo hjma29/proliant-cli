@@ -471,25 +471,17 @@ async def _async_describe_uplinkset(name: str) -> None:
 
 async def _async_describe_networkset(name: str) -> None:
     from proliant.oneview.network import describe_network_set
-    from proliant.oneview.topology import build_network_map, render_network_map_ascii, _gather
+    from proliant.oneview.topology import build_network_set_map, render_network_map_ascii
     from rich.panel import Panel
 
     async with _load_client() as client:
         with get_console().status(f"[dim]Fetching network set '{name}'…[/dim]"):
             s = await describe_network_set(client, name)
-        with get_console().status(f"[dim]Building fabric maps for {len(s['networks'])} networks…[/dim]"):
-            fabric = await _gather(client)
-            profiles = await client.get_all("/rest/server-profiles")
-            maps = []
-            for net in s["networks"]:
-                try:
-                    nm = await build_network_map(client, net["name"], profiles=profiles, fabric=fabric)
-                    maps.append(nm)
-                except Exception:
-                    pass
+        with get_console().status(f"[dim]Building fabric map for {name}…[/dim]"):
+            nm = await build_network_set_map(client, name)
 
     if get_output_mode() == OutputMode.JSON:
-        print_json({"overview": s, "mappings": maps})
+        print_json({"overview": s, "mapping": nm})
         return
 
     get_console().print(Panel(
@@ -536,9 +528,8 @@ async def _async_describe_networkset(name: str) -> None:
         )
     get_console().print(net_table)
 
-    for nm in maps:
-        get_console().rule(f"[bold]Mapping — {nm['network']['name']}[/bold]", style="cyan")
-        get_console().print(render_network_map_ascii(nm, color=True), markup=True, highlight=False)
+    get_console().rule("[bold]Mapping[/bold]", style="cyan")
+    get_console().print(render_network_map_ascii(nm, color=True), markup=True, highlight=False)
 
 
 async def _async_describe_profile(name: str) -> None:

@@ -249,6 +249,120 @@ async def build_network_map(
     }
 
 
+async def build_network_set_map(
+    client: "OneViewClient",
+    network_set_name: str,
+    profiles: list[dict] | None = None,
+    fabric: "_Fabric | None" = None,
+) -> dict:
+    """Build the end-to-end topology for a network set.
+
+    Upstream: uplink sets that reference this network set via ``networkSetUris``.
+    Downstream: server profile connections whose ``networkUri`` equals the
+    network set URI (i.e. connections assigned directly to the network set,
+    not individual member networks).
+    """
+    if fabric is None:
+        fabric = await _gather(client)
+    if profiles is None:
+        profiles = await client.get_all("/rest/server-profiles")
+
+    ns = next((s for s in fabric.netsets if s.get("name", "").lower() == network_set_name.lower()), None)
+    if not ns:
+        raise ValueError(f"Network set '{network_set_name}' not found.")
+    ns_uri = ns["uri"]
+
+    # Upstream: uplink sets that carry this network set
+    uplinks = []
+    for u in fabric.uplinks:
+        if ns_uri not in (u.get("networkSetUris") or []):
+            continue
+        native_uri = u.get("nativeNetworkUri") or ""
+        ports = []
+        for pci in u.get("portConfigInfos") or []:
+            entries = (pci.get("location") or {}).get("locationEntries", [])
+            loc = {e.get("type"): e.get("value") for e in entries}
+            ic = fabric.ic_by_encl_bay.get((loc.get("Enclosure", ""), loc.get("Bay", "")))
+            nb = fabric.neighbor_by_loc.get(
+                (loc.get("Enclosure", ""), loc.get("Bay", ""), loc.get("Port", "")), {}
+            )
+            ports.append({
+                "ic_name": ic["name"] if ic else f"bay {loc.get('Bay', '?')}",
+                "ic_uri": ic.get("uri", "") if ic else "",
+                "bay": loc.get("Bay", ""),
+                "port": loc.get("Port", ""),
+                "neighbor_switch": nb.get("switch", ""),
+                "neighbor_port": nb.get("port", ""),
+                "highlight": False,
+            })
+        ports.sort(key=lambda p: (str(p["bay"]), p["port"]))
+        # Member networks carried via this uplink set
+        networks = []
+        for uri in (u.get("networkUris") or []):
+            n = fabric.net_by_uri.get(uri, {})
+            if not n.get("name"):
+                continue
+            networks.append({
+                "name": n.get("name", ""),
+                "vlan": n.get("vlanId", ""),
+                "native": uri == native_uri,
+            })
+        network_sets = [
+            fabric.ns_name_by_uri.get(uri, "")
+            for uri in (u.get("networkSetUris") or [])
+        ]
+        uplinks.append({
+            "uplink_set": u.get("name", ""),
+            "li_name": fabric.li_by_uri.get(u.get("logicalInterconnectUri", ""), ""),
+            "ports": ports,
+            "networks": networks,
+            "network_sets": [s for s in network_sets if s],
+        })
+    uplinks.sort(key=lambda u: u["uplink_set"])
+
+    # Downstream: server profile connections assigned directly to this network set
+    servers: list[dict] = []
+    for p in profiles:
+        cs = p.get("connectionSettings") or {}
+        conns = []
+        for c in cs.get("connections") or p.get("connections") or []:
+            if (c.get("networkUri") or "") != ns_uri:
+                continue
+            ic = fabric.ic_by_uri.get(c.get("interconnectUri") or "", {})
+            ic_port = c.get("interconnectPort")
+            conns.append({
+                "name": c.get("name", "") or "(unnamed)",
+                "port_id": c.get("portId", ""),
+                "mac": c.get("mac", ""),
+                "ic_name": ic.get("name", ""),
+                "ic_bay": ic.get("bay", ""),
+                "ic_uri": c.get("interconnectUri") or "",
+                "downlink": ic_port if isinstance(ic_port, int) else "",
+                "highlight": False,
+            })
+        if not conns:
+            continue
+        hw = fabric.hw_by_uri.get(p.get("serverHardwareUri") or "", {})
+        servers.append({
+            "profile": p.get("name", ""),
+            "server_name": hw.get("name", ""),
+            "bay": hw.get("bay", p.get("enclosureBay", "")),
+            "connections": conns,
+        })
+    servers.sort(key=lambda s: (str(s["bay"]), s["profile"]))
+
+    return {
+        "network": {
+            "name": ns.get("name", ""),
+            "vlan": "",
+            "type": "NetworkSet",
+            "uri": ns_uri,
+        },
+        "uplinks": uplinks,
+        "servers": servers,
+    }
+
+
 # ── MAC trace ─────────────────────────────────────────────────────────────────
 
 async def trace_mac(client: "OneViewClient", mac: str) -> list[dict]:
@@ -486,9 +600,12 @@ def render_network_map_ascii(m: dict, mac: str = "", color: bool = False) -> str
             net_desc += f", {net['type']}"
         header += f"  ·  {net['name']}  ({net_desc})"
     else:
-        header = f"{net['name']}  ·  VLAN {net['vlan']}"
-        if net.get("type"):
-            header += f"  ·  {net['type']}"
+        if net.get("type") == "NetworkSet":
+            header = f"{net['name']}  ·  Network Set"
+        else:
+            header = f"{net['name']}  ·  VLAN {net['vlan']}"
+            if net.get("type"):
+                header += f"  ·  {net['type']}"
 
     # ── aggregate uplink ports, networks, network sets across the uplink set(s) ─
     uplink_set_name = uplinks[0]["uplink_set"] if uplinks else ""

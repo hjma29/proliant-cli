@@ -50,6 +50,24 @@ def _oneview_network_name_completer(prefix: str, **kwargs) -> list[str]:
         return []
 
 
+def _oneview_networkset_name_completer(prefix: str, **kwargs) -> list[str]:
+    """Tab-complete networkset name by querying OneView network sets."""
+    try:
+        from proliant.oneview.config import load_oneview_config
+        from proliant.oneview.client import OneViewClient
+
+        cfg = load_oneview_config()
+
+        async def _fetch() -> list[str]:
+            async with OneViewClient(cfg["host"], cfg["username"], cfg["password"]) as client:
+                sets = await client.get_all("/rest/network-sets")
+                return [s["name"] for s in sets if s.get("name", "").lower().startswith(prefix.lower())]
+
+        return asyncio.run(_fetch())
+    except Exception:
+        return []
+
+
 def _power_style(state: str) -> str:
     s = state.lower()
     if s == "on":
@@ -1033,7 +1051,8 @@ examples:
     p_ns_list = s_networksets.add_parser("list", help="List all network sets")
     p_ns_list.set_defaults(func=_cmd_networksets_list)
     p_ns_desc = s_networksets.add_parser("describe", help="Describe a network set")
-    p_ns_desc.add_argument("name", metavar="NAME", help="Name of the network set")
+    p_ns_desc_arg = p_ns_desc.add_argument("name", metavar="NAME", help="Name of the network set")
+    p_ns_desc_arg.completer = _oneview_networkset_name_completer
     p_ns_desc.set_defaults(func=_cmd_describe, resource="networkset")
 
     p_uplinksets = sub.add_parser("uplinksets", aliases=["uplinkset"], help="List or describe uplink sets")

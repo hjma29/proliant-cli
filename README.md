@@ -85,14 +85,21 @@ proliant com reports memory
 
 ```bash
 proliant oneview servers list
-proliant oneview servers describe <name>
 proliant oneview firmware list
 proliant oneview networks list
+proliant oneview networks describe <name>
+proliant oneview networksets list
+proliant oneview networksets describe <name>
+proliant oneview uplinksets list
+proliant oneview uplinksets describe <name>
 proliant oneview server-profiles list
+proliant oneview server-profiles describe <name>
+proliant oneview enclosures list
+proliant oneview enclosures describe <name>
+proliant oneview mac list --address <mac>
+proliant oneview mac list --network-name <name>
+proliant oneview mac describe <mac>
 proliant oneview reports memory
-proliant oneview mac list --network-name <name>          # MAC table with owning profile/connection
-proliant oneview map --network-name <name>               # End-to-end fabric map for a network
-proliant oneview map --mac <address>                     # Trace how a MAC travels through Synergy
 ```
 
 ### SPP (Service Pack for ProLiant)

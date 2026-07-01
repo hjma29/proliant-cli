@@ -143,7 +143,10 @@ class OneViewClient(BaseAsyncClient):
     # ── CRUD ──────────────────────────────────────────────────────────────
 
     async def get(self, uri: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        resp = await self._ensure_http().get(uri, headers=self._headers, params=params)
+        try:
+            resp = await self._ensure_http().get(uri, headers=self._headers, params=params)
+        except httpx.RequestError as exc:
+            raise OneViewError(f"Cannot reach OneView appliance at {self._base_url}: {exc}") from exc
         self._raise_for_status(resp, "GET", uri)
         return self._safe_json(resp)
 

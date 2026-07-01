@@ -4,6 +4,25 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ---
 
+## v1.0.11 — 2026-07-01
+
+### New Features
+- `proliant oneview enclosures describe`: show GUI-like enclosure bay layout and hardware detail tables.
+- `proliant oneview server-profiles describe`: show detailed profile, firmware, connection, boot, BIOS, and address settings.
+- `proliant oneview mac describe`: trace a MAC with a diagram focused on the learned endpoint or uplink.
+
+### Bug Fixes
+- PowerShell completion now handles namespace delegation, trailing spaces, and values containing spaces or commas more reliably.
+- Sentry telemetry now drops expected user/environment errors such as authentication failures, timeouts, missing config, and invalid input.
+- OneView requests now report connection and timeout failures as clean CLI errors.
+
+### Enhancements
+- OneView MAC list output hides server profile columns when entries are not related to a server profile.
+- OneView `--json` can be used before or after subcommand arguments.
+- OneView output uses cleaner status coloring, compact server names, and richer network, enclosure, and profile details.
+
+---
+
 ## v1.0.9 — 2026-06-26
 
 ### New Features

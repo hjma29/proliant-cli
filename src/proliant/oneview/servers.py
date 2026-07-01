@@ -18,11 +18,13 @@ if TYPE_CHECKING:
 
 def _mp_ip(server: dict) -> str:
     """Extract first iLO IP from mpIpAddresses list."""
-    addrs = server.get("mpIpAddresses", [])
+    addrs = []
+    addrs.extend(server.get("mpIpAddresses") or [])
+    addrs.extend((server.get("mpHostInfo") or {}).get("mpIpAddresses") or [])
     for a in addrs:
         ip = a.get("address", "")
-        # Skip link-local and empty
-        if ip and not ip.startswith("169.254"):
+        # Skip link-local and empty addresses.
+        if ip and not ip.startswith("169.254") and not ip.lower().startswith("fe80:"):
             return ip
     return ""
 

@@ -67,7 +67,16 @@ Register-ArgumentCompleter -Native -CommandName proliant -ScriptBlock {
     proliant 2>&1 | Out-Null
 
     Get-Content $completion_file | ForEach-Object {
-        [System.Management.Automation.CompletionResult]::new($_, $_, "ParameterValue", $_)
+        $display = $_ -replace '`(.)', '$1'
+        $displayText = $display.TrimEnd()
+        $completion = $_
+        if ($displayText -match '[\\s,]') {
+            $completion = "'" + ($displayText -replace "'", "''") + "'"
+            if ($display.EndsWith(' ')) {
+                $completion = $completion + ' '
+            }
+        }
+        [System.Management.Automation.CompletionResult]::new($completion, $displayText, "ParameterValue", $displayText)
     }
     Remove-Item $completion_file, Env:\\_ARGCOMPLETE_STDOUT_FILENAME, Env:\\ARGCOMPLETE_USE_TEMPFILES, Env:\\COMP_LINE, Env:\\COMP_POINT, Env:\\_ARGCOMPLETE, Env:\\_ARGCOMPLETE_SUPPRESS_SPACE, Env:\\_ARGCOMPLETE_IFS, Env:\\_ARGCOMPLETE_SHELL
 }
@@ -1050,11 +1059,15 @@ def main(argv: list[str] | None = None) -> None:
     # fall through to the argparse-based completion below.
     if "_ARGCOMPLETE" in os.environ:
         comp_line = os.environ.get("COMP_LINE", "")
+        try:
+            comp_point = int(os.environ.get("COMP_POINT", "0"))
+        except ValueError:
+            comp_point = 0
         parts = comp_line.split()
         # Only delegate to sub-CLI when namespace is fully typed (trailing space or 3+ tokens).
         # Without this guard, 'proliant com<TAB>' (no space) dispatches to com's parser
         # before a subcommand is started, returning nothing.
-        in_subcommand = len(parts) >= 3 or comp_line.endswith(" ")
+        in_subcommand = len(parts) >= 3 or comp_line.endswith(" ") or comp_point > len(comp_line)
         # parts[0] = "proliant", parts[1] = namespace (if typed)
         if in_subcommand and len(parts) >= 2 and parts[1] == "ilo":
             # Tell argcomplete to skip 2 words (proliant + ilo) instead of 1
@@ -1145,10 +1158,88 @@ _SENTRY_DSN = (
     "@o4511633310220288.ingest.us.sentry.io/4511633321164801"
 )
 
+_SENTRY_DROP_TYPES = {
+    "AuthError",
+    "AuthFlowError",
+    "ConnectError",
+    "ConnectTimeout",
+    "CredentialsError",
+    "EOFError",
+    "FileNotFoundError",
+    "KeyboardInterrupt",
+    "NetworkError",
+    "OneViewError",
+    "PermissionError",
+    "PoolTimeout",
+    "ProxyError",
+    "ReadError",
+    "ReadTimeout",
+    "RemoteProtocolError",
+    "RequestError",
+    "SystemExit",
+    "TimeoutError",
+    "TimeoutException",
+    "TooManyRedirects",
+    "UnsupportedProtocol",
+    "WriteError",
+    "WriteTimeout",
+}
+
+_SENTRY_DROP_MESSAGE_PATTERNS = (
+    r"\b(?:http|https)\s+\d{3}\s*:\s*(?:check username/password|account lacks permission)",
+    r"\b(?:401|403)\b.*(?:unauthori[sz]ed|forbidden|permission|password|credential|auth)",
+    r"(?:authentication|login|password)\s+(?:failed|denied|cancelled)",
+    r"(?:wrong password|too many failed attempts|not logged in|session expired)",
+    r"(?:cannot reach|unreachable|connection refused|network is unreachable)",
+    r"(?:connect timeout|read timeout|timed out|timeout)",
+    r"(?:getaddrinfo failed|name or service not known|temporary failure in name resolution)",
+    r"(?:credentials file not found|no inventory\.ini found|file not found)",
+    r"(?:not found\. known:|known servers:|known vlan|known vlans)",
+    r"(?:invalid .* valid values|no settings specified)",
+)
+
+
+def _sentry_hint_expected_failure(hint) -> bool:  # noqa: ANN001
+    exc_info = (hint or {}).get("exc_info") or ()
+    if len(exc_info) < 2:
+        return False
+    exc = exc_info[1]
+    if exc is None:
+        return False
+
+    if type(exc).__name__ in _SENTRY_DROP_TYPES:
+        return True
+
+    try:
+        import httpx  # noqa: PLC0415
+        if isinstance(exc, httpx.RequestError):
+            return True
+        if isinstance(exc, httpx.HTTPStatusError):
+            status = exc.response.status_code if exc.response is not None else 0
+            return status in {400, 401, 403, 404, 408, 409, 429}
+    except ImportError:
+        pass
+
+    return False
+
+
+def _sentry_event_expected_failure(event) -> bool:  # noqa: ANN001
+    import re
+    for exc in event.get("exception", {}).get("values", []):
+        if exc.get("type") in _SENTRY_DROP_TYPES:
+            return True
+        value = str(exc.get("value") or "")
+        if any(re.search(pattern, value, re.IGNORECASE) for pattern in _SENTRY_DROP_MESSAGE_PATTERNS):
+            return True
+    return False
+
 
 def _sentry_scrub(event, hint):  # noqa: ANN001
     """Strip IPs, hostnames and credential patterns before sending."""
     import re
+    if _sentry_hint_expected_failure(hint) or _sentry_event_expected_failure(event):
+        return None
+
     _IP = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
     _CRED = re.compile(r'(password|secret|token|key|auth)\s*[=:]\s*\S+', re.IGNORECASE)
 

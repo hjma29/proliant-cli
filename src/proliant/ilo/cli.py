@@ -45,7 +45,7 @@ import argcomplete
 
 from proliant.ilo.boot import fetch_boot_order, set_one_time_pxe
 from proliant.ilo.inventory import apply_license_key
-from proliant.common.completers import comma_sep_completer
+from proliant.common.completers import comma_sep_completer, file_completion, suppress_file_completion
 from proliant.common.display import get_console, make_table, print_json, OutputMode, get_output_mode
 from proliant.common.runner import run_parallel, run_sync
 from proliant.common.targets import resolve_hosts, add_target_args
@@ -207,6 +207,55 @@ def _build_parser() -> argparse.ArgumentParser:
         except Exception:  # intentional: tab completion must never print to stdout
             return []
 
+    def _staged_firmware_filename_completer(prefix: str, parsed_args: argparse.Namespace, **_kwargs) -> list[str]:
+        host_name = getattr(parsed_args, "host", None)
+        if not host_name:
+            return []
+        try:
+            host = load_hosts(host_name)[0]
+
+            async def _fetch() -> list[str]:
+                async with ilo_session(host) as client:
+                    components = await firmware.get_component_repository(client)
+                return [
+                    c.get("Filename") or c.get("Name") or ""
+                    for c in components
+                    if (c.get("Filename") or c.get("Name") or "").lower().startswith(prefix.lower())
+                ]
+
+            return asyncio.run(_fetch())
+        except Exception:
+            return []
+
+    def _pxe_port_completer(prefix: str, parsed_args: argparse.Namespace, **_kwargs) -> list[str]:
+        host_name = getattr(parsed_args, "host", None)
+        if not host_name:
+            return []
+        try:
+            host = load_hosts(host_name)[0]
+
+            async def _fetch() -> list[str]:
+                async with ilo_session(host) as client:
+                    boot = await fetch_boot_order(client)
+                values: list[str] = []
+                for option in boot.get("pxe_ipv4", []):
+                    values.extend(
+                        value for value in (
+                            option.get("port_hint", ""),
+                            option.get("display_name", ""),
+                            option.get("mac", ""),
+                        ) if value
+                    )
+                seen = set()
+                return [
+                    value for value in values
+                    if value.lower().startswith(prefix.lower()) and not (value in seen or seen.add(value))
+                ]
+
+            return asyncio.run(_fetch())
+        except Exception:
+            return []
+
     def _add_host_target(
         p: argparse.ArgumentParser,
         *,
@@ -223,12 +272,13 @@ def _build_parser() -> argparse.ArgumentParser:
         )
         arg.completer = _host_completer
         if allow_hosts_from:
-            p.add_argument(
+            hosts_from_arg = p.add_argument(
                 "--hosts-from",
                 metavar="FILE",
                 dest="hosts_from",
                 help="Read target hosts from FILE (one per line), or '-' for stdin",
             )
+            hosts_from_arg.completer = file_completion()
 
     def _add_list_action(
         resource_parser: argparse.ArgumentParser,
@@ -335,12 +385,14 @@ def _build_parser() -> argparse.ArgumentParser:
     fw_stage = firmware_sub.add_parser("stage", help="Stage a firmware package from a URL")
     fw_stage.set_defaults(command="upgrade", upgrade_action="stage")
     _add_host_target(fw_stage, required=True)
-    fw_stage.add_argument("--url", metavar="URL", required=True, help="Direct URL to .fwpkg file on HPE SDR")
+    fw_stage_url = fw_stage.add_argument("--url", metavar="URL", required=True, help="Direct URL to .fwpkg file on HPE SDR")
+    fw_stage_url.completer = suppress_file_completion()
     fw_stage.add_argument("--dry-run", action="store_true", dest="dry_run")
     fw_flash = firmware_sub.add_parser("flash", help="Queue a staged file for flash on next reboot")
     fw_flash.set_defaults(command="upgrade", upgrade_action="flash")
     _add_host_target(fw_flash, required=True)
-    fw_flash.add_argument("filename", metavar="FILENAME", help="Filename of the staged component to queue")
+    fw_flash_filename = fw_flash.add_argument("filename", metavar="FILENAME", help="Filename of the staged component to queue")
+    fw_flash_filename.completer = _staged_firmware_filename_completer
     fw_flash.add_argument("--dry-run", action="store_true", dest="dry_run")
     fw_clear = firmware_sub.add_parser("clear", help="Clear all entries from the task queue")
     fw_clear.set_defaults(command="upgrade", upgrade_action="clear")
@@ -389,7 +441,8 @@ def _build_parser() -> argparse.ArgumentParser:
     license_set = license_sub.add_parser("set", help="Apply a license key to a server")
     license_set.set_defaults(command="license")
     _add_host_target(license_set, required=True)
-    license_set.add_argument("key", metavar="KEY", help="License key (format: XXXXX-XXXXX-XXXXX-XXXXX-XXXXX)")
+    license_key = license_set.add_argument("key", metavar="KEY", help="License key (format: XXXXX-XXXXX-XXXXX-XXXXX-XXXXX)")
+    license_key.completer = suppress_file_completion()
 
     power_p = subparsers.add_parser(
         "power",
@@ -459,8 +512,9 @@ def _build_parser() -> argparse.ArgumentParser:
     boot_pxe = boot_set_sub.add_parser("pxe", help="Set one-time PXE IPv4 boot")
     boot_pxe.set_defaults(command="boot", boot_action="pxe")
     _add_host_target(boot_pxe, required=True)
-    boot_pxe.add_argument("--port", metavar="MATCH",
+    boot_pxe_port = boot_pxe.add_argument("--port", metavar="MATCH",
                           help="Specific PXE IPv4 port to boot from; matches boot option display text or MAC")
+    boot_pxe_port.completer = _pxe_port_completer
     boot_pxe.add_argument("--dry-run", action="store_true", dest="dry_run")
 
     bios_p = subparsers.add_parser(
@@ -526,20 +580,27 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     set_static.set_defaults(command="set", set_action="static")
     _add_host_target(set_static, required=True)
-    set_static.add_argument("--ip", metavar="ADDR", required=True, help="Static IPv4 address")
-    set_static.add_argument("--mask", metavar="MASK", required=True, help="Subnet mask (e.g. 255.255.252.0)")
-    set_static.add_argument("--gateway", metavar="GW", required=True, help="Default gateway")
-    set_static.add_argument("--dns", metavar="DNS", action="append", dest="dns",
+    static_ip = set_static.add_argument("--ip", metavar="ADDR", required=True, help="Static IPv4 address")
+    static_ip.completer = suppress_file_completion()
+    static_mask = set_static.add_argument("--mask", metavar="MASK", required=True, help="Subnet mask (e.g. 255.255.252.0)")
+    static_mask.completer = suppress_file_completion()
+    static_gateway = set_static.add_argument("--gateway", metavar="GW", required=True, help="Default gateway")
+    static_gateway.completer = suppress_file_completion()
+    static_dns = set_static.add_argument("--dns", metavar="DNS", action="append", dest="dns",
                             help="DNS server (repeat for multiple, e.g. --dns 8.8.8.8 --dns 8.8.4.4)")
+    static_dns.completer = suppress_file_completion()
     set_static.add_argument("--confirm", action="store_true", help="Skip confirmation prompt")
     set_static.add_argument("--no-reset", action="store_true", dest="no_reset",
                             help="Stage the static-IP change without resetting iLO (change will NOT persist across iLO reboots)")
     set_route = network_set_sub.add_parser("route", help="Add a static route to the iLO dedicated NIC (static IP mode only)")
     set_route.set_defaults(command="set", set_action="route")
     _add_host_target(set_route, required=True)
-    set_route.add_argument("--destination", metavar="DEST", required=True, help="Destination network (e.g. 192.168.10.0)")
-    set_route.add_argument("--mask", metavar="MASK", required=True, help="Subnet mask (e.g. 255.255.255.0)")
-    set_route.add_argument("--gateway", metavar="GW", required=True, help="Gateway for this route")
+    route_dest = set_route.add_argument("--destination", metavar="DEST", required=True, help="Destination network (e.g. 192.168.10.0)")
+    route_dest.completer = suppress_file_completion()
+    route_mask = set_route.add_argument("--mask", metavar="MASK", required=True, help="Subnet mask (e.g. 255.255.255.0)")
+    route_mask.completer = suppress_file_completion()
+    route_gateway = set_route.add_argument("--gateway", metavar="GW", required=True, help="Gateway for this route")
+    route_gateway.completer = suppress_file_completion()
     set_route.add_argument("--confirm", action="store_true", help="Skip confirmation prompt")
     set_route.add_argument("--no-reset", action="store_true", dest="no_reset",
                            help="Do not reset iLO even if ResetRequired (change may not take effect immediately)")

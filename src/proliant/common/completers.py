@@ -6,6 +6,18 @@ Shared argcomplete helpers for tab completion across all proliant modules.
 
 from __future__ import annotations
 
+from argcomplete.completers import FilesCompleter, SuppressCompleter
+
+
+def file_completion():
+    """Argcomplete completer for arguments that intentionally accept file paths."""
+    return FilesCompleter()
+
+
+def suppress_file_completion():
+    """Argcomplete completer for free-form values that should not list files."""
+    return SuppressCompleter()
+
 
 def comma_sep_completer(choices: tuple | list):
     """Argcomplete completer for comma-separated field lists.

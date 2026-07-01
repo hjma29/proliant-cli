@@ -19,6 +19,7 @@ from rich.markdown import Markdown
 from rich.rule import Rule
 from rich import box
 
+from proliant.common.completers import suppress_file_completion
 from proliant.qs.client import QSEntry, search_quickspecs, fetch_quickspec_markdown, fetch_quickspec_versions, filter_section
 
 
@@ -743,33 +744,37 @@ examples:
 
     # ── list ──────────────────────────────────────────────────────────────────
     p_list = sub.add_parser("list", help="List QuickSpec revisions for a model")
-    p_list.add_argument(
+    list_model_arg = p_list.add_argument(
         "--model", "-m",
         required=True,
         metavar="MODEL",
         help="Server model, e.g. dl380gen12, 'DL360 Gen11'",
     )
-    p_list.add_argument(
+    list_model_arg.completer = suppress_file_completion()
+    list_count_arg = p_list.add_argument(
         "--count", "-n",
         type=int,
         default=5,
         metavar="N",
         help="Maximum results to show (default: 5)",
     )
+    list_count_arg.completer = suppress_file_completion()
 
     # ── describe ──────────────────────────────────────────────────────────────
     p_desc = sub.add_parser("describe", help="Show a QuickSpec document as markdown")
-    p_desc.add_argument(
+    desc_doc_arg = p_desc.add_argument(
         "doc_id",
         nargs="?",
         metavar="DOCID",
         help="Document ID, e.g. a00073551enw (optional if --model is given)",
     )
-    p_desc.add_argument(
+    desc_doc_arg.completer = suppress_file_completion()
+    desc_model_arg = p_desc.add_argument(
         "--model", "-m",
         metavar="MODEL",
         help="Resolve the latest doc ID for this model",
     )
+    desc_model_arg.completer = suppress_file_completion()
     p_desc.add_argument(
         "--section", "-s",
         metavar="SECTION",
@@ -784,22 +789,25 @@ examples:
 
     # ── diff ──────────────────────────────────────────────────────────────────
     p_diff = sub.add_parser("diff", help="Compare two versions of a QuickSpec")
-    p_diff.add_argument(
+    diff_model_arg = p_diff.add_argument(
         "--model", "-m",
         required=True,
         metavar="MODEL",
         help="Server model, e.g. dl380gen12, 'DL360 Gen11'",
     )
-    p_diff.add_argument(
+    diff_model_arg.completer = suppress_file_completion()
+    diff_v1_arg = p_diff.add_argument(
         "--v1",
         metavar="N",
         help="Older version number (default: second-latest)",
     )
-    p_diff.add_argument(
+    diff_v1_arg.completer = suppress_file_completion()
+    diff_v2_arg = p_diff.add_argument(
         "--v2",
         metavar="N",
         help="Newer version number (default: latest)",
     )
+    diff_v2_arg.completer = suppress_file_completion()
     p_diff.add_argument(
         "--section", "-s",
         metavar="SECTION",

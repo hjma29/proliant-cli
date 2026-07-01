@@ -11,13 +11,16 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
+import argcomplete
 from rich.console import Console
 from rich.table import Table
 from rich import box
 
+from proliant.common.completers import comma_sep_completer, suppress_file_completion
 from proliant.spp.catalog import (
     SUPPORTED_GENS,
     TYPE_FILTERS,
@@ -37,6 +40,44 @@ from proliant.spp.catalog import (
 )
 
 console = Console()
+
+_GEN_COMPLETIONS = tuple(SUPPORTED_GENS + ("10", "11", "12", "all"))
+
+
+def _prefix_matches(values: tuple[str, ...] | list[str], prefix: str) -> list[str]:
+    return [value for value in values if value.lower().startswith(prefix.lower())]
+
+
+def _gen_completer(prefix: str, **_kwargs) -> list[str]:
+    return _prefix_matches(_GEN_COMPLETIONS, prefix)
+
+
+def _spp_type_completer(prefix: str, **kwargs) -> list[str]:
+    return comma_sep_completer(tuple(TYPE_FILTERS))(prefix, **kwargs)
+
+
+def _spp_version_completer(prefix: str, parsed_args: argparse.Namespace, **_kwargs) -> list[str]:
+    gen = getattr(parsed_args, "gen", None)
+    if not gen or str(gen).lower() == "all":
+        return []
+    try:
+        return _prefix_matches(list_versions(gen), prefix)
+    except Exception:
+        return []
+
+
+def _local_package_completer(prefix: str, parsed_args: argparse.Namespace, **_kwargs) -> list[str]:
+    gen = getattr(parsed_args, "gen", None)
+    version = getattr(parsed_args, "version", None)
+    if not gen or not version:
+        return []
+    try:
+        package_dir = _packages_dir(_norm_gen(gen), version)
+        if not package_dir.exists():
+            return []
+        return _prefix_matches([path.name for path in package_dir.glob("*.fwpkg")], prefix)
+    except Exception:
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -67,34 +108,40 @@ examples:
 
     # ── list ─────────────────────────────────────────────────────────────────
     p_list = sub.add_parser("list", help="List available SPP versions")
-    p_list.add_argument(
+    list_gen_arg = p_list.add_argument(
         "--gen",
         default="gen12",
         metavar="GEN",
         help="Generation to list: gen10, gen11, gen12, or 'all' (default: gen12)",
     )
+    list_gen_arg.completer = _gen_completer
 
     # ── inspect ──────────────────────────────────────────────────────────────
     p_inspect = sub.add_parser("inspect", help="Show components in an SPP version")
-    p_inspect.add_argument("gen", metavar="GEN", help="Generation, e.g. gen12")
-    p_inspect.add_argument("version", metavar="VERSION", help="SPP version, e.g. 2026.03.00.00")
-    p_inspect.add_argument(
+    inspect_gen_arg = p_inspect.add_argument("gen", metavar="GEN", help="Generation, e.g. gen12")
+    inspect_gen_arg.completer = _gen_completer
+    inspect_version_arg = p_inspect.add_argument("version", metavar="VERSION", help="SPP version, e.g. 2026.03.00.00")
+    inspect_version_arg.completer = _spp_version_completer
+    inspect_package_arg = p_inspect.add_argument(
         "package",
         metavar="FILE.fwpkg",
         nargs="?",
         help="Inspect a specific .fwpkg file (downloaded if not already local)",
     )
-    p_inspect.add_argument(
+    inspect_package_arg.completer = _local_package_completer
+    inspect_type_arg = p_inspect.add_argument(
         "--type", "-t",
         dest="types",
         metavar="TYPES",
         help=f"Comma-separated types to show: {', '.join(TYPE_FILTERS)}",
     )
-    p_inspect.add_argument(
+    inspect_type_arg.completer = _spp_type_completer
+    inspect_model_arg = p_inspect.add_argument(
         "--model", "-m",
         metavar="MODEL",
         help="Filter by server model substring, e.g. DL325, DL380",
     )
+    inspect_model_arg.completer = suppress_file_completion()
     p_inspect.add_argument(
         "--firmware-only", "-f",
         action="store_true",
@@ -111,26 +158,33 @@ examples:
         "part-number",
         help="Find and inspect the fwpkg for a specific part number",
     )
-    p_pn.add_argument("part_number", metavar="PART-NUMBER", help="HPE part number, e.g. P26264-001")
-    p_pn.add_argument("gen", metavar="GEN", help="Generation, e.g. gen12")
-    p_pn.add_argument("version", metavar="VERSION", help="SPP version, e.g. 2026.03.00.00")
+    pn_part_arg = p_pn.add_argument("part_number", metavar="PART-NUMBER", help="HPE part number, e.g. P26264-001")
+    pn_part_arg.completer = suppress_file_completion()
+    pn_gen_arg = p_pn.add_argument("gen", metavar="GEN", help="Generation, e.g. gen12")
+    pn_gen_arg.completer = _gen_completer
+    pn_version_arg = p_pn.add_argument("version", metavar="VERSION", help="SPP version, e.g. 2026.03.00.00")
+    pn_version_arg.completer = _spp_version_completer
     p_pn.add_argument("--force", action="store_true", help="Re-download catalog even if already cached")
 
     # ── download ──────────────────────────────────────────────────────────────
     p_dl = sub.add_parser("download", help="Download .fwpkg files from an SPP version")
-    p_dl.add_argument("gen", metavar="GEN", help="Generation, e.g. gen12")
-    p_dl.add_argument("version", metavar="VERSION", help="SPP version, e.g. 2026.03.00.00")
-    p_dl.add_argument(
+    dl_gen_arg = p_dl.add_argument("gen", metavar="GEN", help="Generation, e.g. gen12")
+    dl_gen_arg.completer = _gen_completer
+    dl_version_arg = p_dl.add_argument("version", metavar="VERSION", help="SPP version, e.g. 2026.03.00.00")
+    dl_version_arg.completer = _spp_version_completer
+    dl_type_arg = p_dl.add_argument(
         "--type", "-t",
         dest="types",
         metavar="TYPES",
         help=f"Comma-separated types to download: {', '.join(TYPE_FILTERS)}",
     )
-    p_dl.add_argument(
+    dl_type_arg.completer = _spp_type_completer
+    dl_model_arg = p_dl.add_argument(
         "--model", "-m",
         metavar="MODEL",
         help="Filter by server model substring, e.g. DL325, DL380",
     )
+    dl_model_arg.completer = suppress_file_completion()
     p_dl.add_argument(
         "--force",
         action="store_true",
@@ -139,20 +193,25 @@ examples:
 
     # ── diff ─────────────────────────────────────────────────────────────────
     p_diff = sub.add_parser("diff", help="Compare two SPP versions")
-    p_diff.add_argument("gen", metavar="GEN", help="Generation, e.g. gen12")
-    p_diff.add_argument("v1", metavar="FROM", help="Older SPP version")
-    p_diff.add_argument("v2", metavar="TO", help="Newer SPP version")
-    p_diff.add_argument(
+    diff_gen_arg = p_diff.add_argument("gen", metavar="GEN", help="Generation, e.g. gen12")
+    diff_gen_arg.completer = _gen_completer
+    diff_v1_arg = p_diff.add_argument("v1", metavar="FROM", help="Older SPP version")
+    diff_v1_arg.completer = _spp_version_completer
+    diff_v2_arg = p_diff.add_argument("v2", metavar="TO", help="Newer SPP version")
+    diff_v2_arg.completer = _spp_version_completer
+    diff_type_arg = p_diff.add_argument(
         "--type", "-t",
         dest="types",
         metavar="TYPES",
         help="Comma-separated types to compare",
     )
-    p_diff.add_argument(
+    diff_type_arg.completer = _spp_type_completer
+    diff_model_arg = p_diff.add_argument(
         "--model", "-m",
         metavar="MODEL",
         help="Filter by server model substring",
     )
+    diff_model_arg.completer = suppress_file_completion()
     p_diff.add_argument(
         "--all", "-a",
         dest="show_all",
@@ -1016,6 +1075,8 @@ def main(argv: list[str] | None = None) -> None:
 
     # If user passes: proliant spp inspect <file.fwpkg>  — route directly
     if (
+        "_ARGCOMPLETE" not in os.environ
+        and
         len(args_in) >= 2
         and args_in[0] == "inspect"
         and args_in[1].lower().endswith(".fwpkg")
@@ -1024,6 +1085,7 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     parser = _build_parser()
+    argcomplete.autocomplete(parser)
     args = parser.parse_args(args_in)
 
     if not args.cmd:

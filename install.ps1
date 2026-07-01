@@ -89,7 +89,16 @@ Register-ArgumentCompleter -Native -CommandName proliant -ScriptBlock {
     proliant 2>&1 | Out-Null
 
     Get-Content $completion_file | ForEach-Object {
-        [System.Management.Automation.CompletionResult]::new($_, $_, "ParameterValue", $_)
+        $display = $_ -replace '`(.)', '$1'
+        $displayText = $display.TrimEnd()
+        $completion = $_
+        if ($displayText -match '[\s,]') {
+            $completion = "'" + ($displayText -replace "'", "''") + "'"
+            if ($display.EndsWith(' ')) {
+                $completion = $completion + ' '
+            }
+        }
+        [System.Management.Automation.CompletionResult]::new($completion, $displayText, "ParameterValue", $displayText)
     }
     Remove-Item $completion_file, Env:\_ARGCOMPLETE_STDOUT_FILENAME, Env:\ARGCOMPLETE_USE_TEMPFILES, Env:\COMP_LINE, Env:\COMP_POINT, Env:\_ARGCOMPLETE, Env:\_ARGCOMPLETE_SUPPRESS_SPACE, Env:\_ARGCOMPLETE_IFS, Env:\_ARGCOMPLETE_SHELL
 }

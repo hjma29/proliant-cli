@@ -16,12 +16,30 @@ import sys
 
 
 from rich import box
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
 
-from proliant.common.display import get_console, get_output_mode, make_table, OutputMode, print_json, print_memory_report, set_output_mode
+from proliant.common.completers import comma_sep_completer, suppress_file_completion
+from proliant.common.display import get_console, get_output_mode, make_table as _make_table, OutputMode, print_json, print_memory_report, set_output_mode
 from proliant.common.runner import run_sync
+
+_SERVER_FIELDS = ("name", "model", "serial", "ilo", "ilo_ip", "power", "state", "profile")
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
+def make_table(title: str, *columns: tuple[str, dict], box_style=box.SIMPLE_HEAD, **kwargs) -> Table:
+    kwargs.setdefault("header_style", "bold")
+    return _make_table(title, *columns, box_style=box_style, **kwargs)
+
+
+def _short_server_name(name: str) -> str:
+    match = re.match(r"^Enclosure[-_ ]?(\d+),\s*bay\s*(\d+)\s*$", name or "", re.IGNORECASE)
+    if match:
+        return f"Enc-{match.group(1)} bay {match.group(2)}"
+    return (name or "").replace("Enclosure", "Enc")
+
 
 def _load_client():
     """Return a connected OneViewClient context manager."""
@@ -68,6 +86,78 @@ def _oneview_networkset_name_completer(prefix: str, **kwargs) -> list[str]:
         return []
 
 
+def _oneview_server_name_completer(prefix: str, **kwargs) -> list[str]:
+    """Tab-complete server names by querying OneView server hardware."""
+    try:
+        from proliant.oneview.config import load_oneview_config
+        from proliant.oneview.client import OneViewClient
+
+        cfg = load_oneview_config()
+
+        async def _fetch() -> list[str]:
+            async with OneViewClient(cfg["host"], cfg["username"], cfg["password"]) as client:
+                servers = await client.get_all("/rest/server-hardware")
+                return [s["name"] for s in servers if s.get("name", "").lower().startswith(prefix.lower())]
+
+        return asyncio.run(_fetch())
+    except Exception:
+        return []
+
+
+def _oneview_uplinkset_name_completer(prefix: str, **kwargs) -> list[str]:
+    """Tab-complete uplink set names by querying OneView."""
+    try:
+        from proliant.oneview.config import load_oneview_config
+        from proliant.oneview.client import OneViewClient
+
+        cfg = load_oneview_config()
+
+        async def _fetch() -> list[str]:
+            async with OneViewClient(cfg["host"], cfg["username"], cfg["password"]) as client:
+                uplinks = await client.get_all("/rest/uplink-sets")
+                return [u["name"] for u in uplinks if u.get("name", "").lower().startswith(prefix.lower())]
+
+        return asyncio.run(_fetch())
+    except Exception:
+        return []
+
+
+def _oneview_profile_name_completer(prefix: str, **kwargs) -> list[str]:
+    """Tab-complete server profile names by querying OneView."""
+    try:
+        from proliant.oneview.config import load_oneview_config
+        from proliant.oneview.client import OneViewClient
+
+        cfg = load_oneview_config()
+
+        async def _fetch() -> list[str]:
+            async with OneViewClient(cfg["host"], cfg["username"], cfg["password"]) as client:
+                profiles = await client.get_all("/rest/server-profiles")
+                return [p["name"] for p in profiles if p.get("name", "").lower().startswith(prefix.lower())]
+
+        return asyncio.run(_fetch())
+    except Exception:
+        return []
+
+
+def _oneview_enclosure_name_completer(prefix: str, **kwargs) -> list[str]:
+    """Tab-complete enclosure names by querying OneView."""
+    try:
+        from proliant.oneview.config import load_oneview_config
+        from proliant.oneview.client import OneViewClient
+
+        cfg = load_oneview_config()
+
+        async def _fetch() -> list[str]:
+            async with OneViewClient(cfg["host"], cfg["username"], cfg["password"]) as client:
+                enclosures = await client.get_all("/rest/enclosures")
+                return [e["name"] for e in enclosures if e.get("name", "").lower().startswith(prefix.lower())]
+
+        return asyncio.run(_fetch())
+    except Exception:
+        return []
+
+
 def _power_style(state: str) -> str:
     s = state.lower()
     if s == "on":
@@ -78,12 +168,9 @@ def _power_style(state: str) -> str:
 
 
 def _state_style(state: str) -> str:
-    s = state.lower()
-    if s == "managed":
-        return "[green]Managed[/green]"
-    if s == "monitored":
-        return "[cyan]Monitored[/cyan]"
-    return f"[yellow]{state}[/yellow]"
+    if _status_rank(state) >= 2:
+        return _status_style(state)
+    return state or ""
 
 
 def _status_style(status: str | None) -> str:
@@ -91,12 +178,126 @@ def _status_style(status: str | None) -> str:
         return ""
     s = status.lower()
     if s == "ok":
-        return "[green]OK[/green]"
+        return "OK"
     if s in ("warning", "degraded"):
         return f"[yellow]{status}[/yellow]"
     if s == "critical":
         return f"[red]{status}[/red]"
     return status
+
+
+def _status_rank(status: str | None) -> int:
+    s = (status or "").lower()
+    if s == "critical":
+        return 3
+    if s in ("warning", "degraded"):
+        return 2
+    if s == "ok":
+        return 1
+    return 0
+
+
+def _worst_status(*statuses: str | None) -> str:
+    worst = ""
+    for status in statuses:
+        if _status_rank(status) > _status_rank(worst):
+            worst = status or ""
+    return worst
+
+
+def _alert_marker(status: str | None) -> str:
+    s = (status or "").lower()
+    if s == "critical":
+        return "◆"
+    if s in ("warning", "degraded"):
+        return "▲"
+    return ""
+
+
+def _section_banner(title: str, style: str = "bold cyan") -> Text:
+    return Text.assemble("########### ", (title, style), " ###########")
+
+
+def _alert_message_text(status: str | None, message: str) -> Text:
+    marker = _alert_marker(status)
+    rendered = Text()
+    if marker:
+        rendered.append(marker, style="red" if marker == "◆" else "yellow")
+        rendered.append(" ")
+    rendered.append(message)
+    return rendered
+
+
+def _style_alert_markers(text: str) -> Text:
+    rendered = Text(text)
+    for offset, char in enumerate(text):
+        if char == "◆":
+            rendered.stylize("red", offset, offset + 1)
+        elif char == "▲":
+            rendered.stylize("yellow", offset, offset + 1)
+    return rendered
+
+
+def _style_dim_phrases(text: str, phrases: list[str]) -> Text:
+    rendered = _style_alert_markers(text)
+    for phrase in phrases:
+        if not phrase:
+            continue
+        start = 0
+        while True:
+            index = text.find(phrase, start)
+            if index == -1:
+                break
+            rendered.stylize("grey50", index, index + len(phrase))
+            start = index + len(phrase)
+    return rendered
+
+
+def _table_alert_marker(status: str | None) -> str:
+    marker = _alert_marker(status)
+    if marker == "◆":
+        return "[red]◆[/red]"
+    if marker == "▲":
+        return "[yellow]▲[/yellow]"
+    return ""
+
+
+def _profile_alert_messages(profile: dict) -> list[str]:
+    messages = []
+    server_status = profile.get("server_status", "")
+    if _status_rank(server_status) >= 2:
+        state = profile.get("server_state") or "unknown"
+        messages.append(f"Server hardware status is {server_status} (state: {state}).")
+
+    for connection in profile.get("connections") or []:
+        status = str(connection.get("status") or "")
+        if not status or status.lower() in ("ok", "normal"):
+            continue
+        name = connection.get("name") or f"connection {connection.get('id', '')}".strip()
+        details = []
+        state = connection.get("state")
+        if state:
+            details.append(f"state: {state}")
+        port = connection.get("port_id")
+        if port:
+            details.append(f"port: {port}")
+        allocated = connection.get("allocated_mbps")
+        if allocated not in (None, ""):
+            details.append(f"allocated: {allocated} Mbps")
+        suffix = f" ({', '.join(details)})" if details else ""
+        messages.append(f"Connection {name} is {status}{suffix}.")
+
+    for label, value in (
+        ("Firmware", profile.get("fw_consistency")),
+        ("BIOS", profile.get("bios_consistency")),
+    ):
+        value_text = str(value or "")
+        if value_text and value_text.lower() not in ("consistent", "unknown"):
+            messages.append(f"{label} consistency is {value_text}.")
+
+    if not messages and _status_rank(profile.get("status")) >= 2:
+        messages.append("No detailed alert message was returned by OneView.")
+    return messages
 
 
 # ── proliant oneview servers list ─────────────────────────────────────────────────
@@ -117,12 +318,12 @@ async def _async_servers_list(fields: list[str] | None) -> None:
         print_json(servers)
         return
 
-    all_fields = ["name", "model", "serial", "ilo", "power", "state", "profile"]
+    all_fields = list(_SERVER_FIELDS)
     show = fields if fields else all_fields
 
     col_map = {
-        "name":    ("Name",        dict(min_width=20, no_wrap=True)),
-        "model":   ("Model",       dict(min_width=22)),
+        "name":    ("Name",        dict(min_width=12, no_wrap=True)),
+        "model":   ("Model",       dict(min_width=10, no_wrap=True)),
         "serial":  ("Serial",      dict(no_wrap=True)),
         "ilo":     ("iLO",         dict(no_wrap=True)),
         "ilo_ip":  ("iLO IP",      dict(no_wrap=True)),
@@ -140,7 +341,7 @@ async def _async_servers_list(fields: list[str] | None) -> None:
         row = []
         for f in show:
             if f == "name":
-                row.append(s["name"])
+                row.append(_short_server_name(s["name"]))
             elif f == "model":
                 row.append(s["model"])
             elif f == "serial":
@@ -279,7 +480,7 @@ async def _async_networks_list() -> None:
         table.add_row(
             n["name"], vlan, n["type"], n["purpose"],
             _status_style(n["status"]),
-            n["state"],
+            _state_style(n["state"]),
             "[green]✓[/green]" if n["smart_link"] else "[dim]—[/dim]",
         )
     get_console().print(table)
@@ -321,7 +522,7 @@ async def _async_networksets_list() -> None:
         table.add_row(
             s["name"], s["type"], str(s["num_networks"]),
             s["native_network"] or "—",
-            _status_style(s["status"]), s["state"],
+            _status_style(s["status"]), _state_style(s["state"]),
         )
     get_console().print(table)
 
@@ -406,7 +607,7 @@ async def _async_profiles_list() -> None:
     for p in profiles:
         table.add_row(
             p["name"], p["server_name"],
-            _status_style(p["status"]), p["state"],
+            _status_style(p["status"]), _state_style(p["state"]),
             p["description"] or "—",
         )
     get_console().print(table)
@@ -534,56 +735,120 @@ async def _async_describe_networkset(name: str) -> None:
 
 async def _async_describe_profile(name: str) -> None:
     from proliant.oneview.profiles import describe_profile
-    from rich.panel import Panel
 
     async with _load_client() as client:
         with get_console().status(f"[dim]Fetching profile '{name}'…[/dim]"):
             p = await describe_profile(client, name)
 
-    fw_line = ""
-    if p["fw_baseline"]:
-        managed = "  [dim](managed)[/dim]" if p["manage_fw"] else "  [dim](unmanaged)[/dim]"
-        fw_line = f"\nFW Baseline:    {p['fw_baseline']} {p['fw_version']}{managed}"
-        if p["fw_install_type"]:
-            fw_line += f"\nFW Install:     {p['fw_install_type']}"
+    if get_output_mode() == OutputMode.JSON:
+        print_json(p)
+        return
 
-    boot = ", ".join(p["boot_order"]) if p["boot_order"] else "—"
+    console = get_console()
+    console.print(f"[bold]{p['name']}[/bold]")
+    console.print(f"Status: {_status_style(p['status']) or '—'}  |  State: {p['state'] or '—'}")
 
-    server_line = p["server_name"]
-    if p.get("server_model"):
-        server_line += f"  [dim]({p['server_model']} | SN: {p['server_serial']} | Power: {p['server_power']})[/dim]"
+    alert_messages = _profile_alert_messages(p)
+    if alert_messages:
+        alert_style = "red" if _status_rank(p["status"]) >= 3 else "yellow"
+        console.print(_section_banner("Alert", f"bold {alert_style}"), highlight=False)
+        for message in alert_messages:
+            console.print(_alert_message_text(p.get("status"), message), highlight=False)
 
-    desc_line = f"\nDescription:    {p['description']}" if p["description"] else ""
+    console.print(_section_banner("General"), highlight=False)
+    general = make_table(
+        "",
+        ("Field", {"no_wrap": True, "style": "bold"}),
+        ("Value", {"min_width": 36}),
+        box_style=box.SIMPLE_HEAD,
+        show_header=False,
+    )
+    general_rows = [
+        ("Description", p["description"] or "—"),
+        ("Server profile template", p.get("template_name") or "—"),
+        ("Server hardware", p.get("server_name") or "—"),
+        ("Server hardware type", p.get("server_hardware_type") or "—"),
+        ("Server hardware status", f"{_status_style(p.get('server_status'))}  |  State: {p.get('server_state') or '—'}"),
+        ("Enclosure group", p.get("eg_name") or "—"),
+        ("Affinity", p.get("affinity") or "—"),
+        ("Server power", p.get("server_power") or "—"),
+        ("Server serial", p.get("server_serial") or "—"),
+        ("Profile serial", f"{p.get('serial_number') or '—'}  ({p.get('serial_number_type') or '—'})"),
+    ]
+    for field, value in general_rows:
+        general.add_row(field, str(value))
+    console.print(general)
 
-    get_console().print(Panel(
-        f"[bold]{p['name']}[/bold]\n"
-        f"Server:         {server_line}\n"
-        f"Enclosure Group: [cyan]{p['eg_name']}[/cyan]\n"
-        f"Status: {_status_style(p['status'])}  |  State: {p['state']}"
-        f"{fw_line}\n"
-        f"Boot Order:     {boot}"
-        f"{desc_line}",
-        title="Server Profile", border_style="cyan",
-    ))
+    console.print(_section_banner("Firmware"), highlight=False)
+    firmware = make_table(
+        "",
+        ("Field", {"no_wrap": True, "style": "bold"}),
+        ("Value", {"min_width": 36}),
+        box_style=box.SIMPLE_HEAD,
+        show_header=False,
+    )
+    firmware_rows = [
+        ("Firmware baseline", " ".join(part for part in [p.get("fw_baseline", ""), p.get("fw_version", "")] if part) or "—"),
+        ("Manage firmware", "Yes" if p.get("manage_fw") else "No"),
+        ("Install type", p.get("fw_install_type") or "—"),
+        ("Activation", p.get("fw_activation_type") or "—"),
+        ("Install action", p.get("fw_install_action") or "—"),
+        ("Consistency", p.get("fw_consistency") or "—"),
+    ]
+    for field, value in firmware_rows:
+        firmware.add_row(field, str(value))
+    console.print(firmware)
 
     if p["connections"]:
+        console.print(_section_banner("Connections"), highlight=False)
         conn_table = make_table(
-            "Connections",
-            ("ID",       {"justify": "center"}),
-            ("Name",     {"min_width": 16, "no_wrap": True}),
-            ("Network",  {"no_wrap": True}),
-            ("Function", {"no_wrap": True}),
-            ("Speed",    {"no_wrap": True}),
+            "",
+            ("ID",       {"justify": "center", "no_wrap": True}),
+            ("Name",     {"min_width": 12, "no_wrap": True}),
+            ("Network",  {"min_width": 18, "no_wrap": True}),
+            ("Port",     {"no_wrap": True}),
+            ("MAC",      {"no_wrap": True}),
+            ("Speed",    {"justify": "right", "no_wrap": True}),
+            ("State",    {"no_wrap": True}),
+            ("Status",   {"justify": "center", "no_wrap": True}),
             box_style=box.SIMPLE_HEAD,
             header_style="bold",
         )
         for c in p["connections"]:
+            speed = str(c.get("allocated_mbps") or c.get("requested_mbps") or "")
+            if speed:
+                speed = f"{speed} Mbps"
             conn_table.add_row(
-                str(c.get("id", "")), c.get("name", ""),
-                c.get("networkUri", "").rsplit("/", 1)[-1],
-                c.get("functionType", ""), c.get("requestedMbps", ""),
+                str(c.get("id", "")),
+                c.get("name", ""),
+                c.get("network", ""),
+                c.get("port_id", ""),
+                c.get("mac", ""),
+                speed,
+                c.get("state", ""),
+                _status_style(c.get("status")),
             )
-        get_console().print(conn_table)
+        console.print(conn_table)
+
+    console.print(_section_banner("Boot Settings"), highlight=False)
+    boot = make_table("", ("Field", {"style": "bold"}), ("Value", {}), box_style=box.SIMPLE_HEAD, show_header=False)
+    boot.add_row("Manage boot", "Yes" if p.get("manage_boot") else "No")
+    boot.add_row("Boot order", ", ".join(p["boot_order"]) if p["boot_order"] else "—")
+    console.print(boot)
+
+    console.print(_section_banner("BIOS Settings"), highlight=False)
+    bios = make_table("", ("Field", {"style": "bold"}), ("Value", {}), box_style=box.SIMPLE_HEAD, show_header=False)
+    bios.add_row("Manage BIOS", "Yes" if p.get("manage_bios") else "No")
+    bios.add_row("Consistency", p.get("bios_consistency") or "—")
+    bios.add_row("Overrides", str(len(p.get("bios_overrides") or [])))
+    console.print(bios)
+
+    console.print(_section_banner("Advanced"), highlight=False)
+    advanced = make_table("", ("Field", {"style": "bold"}), ("Value", {}), box_style=box.SIMPLE_HEAD, show_header=False)
+    advanced.add_row("MAC addresses", p.get("mac_type") or "—")
+    advanced.add_row("WWN addresses", p.get("wwn_type") or "—")
+    advanced.add_row("iSCSI initiator", f"{p.get('iscsi_initiator_name_type') or '—'}  {p.get('iscsi_initiator_name') or ''}".rstrip())
+    console.print(advanced)
 
 
 async def _cmd_describe(args: argparse.Namespace) -> None:
@@ -642,7 +907,7 @@ async def _async_li_list() -> None:
         cons_s = f"[green]{cons}[/green]" if cons == "Consistent" else f"[yellow]{cons}[/yellow]"
         table.add_row(
             li["name"], li["lig_name"], cons_s, li["stacking"],
-            _status_style(li["status"]), li["state"],
+            _status_style(li["status"]), _state_style(li["state"]),
         )
     get_console().print(table)
 
@@ -674,7 +939,7 @@ async def _async_lig_list() -> None:
         ("State", {"justify": "center", "no_wrap": True}),
     )
     for lg in ligs:
-        table.add_row(lg["name"], lg["state"])
+        table.add_row(lg["name"], _state_style(lg["state"]))
     get_console().print(table)
 
 
@@ -711,7 +976,7 @@ async def _async_interconnects_list() -> None:
     for ic in ics:
         table.add_row(
             ic["name"], ic["model"], ic["li_name"],
-            _status_style(ic["status"]), ic["state"], ic["serial"],
+            _status_style(ic["status"]), _state_style(ic["state"]), ic["serial"],
         )
     get_console().print(table)
 
@@ -761,20 +1026,33 @@ async def _async_mac_list(address: str, vlan: int, network_name: str = "") -> No
         print_json(entries)
         return
 
-    table = make_table(
-        f"MAC Address Table  ({len(entries)} entries)",
+    columns = [
         ("MAC Address",    {"no_wrap": True, "min_width": 18}),
         ("Interconnect",   {"no_wrap": True}),
         ("Port",           {"no_wrap": True}),
-        ("Server Profile", {"no_wrap": True}),
-        ("Connection",     {"no_wrap": True}),
-    )
+    ]
+    show_profile_columns = any(e.get("profile") or e.get("connection") for e in entries)
+    if show_profile_columns:
+        columns.extend([
+            ("Server Profile", {"no_wrap": True}),
+            ("Connection",     {"no_wrap": True}),
+        ])
+    show_last_updated = any(e.get("last_updated") for e in entries)
+    if show_last_updated:
+        columns.append(("Last Updated", {"no_wrap": True}))
+    table = make_table(f"MAC Address Table  ({len(entries)} entries)", *columns)
     for e in entries:
-        table.add_row(
+        row = [
             e["mac"], _short_ic_name(e["ic_name"]), e["port"],
-            e.get("profile") or "[dim]—[/dim]",
-            e.get("connection") or "[dim]—[/dim]",
-        )
+        ]
+        if show_profile_columns:
+            row.extend([
+                e.get("profile") or "[dim]—[/dim]",
+                e.get("connection") or "[dim]—[/dim]",
+            ])
+        if show_last_updated:
+            row.append(e.get("last_updated") or "")
+        table.add_row(*row)
     get_console().print(table)
 
 
@@ -855,7 +1133,7 @@ async def _async_describe_network(network_name: str) -> None:
 
 
 async def _async_describe_mac(mac: str) -> None:
-    from proliant.oneview.topology import trace_mac, render_network_map
+    from proliant.oneview.topology import trace_mac, render_network_map_ascii
 
     async with _load_client() as client:
         with get_console().status(f"[dim]Tracing MAC {mac} across the fabric…[/dim]"):
@@ -870,7 +1148,7 @@ async def _async_describe_mac(mac: str) -> None:
     for i, nm in enumerate(maps):
         if i:
             get_console().rule(style="dim")
-        get_console().print(render_network_map(nm, mac=mac))
+        get_console().print(render_network_map_ascii(nm, mac=mac, color=True), markup=True, highlight=False)
 
 
 async def _cmd_network_describe(args: argparse.Namespace) -> None:
@@ -907,12 +1185,467 @@ async def _async_enclosures_list() -> None:
         ("State",  {"justify": "center", "no_wrap": True}),
     )
     for e in encs:
-        table.add_row(e["name"], e["model"], e["serial"], _status_style(e["status"]), e["state"])
+        table.add_row(e["name"], e["model"], e["serial"], _status_style(e["status"]), _state_style(e["state"]))
     get_console().print(table)
 
 
 async def _cmd_enclosures_list(args: argparse.Namespace) -> None:
     await _async_enclosures_list()
+
+
+def _short_model(model: str, limit: int = 30) -> str:
+    if len(model) <= limit:
+        return model
+    return model[:limit - 1].rstrip() + "…"
+
+
+def _short_bay_label(name: str, fallback: str) -> str:
+    if not name:
+        return fallback
+    if ", " in name:
+        return name.split(", ", 1)[1]
+    return name
+
+
+def _fit(value: object, width: int) -> str:
+    text = str(value or "")
+    if len(text) > width:
+        text = text[:max(0, width - 1)].rstrip() + "…"
+    return text.ljust(width)
+
+
+def _equal_widths(columns: int, total_width: int) -> list[int]:
+    available = total_width - 2 - (columns - 1)
+    base = max(1, available // columns)
+    remainder = max(0, available - (base * columns))
+    return [base + (1 if index < remainder else 0) for index in range(columns)]
+
+
+def _front_bay_height(cell_width: int) -> int:
+    height = max(10, min(14, round(cell_width * 0.66)))
+    return height if height % 2 == 0 else min(14, height + 1)
+
+
+def _line(left: str, separator: str, right: str, widths: list[int]) -> str:
+    return left + separator.join("─" * width for width in widths) + right
+
+
+def _frame_title(title: str, total_width: int) -> str:
+    return title.center(total_width)
+
+
+def _cell(lines: list[str], width: int, height: int) -> list[str]:
+    content = lines[:height]
+    content.extend([""] * (height - len(content)))
+    return [_fit(line, width) for line in content]
+
+
+def _grid_row(cells: list[list[str]], widths: list[int], height: int) -> list[str]:
+    prepared = [_cell(lines, width, height) for lines, width in zip(cells, widths)]
+    rows = []
+    for line_index in range(height):
+        rows.append("│" + "│".join(cell[line_index] for cell in prepared) + "│")
+    return rows
+
+
+def _full_width_row(lines: list[str], total_width: int, height: int = 1) -> list[str]:
+    width = total_width - 2
+    return ["│" + line + "│" for line in _cell(lines, width, height)]
+
+
+def _full_width_label_row(left: str, right: str, total_width: int) -> str:
+    width = total_width - 2
+    left_text = str(left or "")
+    right_text = str(right or "")
+    gap = max(1, width - len(left_text) - len(right_text))
+    return "│" + (left_text + (" " * gap) + right_text)[:width].ljust(width) + "│"
+
+
+def _bay_rows(count: int, columns: int) -> list[list[int]]:
+    return [list(range(start, min(start + columns, count + 1))) for start in range(1, count + 1, columns)]
+
+
+def _front_bay_columns(count: int) -> int:
+    if count >= 12:
+        return 6
+    if count >= 8:
+        return 4
+    return max(1, min(count, 4))
+
+
+def _rear_bay_columns(count: int) -> int:
+    return max(1, min(count, 3))
+
+
+def _bay_tile(title: str, body: str, border_style: str) -> Panel:
+    return Panel(
+        body,
+        title=title,
+        title_align="left",
+        border_style=border_style,
+        box=box.SQUARE,
+        padding=(0, 1),
+        expand=True,
+    )
+
+
+def _empty_bay_tile(bay: int) -> Panel:
+    return _bay_tile(f"[bold]{bay}[/bold]", "[dim italic]Empty[/dim italic]\n[dim]No device[/dim]\n", "grey35")
+
+
+def _empty_bay_text(bay: int) -> str:
+    return f"[bold]{bay}[/bold]\n\n[dim italic]empty[/dim italic]\n\n"
+
+
+def _bay_grid(title: str, count: int, items: list[dict], cell_fn, columns: int) -> object:
+    if count <= 0:
+        return Panel("[dim]No bays reported.[/dim]", title=title, border_style="cyan")
+
+    if columns == 6 and get_console().width < 112:
+        columns = 3
+
+    table = Table.grid(expand=True, padding=(0, 1))
+    for _ in range(columns):
+        table.add_column(ratio=1, min_width=14)
+
+    by_bay = {item["bay"]: item for item in items}
+    for bay_row in _bay_rows(count, columns):
+        row = []
+        for bay in bay_row:
+            item = by_bay.get(bay)
+            row.append(cell_fn(bay, item) if item else _empty_bay_tile(bay))
+        while len(row) < columns:
+            row.append("")
+        table.add_row(*row)
+    return Panel(table, title=title, border_style="cyan", box=box.ROUNDED, padding=(1, 1))
+
+
+def _server_bay_lines(bay: int, server: dict) -> list[str]:
+    serial = server.get("serial", "")
+    label = server.get("profile") or serial
+    status = _worst_status(server.get("status"), server.get("profile_status"))
+    marker = _alert_marker(status)
+    state = server.get("state") or server.get("profile_state") or ""
+    state_line = state if state and state.lower() not in ("profileapplied", "normal") else ""
+    return [
+        f"{bay}  {marker}".rstrip(),
+        label,
+        server.get("model", ""),
+        state_line,
+        "",
+    ]
+
+
+def _server_bay_text(bay: int, server: dict) -> str:
+    return "\n".join(_server_bay_lines(bay, server))
+
+
+def _appliance_bay_text(index: int, appliance: dict | None = None) -> str:
+    return "\n".join(_appliance_bay_lines(index, appliance))
+
+
+def _appliance_bay_lines(index: int, appliance: dict | None = None) -> list[str]:
+    if not appliance:
+        return [f"C{index}", "", "", "Appliance", "bay"]
+    model = appliance.get("model") or "Appliance"
+    serial = appliance.get("serial") or ""
+    status = appliance.get("status") or ""
+    status_line = status if status and status.lower() != "ok" else ""
+    return [f"C{index}", model, serial, status_line, ""]
+
+
+def _empty_bay_lines(bay: int) -> list[str]:
+    return [str(bay), "", "empty", "", ""]
+
+
+def _front_chassis_frame(title: str, count: int, servers: list[dict], appliances: list[dict] | None = None) -> object:
+    if count < 12 or get_console().width < 118:
+        return _bay_grid(title, count, servers, _server_bay_cell, _front_bay_columns(count))
+
+    total_width = min(get_console().width, 150)
+    widths = _equal_widths(7, total_width)
+    bay_height = _front_bay_height(widths[1])
+    by_bay = {server["bay"]: server for server in servers}
+    by_appliance_bay = {appliance["bay"]: appliance for appliance in appliances or []}
+    top = [_appliance_bay_lines(1, by_appliance_bay.get(1))]
+    bottom = [_appliance_bay_lines(2, by_appliance_bay.get(2))]
+    for bay in range(1, 7):
+        server = by_bay.get(bay)
+        top.append(_server_bay_lines(bay, server) if server else _empty_bay_lines(bay))
+    for bay in range(7, 13):
+        server = by_bay.get(bay)
+        bottom.append(_server_bay_lines(bay, server) if server else _empty_bay_lines(bay))
+
+    lines = [
+        _frame_title(title, total_width),
+        _line("┌", "┬", "┐", widths),
+        *_grid_row(top, widths, bay_height),
+        _line("├", "┼", "┤", widths),
+        *_grid_row(bottom, widths, bay_height),
+        _line("└", "┴", "┘", widths),
+    ]
+    return _style_alert_markers("\n".join(lines))
+
+
+def _interconnect_bay_lines(bay: int, interconnect: dict) -> list[str]:
+    label = _short_bay_label(interconnect.get("name", ""), "interconnect")
+    power = _watts(interconnect.get("power_allocation_watts"))
+    power_line = f"   {power} allocated" if power else ""
+    return [f"{bay}  {label}", f"   {interconnect.get('model', '')}", power_line]
+
+
+def _interconnect_bay_text(bay: int, interconnect: dict) -> str:
+    return "\n".join(_interconnect_bay_lines(bay, interconnect))
+
+
+def _power_supply_lines(bay: int, power_supply: dict | None = None) -> list[str]:
+    if not power_supply:
+        return [f"Power Supply {bay}", "empty", ""]
+    status = power_supply.get("status") or ""
+    status_line = status if status and status.lower() != "ok" else ""
+    return [
+        f"Power Supply {bay}",
+        _short_power_supply_model(power_supply.get("model", "")),
+        status_line,
+    ]
+
+
+def _short_power_supply_model(model: str) -> str:
+    return model.replace(" Hot Plug Power Supply", "").replace(" Power Supply", "")
+
+
+def _rear_chassis_frame(title: str, count: int, interconnects: list[dict], power_supplies: list[dict] | None = None) -> object:
+    if count < 6 or get_console().width < 118:
+        return _bay_grid(title, count, interconnects, _interconnect_bay_cell, _rear_bay_columns(count))
+
+    total_width = min(get_console().width, 150)
+    fan_widths = _equal_widths(6, total_width)
+    power_widths = _equal_widths(3, total_width)
+    by_bay = {interconnect["bay"]: interconnect for interconnect in interconnects}
+    power_by_bay = {power_supply["bay"]: power_supply for power_supply in power_supplies or []}
+    bay3 = by_bay.get(3)
+    bay6 = by_bay.get(6)
+    top_power_rows = [_power_supply_lines(bay, power_by_bay.get(bay)) for bay in range(1, 4)]
+    bottom_power_rows = [_power_supply_lines(bay, power_by_bay.get(bay)) for bay in range(4, 7)]
+    dim_phrases = [line for row in top_power_rows + bottom_power_rows for line in row if line]
+
+    lines = [
+        _frame_title(title, total_width),
+        _line("┌", "─", "┐", [total_width - 2]),
+        _full_width_label_row("1", "empty", total_width),
+        _line("├", "─", "┤", [total_width - 2]),
+        _full_width_label_row("2", "empty", total_width),
+        _line("├", "┬", "┤", fan_widths),
+        *_grid_row([["FLM1"], ["Fan 1"], ["Fan 2"], ["Fan 3"], ["Fan 4"], ["Fan 5"]], fan_widths, 3),
+        _line("├", "─", "┤", [total_width - 2]),
+        *_full_width_row(_interconnect_bay_lines(3, bay3) if bay3 else _empty_bay_lines(3)[:2], total_width, 3),
+        _line("├", "┬", "┤", power_widths),
+        *_grid_row(top_power_rows, power_widths, 3),
+        _line("├", "─", "┤", [total_width - 2]),
+        _full_width_label_row("4", "empty", total_width),
+        _line("├", "─", "┤", [total_width - 2]),
+        _full_width_label_row("5", "empty", total_width),
+        _line("├", "┬", "┤", fan_widths),
+        *_grid_row([["FLM2"], ["Fan 6"], ["Fan 7"], ["Fan 8"], ["Fan 9"], ["Fan 10"]], fan_widths, 3),
+        _line("├", "─", "┤", [total_width - 2]),
+        *_full_width_row(_interconnect_bay_lines(6, bay6) if bay6 else _empty_bay_lines(6)[:2], total_width, 3),
+        _line("├", "┬", "┤", power_widths),
+        *_grid_row(bottom_power_rows, power_widths, 3),
+        _line("└", "┴", "┘", power_widths),
+    ]
+    return _style_dim_phrases("\n".join(lines), dim_phrases)
+
+
+def _front_frame_ratios(count: int) -> list[int]:
+    return [1, 1, 1, 1, 1, 1, 1] if count >= 12 else [1] * max(1, count)
+
+
+def _rear_frame_ratios(count: int) -> list[int]:
+    return [1, 1, 1, 1, 1, 1, 1] if count >= 6 else [1] * max(1, count)
+
+
+def _watts(value: object) -> str:
+    return f"{value}W" if value else ""
+
+
+def _print_enclosure_detail_tables(enclosure: dict) -> None:
+    console = get_console()
+
+    firmware = enclosure.get("firmware") or []
+    if firmware:
+        table = make_table(
+            f"Firmware ({len(firmware)})",
+            ("Name", {"min_width": 22, "no_wrap": True}),
+            ("Component", {"min_width": 28}),
+            ("Installed", {"no_wrap": True}),
+            box_style=box.SIMPLE_HEAD,
+        )
+        for item in firmware:
+            table.add_row(item["name"], item["component"], item["installed"])
+        console.print(table)
+
+    devices = enclosure.get("devices") or []
+    if devices:
+        table = make_table(
+            f"Devices ({len(devices)})",
+            ("Bay", {"justify": "right", "no_wrap": True}),
+            ("", {"justify": "center", "no_wrap": True}),
+            ("Hardware", {"min_width": 18, "no_wrap": True}),
+            ("Server Name", {"min_width": 20, "no_wrap": True}),
+            ("Model", {"min_width": 18, "no_wrap": True}),
+            ("Server Profile", {"min_width": 18, "no_wrap": True}),
+            ("Watts", {"justify": "right", "no_wrap": True}),
+            box_style=box.SIMPLE_HEAD,
+        )
+        for item in devices:
+            status = _worst_status(item.get("status"), item.get("profile_status"))
+            table.add_row(
+                str(item["bay"]),
+                _table_alert_marker(status),
+                item["hardware"],
+                item["server_name"],
+                item["model"],
+                item["profile"] or "[dim italic]none[/dim italic]",
+                str(item["power_allocation_watts"]) if item["power_allocation_watts"] else "",
+            )
+        console.print(table)
+
+    interconnects = enclosure.get("interconnects") or []
+    if interconnects:
+        table = make_table(
+            f"Interconnects ({len(interconnects)})",
+            ("Bay", {"justify": "right", "no_wrap": True}),
+            ("Name", {"min_width": 20, "no_wrap": True}),
+            ("Model", {"min_width": 28}),
+            ("Serial", {"no_wrap": True}),
+            ("Part", {"no_wrap": True}),
+            ("Watts", {"justify": "right", "no_wrap": True}),
+            ("Status", {"justify": "center", "no_wrap": True}),
+            box_style=box.SIMPLE_HEAD,
+        )
+        for item in interconnects:
+            table.add_row(
+                str(item["bay"]),
+                item["name"],
+                item["model"],
+                item["serial"],
+                item.get("part_number", ""),
+                str(item.get("power_allocation_watts") or ""),
+                _status_style(item["status"]),
+            )
+        console.print(table)
+
+    fans = enclosure.get("fans") or []
+    if fans:
+        table = make_table(
+            f"Fans ({len(fans)})",
+            ("Bay", {"justify": "right", "no_wrap": True}),
+            ("Model", {"min_width": 22}),
+            ("Serial", {"no_wrap": True}),
+            ("Part", {"no_wrap": True}),
+            ("Spare", {"no_wrap": True}),
+            ("Status", {"justify": "center", "no_wrap": True}),
+            box_style=box.SIMPLE_HEAD,
+        )
+        for item in fans:
+            table.add_row(str(item["bay"]), item["model"], item["serial"], item["part_number"], item["spare_part_number"], _status_style(item["status"]))
+        console.print(table)
+
+    frame_link_modules = enclosure.get("frame_link_modules") or []
+    if frame_link_modules:
+        table = make_table(
+            f"Frame Link Modules ({len(frame_link_modules)})",
+            ("Bay", {"justify": "right", "no_wrap": True}),
+            ("Role", {"no_wrap": True}),
+            ("Model", {"min_width": 24}),
+            ("FW", {"no_wrap": True}),
+            ("Serial", {"no_wrap": True}),
+            ("IP", {"no_wrap": True}),
+            ("Status", {"justify": "center", "no_wrap": True}),
+            box_style=box.SIMPLE_HEAD,
+        )
+        for item in frame_link_modules:
+            table.add_row(str(item["bay"]), item["role"], item["model"], item["fw_version"], item["serial"], item["ip_address"], _status_style(item["status"]))
+        console.print(table)
+
+    power_supplies = enclosure.get("power_supplies") or []
+    if power_supplies:
+        table = make_table(
+            f"Power Supplies ({len(power_supplies)})",
+            ("Bay", {"justify": "right", "no_wrap": True}),
+            ("Model", {"min_width": 30}),
+            ("Serial", {"no_wrap": True}),
+            ("Capacity", {"justify": "right", "no_wrap": True}),
+            ("Part", {"no_wrap": True}),
+            ("Spare", {"no_wrap": True}),
+            ("Status", {"justify": "center", "no_wrap": True}),
+            box_style=box.SIMPLE_HEAD,
+        )
+        for item in power_supplies:
+            table.add_row(str(item["bay"]), item["model"], item["serial"], _watts(item["capacity_watts"]), item["part_number"], item["spare_part_number"], _status_style(item["status"]))
+        console.print(table)
+
+
+
+def _server_bay_cell(bay: int, server: dict) -> Panel:
+    profile = server.get("profile") or "no profile"
+    power = server.get("power") or "—"
+    state = server.get("state") or server.get("status") or "—"
+    label = profile if server.get("profile") else _short_bay_label(server.get("name", ""), "server")
+    border_style = "green" if power.lower() == "on" else "yellow" if power.lower() == "off" else "cyan"
+    return _bay_tile(
+        f"[bold]{bay}[/bold]  {_power_style(power)}",
+        f"[cyan]{_short_model(label, 18)}[/cyan]\n"
+        f"[dim]{_short_model(server.get('model', ''), 18)}[/dim]\n"
+        f"[dim]{_short_model(state, 18)}[/dim]",
+        border_style,
+    )
+
+
+def _interconnect_bay_cell(bay: int, interconnect: dict) -> Panel:
+    status = interconnect.get("status") or "—"
+    state = interconnect.get("state") or "—"
+    li_name = interconnect.get("logical_interconnect") or "no logical IC"
+    label = _short_bay_label(interconnect.get("name", ""), "interconnect")
+    border_style = "green" if status.lower() == "ok" else "yellow" if status else "cyan"
+    return _bay_tile(
+        f"[bold]{bay}[/bold]  {_status_style(status)}",
+        f"[cyan]{_short_model(label, 26)}[/cyan]\n"
+        f"[dim]{_short_model(interconnect.get('model', ''), 26)}[/dim]\n"
+        f"[dim]{_short_model(f'{li_name} / {state}', 26)}[/dim]",
+        border_style,
+    )
+
+
+async def _async_enclosure_describe(name: str) -> None:
+    from proliant.oneview.enclosures import describe_enclosure
+
+    async with _load_client() as client:
+        with get_console().status(f"[dim]Fetching enclosure '{name}'…[/dim]"):
+            enclosure = await describe_enclosure(client, name)
+
+    if get_output_mode() == OutputMode.JSON:
+        print_json(enclosure)
+        return
+
+    details = [
+        f"[bold]{enclosure['name']}[/bold]",
+        f"Model:              {enclosure['model'] or '—'}",
+        f"Serial:             {enclosure['serial'] or '—'}",
+        f"Logical enclosure:  {enclosure['logical_enclosure'] or '—'}",
+        f"Enclosure group:    {enclosure['enclosure_group'] or '—'}",
+        f"Status: {_status_style(enclosure['status'])}  |  State: {enclosure['state'] or '—'}",
+    ]
+    get_console().print(Panel("\n".join(details), title="Enclosure", border_style="cyan"))
+    front_frame = _front_chassis_frame("Front View — Server Bays", enclosure["front_bay_count"], enclosure["servers"], enclosure.get("appliances", []))
+    rear_frame = _rear_chassis_frame("Rear View — Interconnect Bays", enclosure["rear_bay_count"], enclosure["interconnects"], enclosure.get("power_supplies", []))
+    get_console().print(front_frame, highlight=False)
+    get_console().print(rear_frame, highlight=False)
+    _print_enclosure_detail_tables(enclosure)
+
+
+async def _cmd_enclosures_describe(args: argparse.Namespace) -> None:
+    await _async_enclosure_describe(args.name)
 
 
 # ── proliant oneview enclosure-groups list ────────────────────────────────────
@@ -979,7 +1712,7 @@ async def _async_logical_enclosures_list() -> None:
         lis  = ", ".join(le["lis"]) if le["lis"] else "—"
         table.add_row(
             le["name"], le["eg_name"], encs, lis,
-            _status_style(le["status"]), le["state"],
+            _status_style(le["status"]), _state_style(le["state"]),
         )
     get_console().print(table)
 
@@ -1012,6 +1745,7 @@ examples:
   proliant oneview mac list --vlan 100                   MAC forwarding table by VLAN
   proliant oneview mac describe 00:11:22:33:44:55        Trace a MAC end-to-end through the fabric
   proliant oneview enclosures list                       Physical enclosures
+    proliant oneview enclosures describe Enclosure-01       Enclosure bay layout
   proliant oneview enclosure-groups list                 Enclosure groups
   proliant oneview logical-enclosures list               Logical enclosures
   proliant oneview uplinksets describe "pvlan-uplinkset" Full uplink set detail
@@ -1031,16 +1765,18 @@ examples:
     s_servers = p_servers.add_subparsers(dest="what", metavar="ACTION")
     s_servers.required = True
     p_srv = s_servers.add_parser("list", help="List all managed servers")
-    p_srv.add_argument("--fields", metavar="FIELDS",
+    server_fields_arg = p_srv.add_argument("--fields", metavar="FIELDS",
         help="Comma-separated columns: name,model,serial,ilo,ilo_ip,power,state,profile")
+    server_fields_arg.completer = comma_sep_completer(_SERVER_FIELDS)
     p_srv.set_defaults(func=_cmd_servers_list)
 
     p_firmware = sub.add_parser("firmware", help="Show firmware inventory")
     s_firmware = p_firmware.add_subparsers(dest="what", metavar="ACTION")
     s_firmware.required = True
     p_fw = s_firmware.add_parser("list", help="Show firmware inventory")
-    p_fw.add_argument("--server", metavar="NAME",
+    server_arg = p_fw.add_argument("--server", metavar="NAME",
         help='Server name (e.g. "Enc1, bay 1"). Omit for all servers.')
+    server_arg.completer = _oneview_server_name_completer
     p_fw.set_defaults(func=_cmd_firmware_list)
 
     p_networks = sub.add_parser("networks", aliases=["network"], help="List or describe ethernet networks")
@@ -1071,7 +1807,8 @@ examples:
     p_ul_list = s_uplinksets.add_parser("list", help="List all uplink sets")
     p_ul_list.set_defaults(func=_cmd_uplinksets_list)
     p_ul_desc = s_uplinksets.add_parser("describe", help="Describe an uplink set")
-    p_ul_desc.add_argument("name", metavar="NAME", help="Name of the uplink set")
+    p_ul_desc_name = p_ul_desc.add_argument("name", metavar="NAME", help="Name of the uplink set")
+    p_ul_desc_name.completer = _oneview_uplinkset_name_completer
     p_ul_desc.set_defaults(func=_cmd_describe, resource="uplinkset")
 
     p_profiles = sub.add_parser("server-profiles", aliases=["server-profile"], help="List or describe server profiles")
@@ -1080,7 +1817,8 @@ examples:
     p_sp_list = s_profiles.add_parser("list", help="List all server profiles")
     p_sp_list.set_defaults(func=_cmd_profiles_list)
     p_sp_desc = s_profiles.add_parser("describe", help="Describe a server profile")
-    p_sp_desc.add_argument("name", metavar="NAME", help="Name of the server profile")
+    p_sp_desc_name = p_sp_desc.add_argument("name", metavar="NAME", help="Name of the server profile")
+    p_sp_desc_name.completer = _oneview_profile_name_completer
     p_sp_desc.set_defaults(func=_cmd_describe, resource="server-profile")
 
     # ── logical interconnects ─────────────────────────────────────────────
@@ -1104,10 +1842,12 @@ examples:
     s_mac = p_mac.add_subparsers(dest="what", metavar="ACTION")
     s_mac.required = True
     p_mac_list = s_mac.add_parser("list", help="Show MAC address table entries")
-    p_mac_list.add_argument("--address", "-a", metavar="MAC",
+    mac_address_arg = p_mac_list.add_argument("--address", "-a", metavar="MAC",
         help="Filter by MAC address (e.g. 00:9C:02:73:33:6D)")
-    p_mac_list.add_argument("--vlan", "-v", metavar="VLAN", type=int,
+    mac_address_arg.completer = suppress_file_completion()
+    mac_vlan_arg = p_mac_list.add_argument("--vlan", "-v", metavar="VLAN", type=int,
         help="Filter by VLAN ID (e.g. 100)")
+    mac_vlan_arg.completer = suppress_file_completion()
     arg_nn = p_mac_list.add_argument("--network-name", "-n", metavar="NAME", dest="network_name",
         help="Filter by network name substring (e.g. ACI-Tunnel-Net)")
     arg_nn.completer = _oneview_network_name_completer
@@ -1115,8 +1855,9 @@ examples:
 
     p_mac_desc = s_mac.add_parser("describe",
         help="Trace a MAC address end-to-end through the fabric")
-    p_mac_desc.add_argument("address", metavar="MAC",
+    mac_desc_address_arg = p_mac_desc.add_argument("address", metavar="MAC",
         help="MAC address to trace (e.g. 00:9C:02:73:33:6D)")
+    mac_desc_address_arg.completer = suppress_file_completion()
     p_mac_desc.set_defaults(func=_cmd_mac_describe)
 
     # ── enclosures ────────────────────────────────────────────────────────
@@ -1124,6 +1865,10 @@ examples:
     s_encs = p_encs.add_subparsers(dest="what", metavar="ACTION")
     s_encs.required = True
     s_encs.add_parser("list", help="List all enclosures").set_defaults(func=_cmd_enclosures_list)
+    p_enc_desc = s_encs.add_parser("describe", help="Show enclosure bay layout")
+    p_enc_desc_name = p_enc_desc.add_argument("name", metavar="NAME", help="Name of the enclosure")
+    p_enc_desc_name.completer = _oneview_enclosure_name_completer
+    p_enc_desc.set_defaults(func=_cmd_enclosures_describe)
 
     p_egs = sub.add_parser("enclosure-groups", aliases=["enclosure-group"], help="List enclosure groups")
     s_egs = p_egs.add_subparsers(dest="what", metavar="ACTION")
@@ -1145,6 +1890,13 @@ examples:
     return parser
 
 
+def _normalize_global_json_arg(argv: list[str] | None) -> list[str] | None:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if "--json" not in args:
+        return argv
+    return ["--json", *[arg for arg in args if arg != "--json"]]
+
+
 def main(argv: list[str] | None = None) -> None:
     try:
         import argcomplete
@@ -1153,7 +1905,7 @@ def main(argv: list[str] | None = None) -> None:
     except ImportError:
         parser = _build_parser()
 
-    args = parser.parse_args(argv)
+    args = parser.parse_args(_normalize_global_json_arg(argv))
     if getattr(args, "json_output", False):
         set_output_mode(OutputMode.JSON)
     try:

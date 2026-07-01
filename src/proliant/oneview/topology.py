@@ -458,6 +458,7 @@ async def trace_mac(client: "OneViewClient", mac: str) -> list[dict]:
         nm["learned_on"] = learned_on
         nm["entry_type"] = hit.get("entryType", "")
         nm["learned_vlan"] = hit.get("externalVlan", "")
+        nm["last_updated"] = _mac_last_updated(hit)
         nm["internal_vlan"] = is_tunnel
         if is_tunnel:
             tunnel_maps.append(nm)
@@ -465,6 +466,23 @@ async def trace_mac(client: "OneViewClient", mac: str) -> list[dict]:
             maps.append(nm)
 
     return maps + tunnel_maps
+
+
+def _mac_last_updated(raw: dict) -> str:
+    for key in (
+        "lastUpdated",
+        "lastUpdate",
+        "lastUpdatedTime",
+        "lastSeen",
+        "lastSeenTime",
+        "timestamp",
+        "modified",
+        "created",
+    ):
+        value = raw.get(key)
+        if value:
+            return str(value)
+    return ""
 
 
 # ── rendering ─────────────────────────────────────────────────────────────────
@@ -477,6 +495,8 @@ def render_network_map(m: dict, mac: str = "") -> Tree:
         extra = f"  ·  MAC [bold]{mac}[/bold]"
         if m.get("learned_on"):
             extra += f" learned on [dim]{m['learned_on']}[/dim]"
+        if m.get("last_updated"):
+            extra += f"  ·  Last updated [dim]{m['last_updated']}[/dim]"
         title += extra
     tree = Tree(title)
 
@@ -592,6 +612,8 @@ def render_network_map_ascii(m: dict, mac: str = "", color: bool = False) -> str
         header = f"MAC {mac}"
         if m.get("learned_on"):
             header += f"  ·  learned on {m['learned_on']}"
+        if m.get("last_updated"):
+            header += f"  ·  Last updated {m['last_updated']}"
         net_vlan = net["vlan"]
         if (net_vlan == "" or net_vlan == 0 or net_vlan is None) and m.get("learned_vlan"):
             net_vlan = m["learned_vlan"]
@@ -645,9 +667,21 @@ def render_network_map_ascii(m: dict, mac: str = "", color: bool = False) -> str
         root_lines.append(f"Logical Interconnect: {li_name}")
     root_box, root_w = _make_box(root_lines)
 
+    # MAC traces should focus on the learned endpoint, not every profile that
+    # happens to use the same network. Network describes still show all servers.
+    display_servers = servers
+    if mac and not mac_on_uplink:
+        display_servers = []
+        for s in servers:
+            learned_connections = [c for c in s["connections"] if c.get("highlight")]
+            if learned_connections:
+                focused = dict(s)
+                focused["connections"] = learned_connections
+                display_servers.append(focused)
+
     # ── child boxes = one per server profile (connections folded inside) ────────
     children: list[dict] = []
-    for s in servers:
+    for s in display_servers:
         box_lines = [s["profile"] or "(profile)"]
         if s["server_name"]:
             box_lines.append(s["server_name"])
@@ -662,8 +696,9 @@ def render_network_map_ascii(m: dict, mac: str = "", color: bool = False) -> str
         canvas.text(0, 0, header)
         for i, line in enumerate(root_box):
             canvas.text(2 + i, 0, line)
-        canvas.text(2 + len(root_box) + 1, 0,
-                    "(no server profile connection uses this network)")
+        empty_message = "(no matching server profile connection found for this MAC)" if mac else \
+            "(no server profile connection uses this network)"
+        canvas.text(2 + len(root_box) + 1, 0, empty_message)
         out = canvas.render()
         if color:
             out = _colorize_diagram(out, m)

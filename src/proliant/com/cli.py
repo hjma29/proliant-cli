@@ -59,6 +59,7 @@ from typing import Optional
 import argcomplete
 
 from proliant.common.display import get_console, make_table, print_json, print_memory_report, OutputMode, get_output_mode, set_output_mode
+from proliant.common.completers import suppress_file_completion
 from proliant.common.runner import run_sync
 from proliant.com.auth import COMSession, CredentialsError, AuthError
 from proliant.com.client import COMClient
@@ -111,6 +112,36 @@ def _workspace_names_completer(prefix, **kwargs):
         data = load_token() or {}
         names = [w.get("company_name", "") for w in data.get("workspaces", [])]
         return [n for n in names if n.startswith(prefix)]
+    except Exception:  # intentional: completion must never print to stdout
+        return []
+
+
+def _server_targets_completer(prefix: str, **kwargs) -> list[str]:
+    """Return COM server names, serials, and iLO hostnames for tab completion."""
+    try:
+        session = COMSession.load()
+
+        async def _fetch() -> list[str]:
+            async with COMClient(session) as client:
+                data = await client.get(session.com_url("/servers"), params={"limit": 1000})
+            values: list[str] = []
+            for server in data.get("items", []):
+                hardware = server.get("hardware", {})
+                bmc = hardware.get("bmc") or {}
+                values.extend(
+                    value for value in (
+                        server.get("name", ""),
+                        hardware.get("serialNumber", ""),
+                        bmc.get("hostname", ""),
+                    ) if value
+                )
+            seen = set()
+            return [
+                value for value in values
+                if value.lower().startswith(prefix.lower()) and not (value in seen or seen.add(value))
+            ]
+
+        return asyncio.run(_fetch())
     except Exception:  # intentional: completion must never print to stdout
         return []
 
@@ -549,10 +580,12 @@ examples:
                         help="Output as JSON (for piping/scripting)")
 
     # Global optional credential overrides
-    parser.add_argument("--client-id",     metavar="ID",     dest="client_id",
+    client_id_arg = parser.add_argument("--client-id",     metavar="ID",     dest="client_id",
                         help="GreenLake API client ID (overrides env/file)")
-    parser.add_argument("--client-secret", metavar="SECRET", dest="client_secret",
+    client_id_arg.completer = suppress_file_completion()
+    client_secret_arg = parser.add_argument("--client-secret", metavar="SECRET", dest="client_secret",
                         help="GreenLake API client secret (overrides env/file)")
+    client_secret_arg.completer = suppress_file_completion()
     parser.add_argument("--region",        metavar="REGION", default=None,
                         choices=["us-west", "eu-central", "ap-northeast"],
                         help="GreenLake region (default: us-west)")
@@ -566,10 +599,11 @@ examples:
         "login",
         help="Login (Okta Verify push, password, or --api-client)",
     )
-    login_p.add_argument(
+    login_email_arg = login_p.add_argument(
         "--email", "-e", metavar="EMAIL",
         help="HPE GreenLake email address",
     )
+    login_email_arg.completer = suppress_file_completion()
     login_p.add_argument(
         "--password", "-p", action="store_true",
         help="Login with username + password (for external/gmail accounts)",
@@ -578,14 +612,16 @@ examples:
         "--api-client", action="store_true", dest="api_client",
         help="Login using HPE GreenLake API client credentials (no Okta needed)",
     )
-    login_p.add_argument(
+    login_client_id_arg = login_p.add_argument(
         "--client-id", metavar="ID", dest="client_id",
         help="Client ID for --api-client login",
     )
-    login_p.add_argument(
+    login_client_id_arg.completer = suppress_file_completion()
+    login_client_secret_arg = login_p.add_argument(
         "--client-secret", metavar="SECRET", dest="client_secret",
         help="Client Secret for --api-client login",
     )
+    login_client_secret_arg.completer = suppress_file_completion()
     login_p.add_argument(
         "--region", metavar="REGION",
         choices=["us-west", "eu-central", "ap-northeast"],
@@ -602,10 +638,12 @@ examples:
         p.add_argument("--type", metavar="TYPE",
                        choices=["COMPUTE", "NETWORK", "STORAGE"],
                        help="Filter by device type")
-        p.add_argument("--filter", metavar="TEXT", dest="filter_text",
-                       help="Case-insensitive substring filter across serial, hostname, model, location")
-        p.add_argument("--model", metavar="MODEL", dest="filter_model",
-                       help="Filter by model (e.g. dl380-gen11, dl325-gen12)")
+        filter_arg = p.add_argument("--filter", metavar="TEXT", dest="filter_text",
+                   help="Case-insensitive substring filter across serial, hostname, model, location")
+        filter_arg.completer = suppress_file_completion()
+        model_arg = p.add_argument("--model", metavar="MODEL", dest="filter_model",
+                   help="Filter by model (e.g. dl380-gen11, dl325-gen12)")
+        model_arg.completer = suppress_file_completion()
         p.add_argument("--raw", action="store_true", help="Dump unprocessed API response (bypasses proliant field parsing)")
         fields_arg = p.add_argument(
             "--fields", metavar="FIELDS",
@@ -652,14 +690,16 @@ examples:
         "add",
         help="Add a compute device to the workspace",
     )
-    add_dev_p.add_argument(
+    add_serial_arg = add_dev_p.add_argument(
         "--serial-number", "-s", metavar="SERIAL", dest="serial_number", required=True,
         help="Device serial number",
     )
-    add_dev_p.add_argument(
+    add_serial_arg.completer = suppress_file_completion()
+    add_part_arg = add_dev_p.add_argument(
         "--part-number", "-p", metavar="PART", dest="part_number", default="",
         help="Device part number (SKU). Optional — omit if unknown.",
     )
+    add_part_arg.completer = suppress_file_completion()
 
     # ── servers ───────────────────────────────────────────────────────────
     servers_p = subparsers.add_parser("servers", help="List or describe servers")
@@ -682,8 +722,9 @@ examples:
     _add_device_list_args(srv_list_p, default_fields=_SERVER_DEFAULT_FIELDS)
 
     desc_p = servers_sub.add_parser("describe", help="Show details for a server")
-    desc_p.add_argument("server", metavar="SERIAL_OR_NAME",
+    desc_server_arg = desc_p.add_argument("server", metavar="SERIAL_OR_NAME",
                         help="Server serial number or name, e.g. TWA25380A01")
+    desc_server_arg.completer = _server_targets_completer
 
     # ── workspaces ────────────────────────────────────────────────────────
     workspaces_p = subparsers.add_parser("workspaces", help="List workspaces")

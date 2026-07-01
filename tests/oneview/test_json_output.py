@@ -29,6 +29,51 @@ FAKE_NETWORKS = [
      "status": "OK", "state": "Active", "smart_link": True},
 ]
 
+FAKE_MAC_MAP = [{
+    "network": {"name": "VLAN-160", "vlan": 160, "type": "Tagged", "uri": "/rest/ethernet-networks/net1"},
+    "mac": "22:00:A3:E0:00:1E",
+    "learned_on": "downlink 6:1-2",
+    "uplinks": [{
+        "uplink_set": "ACI-MAP",
+        "li_name": "LE01-LIG-VC100",
+        "ports": [{"bay": "3", "port": "Q5:2", "neighbor_switch": "", "neighbor_port": "", "highlight": False}],
+        "networks": [{"name": "VLAN-160", "vlan": 160, "native": False}],
+        "network_sets": [],
+    }],
+    "servers": [{
+        "profile": "ocp-single-node",
+        "server_name": "Enclosure-01, bay 6",
+        "bay": 6,
+        "connections": [{
+            "name": "map-connection-1",
+            "port_id": "Mezz 3:1-a",
+            "mac": "22:00:A3:E0:00:1E",
+            "ic_name": "Enclosure-01, interconnect 3",
+            "ic_bay": "3",
+            "downlink": 6,
+            "highlight": True,
+        }],
+    }],
+}]
+
+FAKE_MAC_LIST_UNRELATED = [{
+    "mac": "00:00:0c:07:ac:a0",
+    "ic_name": "Enclosure-01, interconnect 6",
+    "port": "Q6:1",
+    "profile": "",
+    "connection": "",
+    "last_updated": "",
+}]
+
+FAKE_MAC_LIST_RELATED = [{
+    "mac": "22:00:A3:E0:00:1E",
+    "ic_name": "IC3",
+    "port": "p1",
+    "profile": "profile1",
+    "connection": "conn1",
+    "last_updated": "",
+}]
+
 
 def _make_mock_client():
     """Return an async context manager yielding a mock OneView client."""
@@ -104,3 +149,62 @@ class TestOneviewJsonNetworks:
         assert isinstance(result, list)
         assert result[0]["name"] == "prod-vlan100"
         assert result[0]["vlan"] == 100
+
+
+class TestOneviewMacDescribe:
+    def test_mac_describe_uses_diagram_output_by_default(self, capsys):
+        from proliant.oneview import cli
+
+        with patch("proliant.oneview.cli._load_client", return_value=_make_mock_client()), \
+             patch("proliant.oneview.topology.trace_mac",
+                   new_callable=AsyncMock, return_value=FAKE_MAC_MAP):
+            cli.main(["mac", "describe", "22:00:A3:E0:00:1E"])
+
+        captured = capsys.readouterr()
+        assert "uplinkset: ACI-MAP" in captured.out
+        assert "ocp-single-node" in captured.out
+        assert "┌" in captured.out
+        assert "├── ▲ Upstream uplinks" not in captured.out
+        assert "└── ▼ Downlink servers" not in captured.out
+
+
+class TestOneviewMacList:
+    def test_mac_list_hides_profile_columns_when_unrelated(self, capsys):
+        from proliant.oneview import cli
+
+        with patch("proliant.oneview.cli._load_client", return_value=_make_mock_client()), \
+             patch("proliant.oneview.interconnects.get_mac_table",
+                   new_callable=AsyncMock, return_value=FAKE_MAC_LIST_UNRELATED):
+            cli.main(["mac", "list", "--address", "00:00:0c:07:ac:a0"])
+
+        captured = capsys.readouterr()
+        assert "MAC Address" in captured.out
+        assert "Q6:1" in captured.out
+        assert "Server Profile" not in captured.out
+        assert "Connection" not in captured.out
+
+    def test_mac_list_shows_profile_columns_when_related(self, capsys):
+        from proliant.oneview import cli
+
+        with patch("proliant.oneview.cli._load_client", return_value=_make_mock_client()), \
+             patch("proliant.oneview.interconnects.get_mac_table",
+                   new_callable=AsyncMock, return_value=FAKE_MAC_LIST_RELATED):
+            cli.main(["mac", "list", "--address", "22:00:A3:E0:00:1E"])
+
+        captured = capsys.readouterr()
+        assert "Server Profile" in captured.out
+        assert "Connection" in captured.out
+        assert "profile1" in captured.out
+        assert "conn1" in captured.out
+
+    def test_mac_list_accepts_json_after_subcommand_args(self, capsys):
+        from proliant.oneview import cli
+
+        with patch("proliant.oneview.cli._load_client", return_value=_make_mock_client()), \
+             patch("proliant.oneview.interconnects.get_mac_table",
+                   new_callable=AsyncMock, return_value=FAKE_MAC_LIST_RELATED):
+            cli.main(["mac", "list", "--address", "22:00:A3:E0:00:1E", "--json"])
+
+        captured = capsys.readouterr()
+        result = json.loads(captured.out)
+        assert result == FAKE_MAC_LIST_RELATED

@@ -99,10 +99,28 @@ def parse_mac_entry(raw: dict) -> dict:
         "net_uri":    raw.get("networkUri", ""),
         "vlan":       raw.get("externalVlan", ""),
         "entry_type": raw.get("entryType", ""),
+        "last_updated": _mac_last_updated(raw),
         "profile":    "",
         "connection": "",
         "internal_vlan": False,
     }
+
+
+def _mac_last_updated(raw: dict) -> str:
+    for key in (
+        "lastUpdated",
+        "lastUpdate",
+        "lastUpdatedTime",
+        "lastSeen",
+        "lastSeenTime",
+        "timestamp",
+        "modified",
+        "created",
+    ):
+        value = raw.get(key)
+        if value:
+            return str(value)
+    return ""
 
 
 def _downlink_port_num(iface: str) -> int | None:

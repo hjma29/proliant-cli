@@ -151,7 +151,7 @@ async def test_trace_mac_highlights_uplink_port():
         "/rest/logical-interconnects/li1/forwarding-information-base": [
             {"macAddress": "00:2a:6a:13:c3:c1", "networkUri": NET_URI,
              "networkInterface": "Q5:2", "interconnectUri": IC3_URI,
-             "entryType": "Learned"},
+             "entryType": "Learned", "lastUpdated": "2026-07-01T12:34:56Z"},
         ],
     }
     client = FakeClient(_fabric_collections(), fib=fib)
@@ -159,6 +159,7 @@ async def test_trace_mac_highlights_uplink_port():
 
     assert len(maps) == 1
     nm = maps[0]
+    assert nm["last_updated"] == "2026-07-01T12:34:56Z"
     ports = nm["uplinks"][0]["ports"]
     hl = [p for p in ports if p["highlight"]]
     assert len(hl) == 1
@@ -168,6 +169,7 @@ async def test_trace_mac_highlights_uplink_port():
     assert not any(c["highlight"] for s in nm["servers"] for c in s["connections"])
     # the diagram surfaces the highlight on the uplink port line
     out = topology.render_network_map_ascii(nm, mac="00:2a:6a:13:c3:c1")
+    assert "Last updated 2026-07-01T12:34:56Z" in out
     assert "Q5:2  →  aci-leaf-101 Eth1/5  ◀ Learned from" in out
 
 
@@ -212,7 +214,7 @@ def _diagram_map() -> dict:
 
 
 def test_render_network_map_ascii_draws_boxes():
-    out = topology.render_network_map_ascii(_diagram_map(), mac="AA:BB:CC:00:00:04")
+    out = topology.render_network_map_ascii(_diagram_map())
     # header + both profile boxes appear
     assert "vlan-160" in out
     assert "server-profile-name-1" in out
@@ -238,6 +240,14 @@ def test_render_network_map_ascii_draws_boxes():
     assert "◀ Learned from" in out
     # plain text only — no Rich markup leaks into the diagram
     assert "[bold" not in out
+
+
+def test_render_network_map_ascii_mac_trace_shows_only_learned_server():
+    out = topology.render_network_map_ascii(_diagram_map(), mac="AA:BB:CC:00:00:04")
+
+    assert "server-profile-name-1" not in out
+    assert "server-profile-name-2" in out
+    assert "◀ Learned from" in out
 
 
 def test_render_network_map_ascii_mac_on_uplink_hides_servers():

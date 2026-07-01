@@ -54,11 +54,11 @@ examples:
 _POWERSHELL_COMPLETION_BLOCK = """\
 # proliant tab completion (added by proliant)
 Register-ArgumentCompleter -Native -CommandName proliant -ScriptBlock {
-    param($commandName, $wordToComplete, $cursorPosition)
+    param($wordToComplete, $commandAst, $cursorPosition)
     $completion_file = New-TemporaryFile
     $env:ARGCOMPLETE_USE_TEMPFILES = 1
     $env:_ARGCOMPLETE_STDOUT_FILENAME = $completion_file
-    $env:COMP_LINE = $wordToComplete
+    $env:COMP_LINE = $commandAst.ToString()
     $env:COMP_POINT = $cursorPosition
     $env:_ARGCOMPLETE = 1
     $env:_ARGCOMPLETE_SUPPRESS_SPACE = 0

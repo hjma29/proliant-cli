@@ -463,9 +463,25 @@ async def _async_describe_networkset(name: str) -> None:
         f"[bold]{s['name']}[/bold]\n"
         f"Type:           {s['type']}\n"
         f"Native Network: {s['native_network'] or '—'}\n"
+        f"Bandwidth:      {_fmt_bw(s['pref_bw_mbps'])} preferred  |  {_fmt_bw(s['max_bw_mbps'])} maximum\n"
         f"Status: {_status_style(s['status'])}  |  State: {s['state']}",
         title="Network Set", border_style="cyan",
     ))
+
+    if s["used_profiles"] or s["used_templates"]:
+        usage = make_table(
+            f"Used By  ({len(s['used_profiles'])} profiles, {len(s['used_templates'])} templates)",
+            ("Kind", {"no_wrap": True}),
+            ("Name", {"no_wrap": True}),
+            box_style=box.SIMPLE_HEAD, header_style="bold",
+        )
+        for nm_p in s["used_profiles"]:
+            usage.add_row("Server Profile", nm_p)
+        for nm_t in s["used_templates"]:
+            usage.add_row("[cyan]Profile Template[/cyan]", nm_t)
+        get_console().print(usage)
+    else:
+        get_console().print("[dim]Not used by any server profile or template.[/dim]")
 
     net_table = make_table(
         f"Member Networks ({len(s['networks'])})",

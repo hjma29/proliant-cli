@@ -206,18 +206,43 @@ async def describe_uplink_set(client: "OneViewClient", name: str) -> dict:
 
 async def describe_network_set(client: "OneViewClient", name: str) -> dict:
     """Return full detail for a single network set, with resolved network info."""
-    raw_sets, raw_nets = await asyncio.gather(
+    raw_sets, raw_nets, profiles, templates = await asyncio.gather(
         client.get_all("/rest/network-sets"),
         client.get_all("/rest/ethernet-networks"),
+        client.get_all("/rest/server-profiles"),
+        client.get_all("/rest/server-profile-templates"),
     )
     matched = [s for s in raw_sets if s.get("name", "").lower() == name.lower()]
     if not matched:
         known = ", ".join(s.get("name", "") for s in raw_sets)
         raise ValueError(f"Network set '{name}' not found. Known: {known}")
     s = matched[0]
+    set_uri = s.get("uri", "")
 
     net_map = {n["uri"]: n for n in raw_nets}
     native_uri = s.get("nativeNetworkUri") or ""
+
+    # Bandwidth from the network set's connection template.
+    pref_bw = max_bw = 0
+    ct_uri = s.get("connectionTemplateUri")
+    if ct_uri:
+        try:
+            ct = await client.get(ct_uri)
+            bw = ct.get("bandwidth", {}) or {}
+            pref_bw = bw.get("typicalBandwidth", 0) or 0
+            max_bw  = bw.get("maximumBandwidth", 0) or 0
+        except Exception:
+            pass
+
+    def _uses(obj: dict) -> bool:
+        cs = obj.get("connectionSettings") or {}
+        for c in cs.get("connections") or obj.get("connections") or []:
+            if (c.get("networkUri") or "") == set_uri:
+                return True
+        return False
+
+    used_profiles  = sorted(p.get("name", "") for p in profiles  if _uses(p))
+    used_templates = sorted(t.get("name", "") for t in templates if _uses(t))
 
     networks = []
     for uri in s.get("networkUris", []):
@@ -238,6 +263,10 @@ async def describe_network_set(client: "OneViewClient", name: str) -> dict:
         "status":         s.get("status", ""),
         "state":          s.get("state", ""),
         "native_network": net_map.get(native_uri, {}).get("name", "") if native_uri else "",
+        "pref_bw_mbps":   pref_bw,
+        "max_bw_mbps":    max_bw,
+        "used_profiles":  used_profiles,
+        "used_templates": used_templates,
         "networks":       networks,
     }
 

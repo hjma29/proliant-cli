@@ -118,6 +118,42 @@ def _proc_image_name(pid: int) -> str:
         ctypes.windll.kernel32.CloseHandle(h)
 
 
+def _resolve_installed_exe_path() -> str:
+    """Return the path of the real, installed proliant executable.
+
+    A Nuitka onefile build runs as TWO processes: a small bootstrap ("parent")
+    that unpacks the payload into a per-version cache dir (e.g.
+    ``%LOCALAPPDATA%\\proliant\\<version>\\`` per --onefile-tempdir-spec) and
+    re-execs the extracted payload as a child. Inside that child,
+    ``sys.executable`` always points at the *extracted* interpreter in the
+    cache dir (observed as literally ``python.exe``) — never at the real
+    installed binary the user launched (e.g. ``%USERPROFILE%\\bin\\proliant.exe``,
+    which is what's on PATH). Nuitka exposes the bootstrap's PID via the
+    ``NUITKA_ONEFILE_PARENT`` env var; resolve that PID's image path to find
+    the actual file that needs to be replaced on update.
+    """
+    parent_pid_str = os.environ.get("NUITKA_ONEFILE_PARENT", "")
+    if parent_pid_str:
+        try:
+            parent_pid = int(parent_pid_str)
+        except ValueError:
+            parent_pid = 0
+        if parent_pid:
+            if sys.platform == "win32":
+                img = _proc_image_name(parent_pid)
+                if img and os.path.isfile(img):
+                    return img
+            else:
+                proc_exe = f"/proc/{parent_pid}/exe"
+                try:
+                    img = os.path.realpath(proc_exe)
+                    if img and img != proc_exe and os.path.isfile(img):
+                        return img
+                except OSError:
+                    pass
+    return sys.executable
+
+
 def _is_explorer_launch() -> bool:
     """Return True if this frozen EXE was launched by double-clicking from Explorer.
 
@@ -903,9 +939,10 @@ def _run_update() -> None:
             os.chmod(tmp_path, 0o755)
         # sys.executable is the Python interpreter when running as a pip script;
         # sys.argv[0] is the actual proliant entry point script.
-        # When frozen (Nuitka/PyInstaller), sys.executable IS the binary.
+        # When frozen, sys.executable is NOT the installed binary for Nuitka
+        # onefile builds — see _resolve_installed_exe_path() for why.
         if is_frozen():
-            current_exe = sys.executable
+            current_exe = _resolve_installed_exe_path()
         else:
             current_exe = os.path.realpath(sys.argv[0])
 

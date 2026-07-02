@@ -18,11 +18,19 @@ import os
 import sys
 from pathlib import Path
 
+from proliant.common import config_dir
 from proliant.common.platform import is_frozen
 
 
 def _find_config_file() -> Path:
-    """Same search order as ilo/config.py — first match wins."""
+    """Same search order as ilo/config.py — first match wins.
+
+    When no candidate exists on disk, fall back to the canonical
+    ``~/.config/proliant-cli/inventory.ini`` location — the same one
+    ``ilo/config.py`` uses and ``proliant ilo init`` creates — so error
+    messages always point somewhere consistent and actionable, instead of
+    whatever the current working directory happens to be.
+    """
     if env := os.environ.get("PCLI_CONFIG"):
         return Path(env)
 
@@ -31,12 +39,12 @@ def _find_config_file() -> Path:
         candidates.append(Path(sys.executable).parent / "inventory.ini")
     else:
         candidates.append(Path(__file__).parent.parent.parent.parent / "inventory.ini")
-    candidates.append(Path.home() / ".config" / "proliant-cli" / "inventory.ini")
+    candidates.append(config_dir() / "inventory.ini")
 
     for p in candidates:
         if p.exists():
             return p
-    return Path.cwd() / "inventory.ini"
+    return config_dir() / "inventory.ini"
 
 
 def load_oneview_config() -> dict[str, str]:

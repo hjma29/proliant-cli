@@ -1910,7 +1910,7 @@ def main(argv: list[str] | None = None) -> None:
         set_output_mode(OutputMode.JSON)
     try:
         run_sync(args.func(args))
-    except (ValueError, RuntimeError) as exc:
+    except (ValueError, RuntimeError, FileNotFoundError) as exc:
         from rich.markup import escape
         get_console().print(f"[red]Error:[/red] {escape(str(exc))}", highlight=False)
         sys.exit(1)

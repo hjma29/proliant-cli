@@ -160,9 +160,12 @@ jobs:
           if (-not (Test-Path $isccPath)) {
             throw "ISCC.exe not found at $isccPath"
           }
-          # ISCC output (OutputBaseFilename=proliant-cli-windows-setup) is written
-          # to dist\ via /O, producing dist\proliant-cli-windows-setup.exe.
-          & $isccPath /DMyAppVersion=$version /DSourceDir=dist\proliant-cli /Odist installer\proliant-cli.iss
+          # Inno resolves relative [Files] Source paths against the .iss file's
+          # own directory (installer\), NOT the working dir — so pass absolute
+          # paths for both the source folder and the output dir.
+          $srcDir = Join-Path (Get-Location) 'dist\proliant-cli'
+          $outDir = Join-Path (Get-Location) 'dist'
+          & $isccPath /DMyAppVersion=$version /DSourceDir=$srcDir /O$outDir installer\proliant-cli.iss
 
       - name: Rename binary (Linux/macOS)
         if: runner.os != 'Windows'

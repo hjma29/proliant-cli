@@ -18,7 +18,7 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact: proliant-cli-windows.exe
+            artifact: proliant-cli-windows-setup.exe
           - os: ubuntu-latest
             artifact: proliant-cli-linux-x86
           - os: ubuntu-24.04-arm
@@ -108,8 +108,13 @@ jobs:
           } else {
             $version = (Select-String -Path pyproject.toml -Pattern '^version').Line -replace '.*"(.*)".*', '$1'
           }
+          # Windows ships as a --standalone (one-directory) build, NOT --onefile.
+          # A onefile exe self-extracts to a user-writable cache dir at launch,
+          # which Defender/CrowdStrike Falcon heuristically flag as a dropper.
+          # The standalone folder is packaged into a signed Inno Setup installer
+          # that installs into Program Files (see the packaging step below).
           python -m nuitka `
-            --onefile `
+            --standalone `
             --assume-yes-for-downloads `
             --include-package=proliant `
             --include-package=proliant.ilo `
@@ -124,22 +129,45 @@ jobs:
             --include-package-data=certifi `
             --include-distribution-metadata=proliant `
             --company-name=HPE `
-            --product-name=proliant `
+            --product-name=proliant-cli `
             --product-version=$version `
-            --onefile-tempdir-spec='{CACHE_DIR}/proliant/{VERSION}' `
             --output-filename=proliant.exe `
             --output-dir=dist `
             src/proliant/cli.py
+          # Nuitka names the standalone folder after the entry module: cli.dist.
+          # Rename it to the product identity so the installer bundles a clean
+          # "proliant-cli" folder.
+          Rename-Item dist\cli.dist proliant-cli
+
+      - name: Package Windows installer (Inno Setup)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq "tag") {
+            $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          } else {
+            $version = (Select-String -Path pyproject.toml -Pattern '^version').Line -replace '.*"(.*)".*', '$1'
+          }
+          choco install innosetup --no-progress -y
+          # Chocolatey's innosetup package installs ISCC.exe under Program Files
+          # and doesn't reliably create a PATH shim, so resolve it explicitly.
+          $iscc = Get-Command iscc -ErrorAction SilentlyContinue
+          if ($iscc) {
+            $isccPath = $iscc.Source
+          } else {
+            $isccPath = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          }
+          if (-not (Test-Path $isccPath)) {
+            throw "ISCC.exe not found at $isccPath"
+          }
+          # ISCC output (OutputBaseFilename=proliant-cli-windows-setup) is written
+          # to dist\ via /O, producing dist\proliant-cli-windows-setup.exe.
+          & $isccPath /DMyAppVersion=$version /DSourceDir=dist\proliant-cli /Odist installer\proliant-cli.iss
 
       - name: Rename binary (Linux/macOS)
         if: runner.os != 'Windows'
         shell: bash
         run: mv dist/proliant dist/${{ matrix.artifact }}
-
-      - name: Rename binary (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: Rename-Item dist\proliant.exe ${{ matrix.artifact }}
 
       - name: Extract release notes from CHANGELOG.md
         if: startsWith(github.ref, 'refs/tags/') && matrix.os == 'windows-latest'
@@ -153,6 +181,13 @@ jobs:
           if [ ! -s release_notes.txt ]; then
             echo "See CHANGELOG.md for details." > release_notes.txt
           fi
+
+      - name: Upload build artifact (CI validation)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}
+          if-no-files-found: error
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2

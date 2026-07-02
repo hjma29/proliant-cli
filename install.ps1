@@ -1,5 +1,13 @@
 # proliant-cli Windows installer
 # Usage: irm https://raw.githubusercontent.com/hjma29/proliant-cli/main/install.ps1 | iex
+#
+# Downloads the latest GUI installer (proliant-cli-windows-setup.exe) and runs
+# it. The installer requests elevation (one UAC prompt) and installs
+# machine-wide into "C:\Program Files\proliant-cli\", adds that folder to the
+# system PATH, and registers an Add/Remove Programs entry.
+#
+# This script itself runs as the current (non-elevated) user so it can also set
+# up PowerShell tab completion in YOUR profile after the install finishes.
 
 $ErrorActionPreference = "Stop"
 
@@ -7,8 +15,7 @@ $ErrorActionPreference = "Stop"
 Start-Job { Invoke-WebRequest "https://proliant-cli.hjma29.workers.dev/install/windows" -UseBasicParsing -ErrorAction SilentlyContinue } | Out-Null
 
 $Repo = "hjma29/proliant-cli"
-$BinName = "proliant.exe"
-$InstallDir = "$env:USERPROFILE\bin"
+$AssetName = "proliant-cli-windows-setup.exe"
 
 Write-Host ""
 Write-Host "proliant-cli installer" -ForegroundColor Cyan
@@ -17,10 +24,10 @@ Write-Host "══════════════════════�
 # Resolve latest release download URL
 Write-Host "Fetching latest release..." -ForegroundColor Gray
 $release = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases/latest"
-$asset = $release.assets | Where-Object { $_.name -eq "proliant-cli-windows.exe" } | Select-Object -First 1
+$asset = $release.assets | Where-Object { $_.name -eq $AssetName } | Select-Object -First 1
 
 if (-not $asset) {
-    Write-Error "Could not find proliant-cli-windows.exe in latest release."
+    Write-Error "Could not find $AssetName in latest release."
     exit 1
 }
 
@@ -28,19 +35,14 @@ $version = $release.tag_name
 $url = $asset.browser_download_url
 Write-Host "Downloading $version..." -ForegroundColor Gray
 
-# Install to ~/bin
-if (-not (Test-Path $InstallDir)) {
-    New-Item -ItemType Directory -Path $InstallDir | Out-Null
-}
-
-$dest = Join-Path $InstallDir $BinName
+$setup = Join-Path ([System.IO.Path]::GetTempPath()) $AssetName
 
 # Download with curl.exe (ships in Win10/11). Use quiet output because curl's
 # progress meter writes to stderr, which becomes a terminating NativeCommandError
 # under Windows PowerShell when $ErrorActionPreference is Stop.
 $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
 if ($curl) {
-    $curlOutput = & $curl.Source -L --fail --silent --show-error -o $dest $url 2>&1
+    $curlOutput = & $curl.Source -L --fail --silent --show-error -o $setup $url 2>&1
     $curlExit = $LASTEXITCODE
     if ($curlExit -ne 0) {
         if ($curlOutput) { $curlOutput | ForEach-Object { Write-Error $_ } }
@@ -51,30 +53,30 @@ if ($curl) {
     $prev = $ProgressPreference
     $ProgressPreference = 'SilentlyContinue'
     try {
-        Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
+        Invoke-WebRequest -Uri $url -OutFile $setup -UseBasicParsing
     } finally {
         $ProgressPreference = $prev
     }
 }
 
-# Add ~/bin to PATH if not already present
-$userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
-# Remove any existing occurrence of InstallDir, then prepend it so a freshly
-# installed proliant always wins over stale copies elsewhere on PATH.
-$entries = ($userPath -split ';') | Where-Object { $_ -and ($_.TrimEnd('\') -ne $InstallDir.TrimEnd('\')) }
-$newPath = (@($InstallDir) + $entries) -join ';'
-if ($newPath -ne $userPath) {
-    [Environment]::SetEnvironmentVariable("PATH", $newPath, "User")
-    Write-Host ""
-    Write-Host "  Added $InstallDir to the front of your PATH." -ForegroundColor Yellow
-    Write-Host "  Restart your terminal (or open a new PowerShell window) to use 'proliant'." -ForegroundColor Yellow
+# Run the installer. Its manifest requests admin, so Windows shows a single UAC
+# prompt and the GUI wizard walks the user through the install.
+Write-Host ""
+Write-Host "  Launching the installer (accept the UAC prompt)..." -ForegroundColor Yellow
+$proc = Start-Process -FilePath $setup -Wait -PassThru
+Remove-Item $setup -ErrorAction SilentlyContinue
+
+if ($proc.ExitCode -ne 0) {
+    Write-Error "Installer exited with code $($proc.ExitCode)."
+    exit 1
 }
 
 Write-Host ""
-Write-Host "  Installed: $dest" -ForegroundColor Green
-Write-Host "  Version:   $version" -ForegroundColor Green
+Write-Host "  Installed proliant-cli $version to C:\Program Files\proliant-cli" -ForegroundColor Green
 
 # ── Tab completion (dynamic, via argcomplete) ───────────────────────────────
+# The installer handles files + PATH (machine scope, elevated). Tab completion
+# belongs in YOUR user profile, so it is configured here in the user context.
 $completionBlock = @'
 # proliant tab completion (added by proliant)
 Register-ArgumentCompleter -Native -CommandName proliant -ScriptBlock {
@@ -152,6 +154,6 @@ if ($policy -in @('Undefined', 'Restricted')) {
 }
 
 Write-Host ""
-Write-Host "Run 'proliant --version' in a new terminal to verify." -ForegroundColor Cyan
+Write-Host "Open a new terminal and run 'proliant --version' to verify." -ForegroundColor Cyan
 Write-Host ""
 

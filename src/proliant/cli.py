@@ -88,14 +88,6 @@ if (-not (Get-PSReadLineKeyHandler | Where-Object { $_.Key -eq 'Tab' -and $_.Fun
 """
 
 
-def _console_pids() -> list[int]:
-    """Return the list of process IDs attached to this console."""
-    import ctypes
-    arr = (ctypes.c_uint * 64)()
-    n = ctypes.windll.kernel32.GetConsoleProcessList(arr, 64)
-    return [arr[i] for i in range(min(n, 64))]
-
-
 def _proc_image_name(pid: int) -> str:
     """Return the full image path for a PID, or '' on failure."""
     import ctypes
@@ -154,174 +146,47 @@ def _resolve_installed_exe_path() -> str:
     return sys.executable
 
 
-def _is_explorer_launch() -> bool:
-    """Return True if this frozen EXE was launched by double-clicking from Explorer.
-
-    When Explorer spawns a console EXE it creates a brand-new console owned
-    solely by this application.  A Nuitka onefile build runs as TWO processes
-    (bootstrap parent + Python child), both named the same EXE — so a naive
-    GetConsoleProcessList()==1 check fails.  Instead we treat it as an Explorer
-    launch when EVERY process attached to the console is our own EXE; a terminal
-    launch always has a shell (pwsh/cmd/bash) sharing the console.
-    """
-    try:
-        pids = _console_pids()
-        if not pids:
-            return False
-        self_name = os.path.basename(sys.executable).lower()
-        for pid in pids:
-            img = _proc_image_name(pid)
-            if img and os.path.basename(img).lower() != self_name:
-                return False  # a shell shares the console → terminal launch
-        return True
-    except Exception:
-        return False
-
-
-def _pause_console(message: str = "Press any key to close this window...") -> None:
-    """Pause until a key is pressed.
-
-    Reads directly from the console (msvcrt.getch / CONIN$) so it works even
-    when the Nuitka onefile child has no usable stdin — unlike input(), which
-    raises EOFError immediately and lets the window close instantly.
-    """
-    print(f"\n{message}")
-    try:
-        import msvcrt
-        msvcrt.getch()
-    except Exception:
-        try:
-            input()
-        except (EOFError, KeyboardInterrupt):
-            pass
-
-
-
-def _open_new_powershell(exe_dir: str) -> None:
-    """Open a new PowerShell window with exe_dir on PATH so proliant works immediately."""
-    import subprocess
-    import shutil
-    shell = shutil.which("pwsh.exe") or shutil.which("powershell.exe") or "powershell.exe"
-    ps_cmd = (
-        f'$env:PATH = "{exe_dir}" + [IO.Path]::PathSeparator + $env:PATH; '
-        f'Set-Location $env:USERPROFILE; '
-        f'Write-Host "proliant is ready. Type proliant to get started." -ForegroundColor Green'
-    )
-    subprocess.Popen(
-        [shell, "-NoExit", "-NoLogo", "-ExecutionPolicy", "RemoteSigned", "-Command", ps_cmd],
-        creationflags=subprocess.CREATE_NEW_CONSOLE,
-    )
-
-
 def _windows_first_run_check() -> None:
-    """On Windows: set up PATH and tab completion the first time proliant is run."""
+    """On Windows: configure PowerShell tab completion once, after install.
+
+    In the installer-based distribution the GUI installer (Inno Setup) owns
+    file placement and the machine PATH, so proliant.exe lives in
+    ``C:\\Program Files\\proliant-cli`` and is already on PATH. What the
+    installer can NOT do (it runs elevated, as a different user context) is set
+    up tab completion in the *current* user's PowerShell profile.
+
+    ``install.ps1`` configures completion for one-liner installs, but users who
+    download and run ``proliant-cli-windows-setup.exe`` directly would otherwise
+    never get it. So on the first frozen run we set up completion once, guarded
+    by a sentinel in the user-writable config dir (Program Files is read-only
+    for a normal user, so the sentinel can't live next to the exe).
+    """
     if sys.platform != "win32":
         return
     if not is_frozen():
         return  # only for the packaged .exe
 
-    exe_dir = os.path.dirname(sys.executable)
-    already_in_path = _win_path_contains(exe_dir)
+    from proliant.common import config_dir as _config_dir
 
-    if _is_explorer_launch():
-        # ── Double-clicked from Explorer ────────────────────────────────────
-        # Run setup automatically (no Y/n prompt — opening the EXE is consent)
-        # then pause so the window stays open long enough to read.
-        print("proliant installer")
-        print("=" * 40)
-        if not already_in_path:
-            print(f"\nSetting up proliant ...")
-            print(f"  Adding {exe_dir} to PATH ...")
-            _win_add_to_path(exe_dir)
-            _win_add_powershell_completion()
-            _win_check_execution_policy()
-            print("\n  Done!  Opening a new PowerShell window where proliant is ready.")
-            print("  You can move proliant-cli-windows.exe anywhere — re-run it to update PATH.\n")
-            _open_new_powershell(exe_dir)
-        else:
-            print(f"\n  Already installed: {exe_dir}")
-            print("  Tab completion and PATH are configured.\n")
-        _pause_console()
-        sys.exit(0)
-
-    # ── Launched from an existing terminal ──────────────────────────────────
-    if already_in_path:
-        return
-
-    # Skip if user already answered this prompt (yes or no)
-    sentinel = os.path.join(exe_dir, ".setup_done")
-    if os.path.exists(sentinel):
-        return
-
-    print("Quick setup: add proliant to your PATH for easier access? [Y/n] ", end="", flush=True)
     try:
-        answer = input().strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        print()
-        return
-
-    # Remember the answer so we never ask again
-    try:
-        open(sentinel, "w").close()
+        sentinel_dir = _config_dir()
+        sentinel_dir.mkdir(parents=True, exist_ok=True)
+        sentinel = sentinel_dir / ".win-completion-done"
     except OSError:
-        pass
+        return  # can't determine/create config dir — skip silently
 
-    if answer not in ("", "y", "yes"):
+    if sentinel.exists():
         return
 
-    _win_add_to_path(exe_dir)
-    _win_add_powershell_completion()
-    _win_check_execution_policy()
-    print("✓ Done! Opening a new terminal window...\n")
-    _open_new_powershell(exe_dir)
-
-
-def _win_user_path() -> str:
     try:
-        import winreg
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_READ)
-        try:
-            current, _ = winreg.QueryValueEx(key, "Path")
-            return current or ""
-        except FileNotFoundError:
-            return ""
-        finally:
-            winreg.CloseKey(key)
+        _win_add_powershell_completion()
+        _win_check_execution_policy()
+        sentinel.write_text("", encoding="utf-8")
+        print("proliant: PowerShell tab completion enabled.")
+        print("  Open a new PowerShell window to use it.\n")
     except Exception:
-        return ""
-
-
-def _win_path_contains(directory: str) -> bool:
-    target = directory.lower().rstrip("\\")
-    path_values = [os.environ.get("PATH", ""), _win_user_path()]
-    return any(
-        entry.lower().rstrip("\\") == target
-        for value in path_values
-        for entry in value.split(os.pathsep)
-        if entry
-    )
-
-
-def _win_add_to_path(directory: str) -> None:
-    try:
-        import winreg
-        key = winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_ALL_ACCESS
-        )
-        try:
-            current, _ = winreg.QueryValueEx(key, "Path")
-        except FileNotFoundError:
-            current = ""
-        # Drop any existing occurrence of this directory, then prepend it so a
-        # freshly installed proliant always wins over stale copies on PATH.
-        target = directory.rstrip("\\").lower()
-        entries = [p for p in current.split(";") if p and p.rstrip("\\").lower() != target]
-        new_val = ";".join([directory] + entries)
-        if new_val != current:
-            winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, new_val)
-        winreg.CloseKey(key)
-    except Exception:
-        pass  # silently skip if registry write fails
+        # Never block normal command execution on completion setup.
+        pass
 
 
 def _win_add_powershell_completion() -> None:
@@ -884,7 +749,7 @@ def _run_update() -> None:
 
     # Determine asset name for this platform
     if sys.platform == "win32":
-        asset_name = "proliant-cli-windows.exe"
+        asset_name = "proliant-cli-windows-setup.exe"
     elif sys.platform == "darwin":
         asset_name = "proliant-cli-macos"
     else:
@@ -937,54 +802,49 @@ def _run_update() -> None:
             sys.exit(1)
         if sys.platform != "win32":
             os.chmod(tmp_path, 0o755)
-        # sys.executable is the Python interpreter when running as a pip script;
-        # sys.argv[0] is the actual proliant entry point script.
-        # When frozen, sys.executable is NOT the installed binary for Nuitka
-        # onefile builds — see _resolve_installed_exe_path() for why.
-        if is_frozen():
-            current_exe = _resolve_installed_exe_path()
-        else:
-            current_exe = os.path.realpath(sys.argv[0])
 
         if sys.platform == "win32":
-            # Windows can't overwrite a running exe, but it CAN rename it (even
-            # while memory-mapped). Rename running exe → .old, copy new exe into
-            # place immediately, then silently delete .old in the background.
-            old_exe = current_exe + ".old"
-            try:
-                os.remove(old_exe)
-            except OSError:
-                pass
-            try:
-                os.rename(current_exe, old_exe)
-                shutil.copy2(tmp_path, current_exe)
-                os.remove(tmp_path)
-            except OSError as e:
-                print(f"ERROR: Could not replace {current_exe}: {e}", file=sys.stderr)
-                print("If proliant.exe is in a system directory, try reinstalling via install.ps1.", file=sys.stderr)
-                sys.exit(1)
-            # Silently delete the old exe in the background (no window)
-            cleanup_bat = os.path.join(os.environ.get("TEMP", "C:\\Temp"), "proliant_cleanup.bat")
-            with open(cleanup_bat, "w") as f:
-                f.write(
-                    '@echo off\n'
-                    ':retry\n'
-                    'timeout /t 3 /nobreak >nul\n'
-                    f'del "{old_exe}" >nul 2>&1\n'
-                    'if errorlevel 1 goto retry\n'
-                    f'del "{cleanup_bat}"\n'
-                )
-            subprocess.Popen(
-                ["cmd.exe", "/c", cleanup_bat],
-                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
-                close_fds=True,
+            # Windows ships as a GUI installer (Inno Setup). Copy it out of the
+            # auto-deleted temp dir to a persistent location, launch it elevated
+            # (ShellExecute honors the installer's requireAdministrator manifest
+            # and shows the UAC prompt), then exit so the running proliant.exe
+            # unlocks and the installer can replace it in Program Files.
+            import ctypes
+
+            persistent = os.path.join(
+                os.environ.get("TEMP", tempfile.gettempdir()), asset_name
             )
-            print(f"✓ Updated to {latest_ver}.")
-            # Refresh the PowerShell completion block (new version may have new commands)
-            _win_add_powershell_completion()
-            _win_check_execution_policy()
-            print("  Tab completion updated — open a new PowerShell window to use it.")
+            try:
+                shutil.copy2(tmp_path, persistent)
+            except OSError as e:
+                print(f"ERROR: Could not stage installer: {e}", file=sys.stderr)
+                sys.exit(1)
+            print(f"  Launching installer for {latest_ver} (accept the UAC prompt)...")
+            # /SILENT shows only a progress bar; /SUPPRESSMSGBOXES avoids prompts.
+            # ShellExecute with "runas" guarantees elevation; subprocess/CreateProcess
+            # would fail with ERROR_ELEVATION_REQUIRED for an admin-manifest exe.
+            rc = ctypes.windll.shell32.ShellExecuteW(
+                None, "runas", persistent, "/SILENT /SUPPRESSMSGBOXES", None, 1
+            )
+            if rc <= 32:
+                print(
+                    f"ERROR: Could not launch installer (ShellExecute code {rc}).",
+                    file=sys.stderr,
+                )
+                print(f"Run it manually: {persistent}", file=sys.stderr)
+                sys.exit(1)
+            print(f"✓ Installer launched. proliant will update to {latest_ver} in a moment.")
+            # Exit now so the installer can replace the running proliant.exe.
+            sys.exit(0)
         else:
+            # sys.executable is the Python interpreter when running as a pip
+            # script; sys.argv[0] is the actual proliant entry point script.
+            # When frozen, sys.executable is NOT the installed binary for Nuitka
+            # onefile builds — see _resolve_installed_exe_path() for why.
+            if is_frozen():
+                current_exe = _resolve_installed_exe_path()
+            else:
+                current_exe = os.path.realpath(sys.argv[0])
             try:
                 os.replace(tmp_path, current_exe)
             except PermissionError:

@@ -16,7 +16,7 @@ change that.
 
 | Artifact | Plan |
 | :--- | :--- |
-| `proliant-cli-windows.exe` (or its future GUI installer, e.g. `proliant-setup.exe`) | Authenticode-signed via SignPath on every tagged release build. |
+| `proliant-cli-windows-setup.exe` (Inno Setup GUI installer) | Authenticode-signed via SignPath on every tagged release build. |
 | `proliant-cli-linux-x86` / `proliant-cli-linux-arm64` | Unsigned for now. May add `cosign` keyless signing (Sigstore, via GitHub OIDC) later — no cost, no external approval needed. |
 | `proliant-cli-macos` | Unsigned for now. Apple notarization requires a paid ($99/yr) Apple Developer Program membership; not planned unless macOS distribution grows. |
 
@@ -27,7 +27,7 @@ Windows UAC/SmartScreen prompt and in *File → Properties → Digital
 Signatures*. Verify from PowerShell:
 
 ```powershell
-Get-AuthenticodeSignature .\proliant-cli-windows.exe | Format-List
+Get-AuthenticodeSignature .\proliant-cli-windows-setup.exe | Format-List
 ```
 
 `Status` should read `Valid`; `SignerCertificate.Subject` should contain

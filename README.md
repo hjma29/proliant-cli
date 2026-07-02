@@ -16,9 +16,17 @@ sh -c "$(curl -fsSL https://raw.githubusercontent.com/hjma29/proliant-cli/main/i
 
 ### Windows
 
+Run the one-liner in PowerShell — it downloads and launches the GUI installer
+(accept the single UAC prompt):
+
 ```powershell
 Invoke-RestMethod https://raw.githubusercontent.com/hjma29/proliant-cli/main/install.ps1 | Invoke-Expression
 ```
+
+Or download `proliant-cli-windows-setup.exe` from the
+[latest release](https://github.com/hjma29/proliant-cli/releases/latest) and
+run it directly. It installs to `C:\Program Files\proliant-cli`, adds that
+folder to your PATH, and creates an Add/Remove Programs entry.
 
 ## Screenshots
 

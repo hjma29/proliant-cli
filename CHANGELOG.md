@@ -4,6 +4,17 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ---
 
+## v1.0.12 — 2026-07-02
+
+### Enhancements
+- Windows now installs via a signed GUI installer (`proliant-cli-windows-setup.exe`) into `C:\Program Files\proliant-cli`, with an Add/Remove Programs entry and machine PATH setup. This replaces the single self-extracting `.exe`, which some endpoint security tools (Defender, CrowdStrike Falcon) flagged.
+- `proliant update` on Windows now downloads and runs the installer instead of swapping the running binary in place.
+
+### Bug Fixes
+- `proliant oneview`: missing config now shows a clean "run init" message instead of a raw Python traceback, and reads inventory from the same `~/.config/proliant-cli` location as the other commands.
+
+---
+
 ## v1.0.11 — 2026-07-01
 
 ### New Features

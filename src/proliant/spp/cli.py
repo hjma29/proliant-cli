@@ -20,7 +20,7 @@ from rich.console import Console
 from rich.table import Table
 from rich import box
 
-from proliant.common.completers import comma_sep_completer, suppress_file_completion
+from proliant.common.completers import comma_sep_completer, suppress_file_completion, cached_names
 from proliant.spp.catalog import (
     SUPPORTED_GENS,
     TYPE_FILTERS,
@@ -61,7 +61,11 @@ def _spp_version_completer(prefix: str, parsed_args: argparse.Namespace, **_kwar
     if not gen or str(gen).lower() == "all":
         return []
     try:
-        return _prefix_matches(list_versions(gen), prefix)
+        norm_gen = _norm_gen(gen)
+        # list_versions() fetches the SDR index page over HTTP; cache it
+        # briefly so repeated TAB presses don't re-hit the network each time.
+        names = cached_names(f"spp-versions-{norm_gen}", lambda: list_versions(norm_gen))
+        return _prefix_matches(names, prefix)
     except Exception:
         return []
 

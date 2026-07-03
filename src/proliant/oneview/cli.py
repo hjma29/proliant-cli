@@ -50,20 +50,37 @@ def _load_client():
     return OneViewClient(cfg["host"], cfg["username"], cfg["password"])
 
 
+def _oneview_cached_object_names(cache_key: str, uri: str) -> list[str]:
+    """Fetch all object names for a OneView REST collection, cached briefly on disk.
+
+    Every completer call re-runs the whole CLI process (argcomplete invokes
+    it fresh per keystroke), so an uncached fetch pays a full OneView login
+    handshake + GET + logout each time -- a couple of seconds per TAB press.
+    `cached_names()` keeps the last fetch on disk for a short TTL so a burst
+    of TAB presses while typing one command is effectively instant.
+    """
+    from proliant.oneview.config import load_oneview_config
+    from proliant.oneview.client import OneViewClient
+    from proliant.common.completers import cached_names
+
+    cfg = load_oneview_config()
+
+    def _fetch_names() -> list[str]:
+        async def _fetch() -> list[str]:
+            async with OneViewClient(cfg["host"], cfg["username"], cfg["password"]) as client:
+                items = await client.get_all(uri)
+                return [item["name"] for item in items if item.get("name")]
+
+        return asyncio.run(_fetch())
+
+    return cached_names(f"oneview-{cache_key}-{cfg['host']}", _fetch_names)
+
+
 def _oneview_network_name_completer(prefix: str, **kwargs) -> list[str]:
     """Tab-complete --network-name by querying OneView ethernet networks."""
     try:
-        from proliant.oneview.config import load_oneview_config
-        from proliant.oneview.client import OneViewClient
-
-        cfg = load_oneview_config()
-
-        async def _fetch() -> list[str]:
-            async with OneViewClient(cfg["host"], cfg["username"], cfg["password"]) as client:
-                nets = await client.get_all("/rest/ethernet-networks")
-                return [n["name"] for n in nets if n.get("name", "").lower().startswith(prefix.lower())]
-
-        return asyncio.run(_fetch())
+        names = _oneview_cached_object_names("networks", "/rest/ethernet-networks")
+        return [n for n in names if n.lower().startswith(prefix.lower())]
     except Exception:
         return []
 
@@ -71,17 +88,8 @@ def _oneview_network_name_completer(prefix: str, **kwargs) -> list[str]:
 def _oneview_networkset_name_completer(prefix: str, **kwargs) -> list[str]:
     """Tab-complete networkset name by querying OneView network sets."""
     try:
-        from proliant.oneview.config import load_oneview_config
-        from proliant.oneview.client import OneViewClient
-
-        cfg = load_oneview_config()
-
-        async def _fetch() -> list[str]:
-            async with OneViewClient(cfg["host"], cfg["username"], cfg["password"]) as client:
-                sets = await client.get_all("/rest/network-sets")
-                return [s["name"] for s in sets if s.get("name", "").lower().startswith(prefix.lower())]
-
-        return asyncio.run(_fetch())
+        names = _oneview_cached_object_names("networksets", "/rest/network-sets")
+        return [n for n in names if n.lower().startswith(prefix.lower())]
     except Exception:
         return []
 
@@ -89,17 +97,8 @@ def _oneview_networkset_name_completer(prefix: str, **kwargs) -> list[str]:
 def _oneview_server_name_completer(prefix: str, **kwargs) -> list[str]:
     """Tab-complete server names by querying OneView server hardware."""
     try:
-        from proliant.oneview.config import load_oneview_config
-        from proliant.oneview.client import OneViewClient
-
-        cfg = load_oneview_config()
-
-        async def _fetch() -> list[str]:
-            async with OneViewClient(cfg["host"], cfg["username"], cfg["password"]) as client:
-                servers = await client.get_all("/rest/server-hardware")
-                return [s["name"] for s in servers if s.get("name", "").lower().startswith(prefix.lower())]
-
-        return asyncio.run(_fetch())
+        names = _oneview_cached_object_names("servers", "/rest/server-hardware")
+        return [n for n in names if n.lower().startswith(prefix.lower())]
     except Exception:
         return []
 
@@ -107,17 +106,8 @@ def _oneview_server_name_completer(prefix: str, **kwargs) -> list[str]:
 def _oneview_uplinkset_name_completer(prefix: str, **kwargs) -> list[str]:
     """Tab-complete uplink set names by querying OneView."""
     try:
-        from proliant.oneview.config import load_oneview_config
-        from proliant.oneview.client import OneViewClient
-
-        cfg = load_oneview_config()
-
-        async def _fetch() -> list[str]:
-            async with OneViewClient(cfg["host"], cfg["username"], cfg["password"]) as client:
-                uplinks = await client.get_all("/rest/uplink-sets")
-                return [u["name"] for u in uplinks if u.get("name", "").lower().startswith(prefix.lower())]
-
-        return asyncio.run(_fetch())
+        names = _oneview_cached_object_names("uplinksets", "/rest/uplink-sets")
+        return [n for n in names if n.lower().startswith(prefix.lower())]
     except Exception:
         return []
 
@@ -125,17 +115,8 @@ def _oneview_uplinkset_name_completer(prefix: str, **kwargs) -> list[str]:
 def _oneview_profile_name_completer(prefix: str, **kwargs) -> list[str]:
     """Tab-complete server profile names by querying OneView."""
     try:
-        from proliant.oneview.config import load_oneview_config
-        from proliant.oneview.client import OneViewClient
-
-        cfg = load_oneview_config()
-
-        async def _fetch() -> list[str]:
-            async with OneViewClient(cfg["host"], cfg["username"], cfg["password"]) as client:
-                profiles = await client.get_all("/rest/server-profiles")
-                return [p["name"] for p in profiles if p.get("name", "").lower().startswith(prefix.lower())]
-
-        return asyncio.run(_fetch())
+        names = _oneview_cached_object_names("profiles", "/rest/server-profiles")
+        return [n for n in names if n.lower().startswith(prefix.lower())]
     except Exception:
         return []
 
@@ -143,17 +124,8 @@ def _oneview_profile_name_completer(prefix: str, **kwargs) -> list[str]:
 def _oneview_enclosure_name_completer(prefix: str, **kwargs) -> list[str]:
     """Tab-complete enclosure names by querying OneView."""
     try:
-        from proliant.oneview.config import load_oneview_config
-        from proliant.oneview.client import OneViewClient
-
-        cfg = load_oneview_config()
-
-        async def _fetch() -> list[str]:
-            async with OneViewClient(cfg["host"], cfg["username"], cfg["password"]) as client:
-                enclosures = await client.get_all("/rest/enclosures")
-                return [e["name"] for e in enclosures if e.get("name", "").lower().startswith(prefix.lower())]
-
-        return asyncio.run(_fetch())
+        names = _oneview_cached_object_names("enclosures", "/rest/enclosures")
+        return [n for n in names if n.lower().startswith(prefix.lower())]
     except Exception:
         return []
 

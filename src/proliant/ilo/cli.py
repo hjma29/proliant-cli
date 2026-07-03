@@ -45,7 +45,7 @@ import argcomplete
 
 from proliant.ilo.boot import fetch_boot_order, set_one_time_pxe
 from proliant.ilo.inventory import apply_license_key
-from proliant.common.completers import comma_sep_completer, file_completion, suppress_file_completion
+from proliant.common.completers import comma_sep_completer, file_completion, suppress_file_completion, cached_names
 from proliant.common.display import get_console, make_table, print_json, OutputMode, get_output_mode
 from proliant.common.runner import run_parallel, run_sync
 from proliant.common.targets import resolve_hosts, add_target_args
@@ -214,16 +214,18 @@ def _build_parser() -> argparse.ArgumentParser:
         try:
             host = load_hosts(host_name)[0]
 
-            async def _fetch() -> list[str]:
-                async with ilo_session(host) as client:
-                    components = await firmware.get_component_repository(client)
-                return [
-                    c.get("Filename") or c.get("Name") or ""
-                    for c in components
-                    if (c.get("Filename") or c.get("Name") or "").lower().startswith(prefix.lower())
-                ]
+            def _fetch_names() -> list[str]:
+                async def _fetch() -> list[str]:
+                    async with ilo_session(host) as client:
+                        components = await firmware.get_component_repository(client)
+                    return [c.get("Filename") or c.get("Name") or "" for c in components]
 
-            return asyncio.run(_fetch())
+                return [n for n in asyncio.run(_fetch()) if n]
+
+            # Cached briefly -- a fresh Redfish login/logout per keystroke
+            # otherwise costs a couple of seconds on every TAB press.
+            names = cached_names(f"ilo-staged-fw-{host_name}", _fetch_names)
+            return [n for n in names if n.lower().startswith(prefix.lower())]
         except Exception:
             return []
 
@@ -234,25 +236,26 @@ def _build_parser() -> argparse.ArgumentParser:
         try:
             host = load_hosts(host_name)[0]
 
-            async def _fetch() -> list[str]:
-                async with ilo_session(host) as client:
-                    boot = await fetch_boot_order(client)
-                values: list[str] = []
-                for option in boot.get("pxe_ipv4", []):
-                    values.extend(
-                        value for value in (
-                            option.get("port_hint", ""),
-                            option.get("display_name", ""),
-                            option.get("mac", ""),
-                        ) if value
-                    )
-                seen = set()
-                return [
-                    value for value in values
-                    if value.lower().startswith(prefix.lower()) and not (value in seen or seen.add(value))
-                ]
+            def _fetch_names() -> list[str]:
+                async def _fetch() -> list[str]:
+                    async with ilo_session(host) as client:
+                        boot = await fetch_boot_order(client)
+                    values: list[str] = []
+                    for option in boot.get("pxe_ipv4", []):
+                        values.extend(
+                            value for value in (
+                                option.get("port_hint", ""),
+                                option.get("display_name", ""),
+                                option.get("mac", ""),
+                            ) if value
+                        )
+                    seen = set()
+                    return [v for v in values if not (v in seen or seen.add(v))]
 
-            return asyncio.run(_fetch())
+                return asyncio.run(_fetch())
+
+            names = cached_names(f"ilo-pxe-ports-{host_name}", _fetch_names)
+            return [v for v in names if v.lower().startswith(prefix.lower())]
         except Exception:
             return []
 

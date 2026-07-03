@@ -59,7 +59,7 @@ from typing import Optional
 import argcomplete
 
 from proliant.common.display import get_console, make_table, print_json, print_memory_report, OutputMode, get_output_mode, set_output_mode
-from proliant.common.completers import suppress_file_completion
+from proliant.common.completers import suppress_file_completion, cached_names
 from proliant.common.runner import run_sync
 from proliant.com.auth import COMSession, CredentialsError, AuthError
 from proliant.com.client import COMClient
@@ -191,27 +191,31 @@ def _server_targets_completer(prefix: str, **kwargs) -> list[str]:
     try:
         session = COMSession.load()
 
-        async def _fetch() -> list[str]:
-            async with COMClient(session) as client:
-                data = await client.get(session.com_url("/servers"), params={"limit": 1000})
-            values: list[str] = []
-            for server in data.get("items", []):
-                hardware = server.get("hardware", {})
-                bmc = hardware.get("bmc") or {}
-                values.extend(
-                    value for value in (
-                        server.get("name", ""),
-                        hardware.get("serialNumber", ""),
-                        bmc.get("hostname", ""),
-                    ) if value
-                )
-            seen = set()
-            return [
-                value for value in values
-                if value.lower().startswith(prefix.lower()) and not (value in seen or seen.add(value))
-            ]
+        def _fetch_names() -> list[str]:
+            async def _fetch() -> list[str]:
+                async with COMClient(session) as client:
+                    data = await client.get(session.com_url("/servers"), params={"limit": 1000})
+                values: list[str] = []
+                for server in data.get("items", []):
+                    hardware = server.get("hardware", {})
+                    bmc = hardware.get("bmc") or {}
+                    values.extend(
+                        value for value in (
+                            server.get("name", ""),
+                            hardware.get("serialNumber", ""),
+                            bmc.get("hostname", ""),
+                        ) if value
+                    )
+                seen = set()
+                return [v for v in values if not (v in seen or seen.add(v))]
 
-        return asyncio.run(_fetch())
+            return asyncio.run(_fetch())
+
+        # Cache the full (unfiltered) name list -- tab completion re-invokes
+        # this whole process on every keystroke, and fetching from COM each
+        # time costs a full API round trip (~1-2s) per TAB press.
+        names = cached_names(f"com-servers-{session.region}", _fetch_names)
+        return [v for v in names if v.lower().startswith(prefix.lower())]
     except Exception:  # intentional: completion must never print to stdout
         return []
 

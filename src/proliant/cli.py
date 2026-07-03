@@ -56,13 +56,34 @@ examples:
 """
 
 _POWERSHELL_COMPLETION_BLOCK = """\
-# proliant tab completion (added by proliant)
+# >>> proliant tab completion >>>
 Register-ArgumentCompleter -Native -CommandName proliant -ScriptBlock {
     param($wordToComplete, $commandAst, $cursorPosition)
+
+    # Fast path: top-level namespace/command completion ('proliant <partial>')
+    # is a small fixed list that never changes at runtime. Answer it directly
+    # here so a plain 'proliant <TAB>' never has to spawn a whole new proliant
+    # process (each spawn costs several hundred ms -- very noticeable while
+    # typing). Deeper/dynamic completions (subcommands, live object names)
+    # still fall through to invoking proliant below, unchanged.
+    $rawLine = $commandAst.ToString()
+    $parts = $rawLine -split '\\s+' | Where-Object { $_ -ne '' }
+    $endsWithSpace = $rawLine -match '\\s$'
+    $inSubcommand = ($parts.Count -ge 3) -or $endsWithSpace -or ($cursorPosition -gt $rawLine.Length)
+    $dispatchNamespaces = @('ilo', 'com', 'spp', 'oneview', 'qs', 'setting')
+    $dispatchesToNamespace = $inSubcommand -and $parts.Count -ge 2 -and ($dispatchNamespaces -contains $parts[1])
+    if (-not $dispatchesToNamespace) {
+        $staticCompletions = @('-V', '--version', 'ilo', 'com', 'spp', 'oneview', 'qs', 'setting', 'update')
+        $staticCompletions |
+            Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } |
+            ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, "ParameterValue", $_) }
+        return
+    }
+
     $completion_file = New-TemporaryFile
     $env:ARGCOMPLETE_USE_TEMPFILES = 1
     $env:_ARGCOMPLETE_STDOUT_FILENAME = $completion_file
-    $env:COMP_LINE = $commandAst.ToString()
+    $env:COMP_LINE = $rawLine
     $env:COMP_POINT = $cursorPosition
     $env:_ARGCOMPLETE = 1
     $env:_ARGCOMPLETE_SUPPRESS_SPACE = 0
@@ -89,6 +110,7 @@ Register-ArgumentCompleter -Native -CommandName proliant -ScriptBlock {
 if (-not (Get-PSReadLineKeyHandler | Where-Object { $_.Key -eq 'Tab' -and $_.Function -eq 'MenuComplete' })) {
     Set-PSReadLineKeyHandler -Key Tab -Function MenuComplete
 }
+# <<< proliant tab completion <<<
 """
 
 
@@ -164,6 +186,13 @@ def _windows_first_run_check() -> None:
     never get it. So on the first frozen run we set up completion once, guarded
     by a sentinel in the user-writable config dir (Program Files is read-only
     for a normal user, so the sentinel can't live next to the exe).
+
+    The sentinel records the proliant version that last wrote the completion
+    block. On later runs, if the installed version has changed we re-run the
+    (idempotent) profile update so improvements to the completion block reach
+    already-set-up users after a `proliant update` — without adding the
+    profile-lookup subprocess overhead on every single run. The "enabled"
+    print is only shown once, on the very first setup.
     """
     if sys.platform != "win32":
         return
@@ -179,24 +208,81 @@ def _windows_first_run_check() -> None:
     except OSError:
         return  # can't determine/create config dir — skip silently
 
-    if sentinel.exists():
-        return
+    current_version = _get_current_version()
+    first_run = not sentinel.exists()
+    if not first_run:
+        try:
+            stamped_version = sentinel.read_text(encoding="utf-8").strip()
+        except OSError:
+            stamped_version = ""
+        if stamped_version == current_version:
+            return  # already set up for this version — nothing to do
 
     try:
         _win_add_powershell_completion()
-        _win_check_execution_policy()
-        sentinel.write_text("", encoding="utf-8")
-        print("proliant: PowerShell tab completion enabled.")
-        print("  Open a new PowerShell window to use it.\n")
+        sentinel.write_text(current_version, encoding="utf-8")
+        if first_run:
+            _win_check_execution_policy()
+            print("proliant: PowerShell tab completion enabled.")
+            print("  Open a new PowerShell window to use it.\n")
     except Exception:
         # Never block normal command execution on completion setup.
         pass
 
 
+def _merge_powershell_completion_block(existing: str) -> str | None:
+    """Compute the new profile content with the completion block installed/updated.
+
+    Returns ``None`` if ``existing`` already contains an up-to-date block (the
+    caller should skip writing). This is a pure function (no I/O) so the
+    block-replacement logic — including migration away from older, buggy
+    block formats — can be unit-tested directly.
+    """
+    import re
+
+    if "proliant" in existing and "Register-ArgumentCompleter" in existing:
+        if _POWERSHELL_COMPLETION_BLOCK.strip() in existing:
+            return None  # already up-to-date
+        # Strip any previously-installed block(s). Older versions used a
+        # single "# proliant tab completion (added by proliant)" comment
+        # marker with no unambiguous end marker, which only matched
+        # through the FIRST top-level closing brace and left the
+        # trailing "Show completion menu" if-block behind on every
+        # reinstall/update -- causing it to accumulate duplicate copies
+        # over time. The current format wraps the whole block in
+        # explicit >>> / <<< markers so removal is unambiguous; we also
+        # still strip the legacy marker format for anyone upgrading
+        # from an older install.
+        existing = re.sub(
+            r"\n?# >>> proliant tab completion >>>.*?# <<< proliant tab completion <<<\n?",
+            "\n",
+            existing,
+            flags=re.DOTALL,
+        )
+        existing = re.sub(
+            r"\n?# proliant tab completion \(added by proliant\).*?(?:\n\})+\n?",
+            "\n",
+            existing,
+            flags=re.DOTALL,
+        )
+        # Legacy installs could also have a *separate*, un-marked
+        # "Show completion menu" if-block appended after the old
+        # marker (left behind by the bug above) -- strip any leftover
+        # copies of that exact block too so repeated updates converge
+        # instead of accumulating.
+        existing = re.sub(
+            r"\n?# Show completion menu instead of cycling \(added by proliant\)\s*"
+            r"\n?if \(-not \(Get-PSReadLineKeyHandler.*?\n\}\n?",
+            "\n",
+            existing,
+            flags=re.DOTALL,
+        )
+    return existing.rstrip() + "\n" + _POWERSHELL_COMPLETION_BLOCK
+
+
 def _win_add_powershell_completion() -> None:
     """Append completion block to the actual PowerShell profile(s), resolving OneDrive redirection."""
     import subprocess
-    import re
 
     # Resolve the real $PROFILE path by asking PowerShell — handles OneDrive folder redirection
     def _ps_profile(exe: str) -> str | None:
@@ -233,20 +319,11 @@ def _win_add_powershell_completion() -> None:
             if os.path.exists(profile):
                 with open(profile, encoding="utf-8") as f:
                     existing = f.read()
-            # Replace outdated argcomplete-style block or append if missing
-            if "proliant" in existing and "Register-ArgumentCompleter" in existing:
-                if _POWERSHELL_COMPLETION_BLOCK.strip() in existing:
-                    continue  # already up-to-date
-                # Strip old block (comment marker through its last closing brace)
-                # covering both the old format (no MenuComplete) and new format.
-                existing = re.sub(
-                    r"\n?# proliant tab completion \(added by proliant\).*?(?:\n\})+\n?",
-                    "\n",
-                    existing,
-                    flags=re.DOTALL,
-                )
+            new_content = _merge_powershell_completion_block(existing)
+            if new_content is None:
+                continue  # already up-to-date
             with open(profile, "w", encoding="utf-8") as f:
-                f.write(existing.rstrip() + "\n" + _POWERSHELL_COMPLETION_BLOCK)
+                f.write(new_content)
         except Exception:
             pass  # silently skip if profile write fails
 

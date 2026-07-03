@@ -197,3 +197,63 @@ if ($displayText -ne 'enclosures') {
         timeout=20,
     )
     assert result.returncode == 0, result.stderr or result.stdout
+
+
+def test_powershell_fast_path_skips_process_spawn_for_top_level_completion():
+    """Top-level namespace completion ('proliant i<TAB>') must be answered
+    directly by the PowerShell scriptblock, without ever invoking `proliant`
+    -- process-spawn is the dominant cost of tab completion (~700-850ms per
+    keystroke), and this fast path is what eliminates it. Genuine subcommand
+    completions must still fall through unchanged."""
+    from proliant.cli import _POWERSHELL_COMPLETION_BLOCK
+
+    shell = shutil.which("pwsh") or shutil.which("powershell")
+    if shell is None:
+        return
+
+    # Pull just the scriptblock body out of the real completion block (as a
+    # plain variable instead of a Register-ArgumentCompleter argument) so it
+    # can be invoked directly with synthetic inputs.
+    scriptblock_text = _POWERSHELL_COMPLETION_BLOCK.replace(
+        "Register-ArgumentCompleter -Native -CommandName proliant -ScriptBlock {",
+        "$sb = {",
+    ).split("# Show completion menu")[0]
+
+    driver = r"""
+function proliant { $global:invoked = $true }
+
+$global:invoked = $false
+$results = & $sb 'i' 'proliant i' 10
+if ($global:invoked) { throw 'fast path should not invoke proliant for partial namespace' }
+if (-not (@($results.CompletionText) -contains 'ilo')) {
+    throw "expected 'ilo' in fast-path results: $(@($results.CompletionText) -join ',')"
+}
+if (@($results.CompletionText) -contains '--version') {
+    throw 'unexpected --version for prefix i'
+}
+
+$global:invoked = $false
+$results2 = & $sb 'u' 'proliant u' 10
+if ($global:invoked) { throw 'fast path should not invoke proliant for u prefix' }
+if (@($results2).Count -ne 1 -or $results2[0].CompletionText -ne 'update') {
+    throw "expected only 'update': $(@($results2.CompletionText) -join ',')"
+}
+
+$global:invoked = $false
+$null = & $sb '' 'proliant oneview ' 17
+if (-not $global:invoked) { throw 'trailing-space namespace completion must fall through to proliant' }
+
+$global:invoked = $false
+$null = & $sb '' 'proliant ilo ' 13
+if (-not $global:invoked) { throw 'namespace-prefixed subcommand completion must fall through to proliant' }
+"""
+
+    script = scriptblock_text + "\n" + driver
+    result = subprocess.run(
+        [shell, "-NoLogo", "-NoProfile", "-Command", script],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout

@@ -35,7 +35,6 @@ echo ""
 echo "▶ Core"
 run "proliant --version"            proliant --version
 run "proliant --help"               proliant --help
-run "install-completion (idempotent)" proliant install-completion
 
 echo ""
 echo "▶ iLO — fleet"

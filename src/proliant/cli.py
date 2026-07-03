@@ -31,9 +31,13 @@ namespaces:
 
 commands:
   update               Download and install the latest proliant release
-  install-completion   Enable tab completion for bash/zsh (use: sh install.sh)
 
 Run 'proliant <namespace> --help' for namespace-specific help.
+
+notes:
+  Tab completion for bash/zsh/PowerShell is set up automatically by the
+  installer (install.sh / install.ps1) — there is no 'proliant install-completion'
+  subcommand. Re-run the installer to (re)enable tab completion.
 
 examples:
   proliant ilo firmware list                       Firmware summary across all iLO hosts

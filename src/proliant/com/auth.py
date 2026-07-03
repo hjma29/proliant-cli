@@ -311,6 +311,19 @@ class COMSession:
                 )
                 resp.raise_for_status()
             except httpx.HTTPStatusError as e:
+                # Distinguish an auto-managed GLP temp credential (created by
+                # 'proliant com login') from a user-supplied API client. The
+                # former can be silently revoked/rotated server-side (e.g. by
+                # a login elsewhere cleaning up stale GLP-*-temp-* credentials
+                # for the same account) — surface an actionable hint instead
+                # of the raw HPE JSON error in that case.
+                if (e.response.status_code == 401
+                        and self._glp_client_id
+                        and self.client_id == self._glp_client_id):
+                    raise AuthError(
+                        "Session expired or GLP credential revoked. "
+                        "Run 'proliant com login' to re-authenticate."
+                    ) from e
                 raise AuthError(
                     f"Token fetch failed ({e.response.status_code}): "
                     f"{e.response.text}"

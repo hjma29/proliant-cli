@@ -125,6 +125,22 @@ class TestTokenFetch:
                     await s.ensure_token(client)
 
     @pytest.mark.asyncio
+    async def test_fetch_token_401_glp_credential_gives_friendly_message(self):
+        """A revoked/rotated auto-managed GLP temp credential should tell the
+        user to re-login instead of leaking the raw HPE JSON error."""
+        s = COMSession(client_id="glp-id", client_secret="glp-secret")
+        s._glp_client_id = "glp-id"
+        s._glp_client_secret = "glp-secret"
+
+        with respx.mock:
+            respx.post(TOKEN_URL).mock(return_value=httpx.Response(
+                401, json={"error": "unauthorized_request"}
+            ))
+            async with httpx.AsyncClient() as client:
+                with pytest.raises(AuthError, match="proliant com login"):
+                    await s.ensure_token(client)
+
+    @pytest.mark.asyncio
     async def test_concurrent_token_refresh_only_fetches_once(self):
         """Multiple concurrent coroutines should only trigger one token fetch."""
         import asyncio

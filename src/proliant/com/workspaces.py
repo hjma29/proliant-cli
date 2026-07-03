@@ -64,15 +64,18 @@ async def fetch_workspaces(session: COMSession) -> list[Workspace]:
 
     Corresponds to: Get-HPEGLWorkspace
     """
-    if not session._user_token:
-        raise ValueError(
-            "fetch_workspaces() requires a user OAuth token session. "
-            "Run 'proliant com login' first."
-        )
-
     from proliant.com.login import load_token
     data = load_token()
     cached_ws = (data or {}).get("workspaces", [])
+
+    # A GLP client-credentials session (created at OAuth/Okta login) has
+    # _user_token == False but still carries a cached workspace list from login.
+    # Only reject when we have neither a user token nor any cached workspaces.
+    if not session._user_token and not cached_ws:
+        raise ValueError(
+            "fetch_workspaces() requires a login session. "
+            "Run 'proliant com login' first."
+        )
 
     if cached_ws:
         return [

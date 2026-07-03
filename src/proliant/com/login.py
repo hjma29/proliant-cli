@@ -671,7 +671,12 @@ async def _pick_workspace(
     Returns the chosen workspace dict.
     """
     if len(workspaces) == 1:
-        return workspaces[0]
+        only = workspaces[0]
+        console.print(
+            f"[dim]Only one workspace available — logging in directly to "
+            f"'{only.get('company_name', '')}'.[/dim]"
+        )
+        return only
 
     if workspace_name:
         ws = next((w for w in workspaces if w["company_name"] == workspace_name), None)

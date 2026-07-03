@@ -108,9 +108,26 @@ begin
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
+var
+  DoneMsg: string;
 begin
   if CurStep = ssPostInstall then
     AddToSystemPath();
+  if CurStep = ssDone then
+  begin
+    { proliant update (and any other silent invocation) run with /SILENT, which
+      only shows a progress bar and no wizard "Finished" page -- the installer
+      just disappears with no confirmation. Show one explicitly in that case.
+      Interactive installs already get the standard Finished wizard page, so
+      skip this to avoid a redundant second confirmation. }
+    if WizardSilent then
+    begin
+      DoneMsg := 'proliant-cli {#MyAppVersion} installed successfully.' + #13#10#13#10;
+      DoneMsg := DoneMsg + 'Location: ' + ExpandConstant('{app}') + #13#10#13#10;
+      DoneMsg := DoneMsg + 'Open a new terminal and run ''proliant --version'' to confirm.';
+      MsgBox(DoneMsg, mbInformation, MB_OK);
+    end;
+  end;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

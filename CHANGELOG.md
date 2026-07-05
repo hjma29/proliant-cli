@@ -4,6 +4,16 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ---
 
+## v1.0.16 — 2026-07-05
+
+### New Features
+- `proliant update` (Windows): before installing, now shows the target version, install directory, and how to uninstall later, and asks for confirmation. Use `-y`/`--yes` to skip the prompt for scripted/unattended use.
+
+### Bug Fixes
+- Fixed a rare crash (`ValueError: I/O operation on closed file`) that could happen if the CLI's internal startup routine ran more than once in the same process — hardened the Windows UTF-8 output setup to reconfigure the existing stream instead of creating a duplicate one.
+
+---
+
 ## v1.0.15 — 2026-07-03
 
 ### Enhancements

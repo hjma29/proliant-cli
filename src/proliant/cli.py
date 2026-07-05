@@ -30,7 +30,8 @@ namespaces:
   setting      View and manage proliant configuration
 
 commands:
-  update               Download and install the latest proliant release
+  update [-y|--yes]    Download and install the latest proliant release
+                        (-y/--yes skips the confirmation prompt)
 
 Run 'proliant <namespace> --help' for namespace-specific help.
 
@@ -779,7 +780,67 @@ def _ssl_context():
         return ssl.create_default_context()
 
 
-def _run_update() -> None:
+_UPDATE_USAGE = """\
+usage: proliant update [-y|--yes]
+
+Download and install the latest proliant release.
+  -y, --yes    Skip the confirmation prompt (non-interactive).\
+"""
+
+
+def _update_args_request_help(update_args: list[str]) -> bool:
+    return any(a in ("-h", "--help") for a in update_args)
+
+
+def _update_args_want_auto_confirm(update_args: list[str]) -> bool:
+    return any(a in ("-y", "--yes") for a in update_args)
+
+
+def _win_install_dir_hint() -> str:
+    """Best-effort guess of the current/target install directory, for display only."""
+    try:
+        if is_frozen():
+            return os.path.dirname(_resolve_installed_exe_path())
+    except Exception:
+        pass
+    return os.path.expandvars(r"%ProgramFiles%\proliant-cli")
+
+
+def _confirm_windows_update(latest_ver: str, auto_confirm: bool) -> bool:
+    """Print install-location/uninstall info and get the user's go-ahead.
+
+    On Windows the update runs an elevated GUI installer with /SILENT (no
+    wizard pages), so there's normally no on-screen indication of where files
+    go or how to undo it. Since `proliant update` runs unattended in a
+    terminal (not a wizard the user is already clicking through), surface
+    that information here as plain text and require confirmation before
+    downloading/installing, unless explicitly skipped with -y/--yes.
+
+    Returns True to proceed, False if the user declined. Always returns True
+    (no prompt, no output) on non-Windows platforms, where updates are a
+    simple, already-transparent binary replace.
+    """
+    if sys.platform != "win32":
+        return True
+    install_dir = _win_install_dir_hint()
+    print()
+    print(f"This will install proliant-cli {latest_ver}.")
+    print(f"  Install directory : {install_dir}")
+    print( "  Files are copied directly into that folder (no separate extraction step).")
+    print( "  To uninstall later : Settings > Apps > proliant-cli > Uninstall")
+    print( "                       (or the Uninstall shortcut in the Start Menu).")
+    if auto_confirm:
+        print()
+        return True
+    answer = input("Continue? [Y/n]: ").strip().lower()
+    if answer not in ("", "y", "yes"):
+        print("Update cancelled.")
+        return False
+    print()
+    return True
+
+
+def _run_update(auto_confirm: bool = False) -> None:
     """Download and replace the current proliant binary with the latest GitHub release."""
     import urllib.request
     import json
@@ -826,6 +887,9 @@ def _run_update() -> None:
 
     if current_ver != "dev" and current_ver == latest_ver:
         print("✓ Already up to date.")
+        sys.exit(0)
+
+    if not _confirm_windows_update(latest_ver, auto_confirm):
         sys.exit(0)
 
     # Determine asset name for this platform
@@ -1043,12 +1107,17 @@ def main(argv: list[str] | None = None) -> None:
     # On Windows, stdout/stderr may default to CP1252 when piped, which can't
     # encode Unicode chars used in Rich tables (✓, —, …).  Reconfigure to
     # UTF-8 with replacement so we never raise UnicodeEncodeError at runtime.
+    # Use reconfigure() (in-place) rather than wrapping in a new TextIOWrapper:
+    # wrapping creates a second wrapper around the same underlying buffer, and
+    # if main() ever runs more than once in a process (e.g. repeated calls in
+    # tests), closing/GC'ing the stale wrapper closes the shared buffer out
+    # from under the new one, raising "I/O operation on closed file" later.
     if sys.platform == "win32":
-        import io
-        if hasattr(sys.stdout, "buffer"):
-            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-        if hasattr(sys.stderr, "buffer"):
-            sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+        for _stream in (sys.stdout, sys.stderr):
+            try:
+                _stream.reconfigure(encoding="utf-8", errors="replace")
+            except (AttributeError, ValueError):
+                pass
 
     _init_sentry()
     _windows_first_run_check()
@@ -1145,7 +1214,11 @@ def main(argv: list[str] | None = None) -> None:
     elif namespace == "setting":
         _dispatch_setting(list(args[1:]))
     elif namespace == "update":
-        _run_update()
+        update_args = list(args[1:])
+        if _update_args_request_help(update_args):
+            print(_UPDATE_USAGE)
+            sys.exit(0)
+        _run_update(auto_confirm=_update_args_want_auto_confirm(update_args))
     else:
         print(f"proliant: unknown namespace '{namespace}'\n", file=sys.stderr)
         print(_USAGE)

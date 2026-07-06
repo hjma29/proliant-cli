@@ -225,7 +225,8 @@ def _windows_first_run_check() -> None:
         if first_run:
             _win_check_execution_policy()
             print("proliant: PowerShell tab completion enabled.")
-            print("  Open a new PowerShell window to use it.\n")
+            print("  This window won't have it yet -- run '. $PROFILE' to load it now,")
+            print("  or open a new PowerShell window.\n")
     except Exception:
         # Never block normal command execution on completion setup.
         pass

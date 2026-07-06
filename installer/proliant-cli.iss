@@ -115,18 +115,23 @@ begin
     AddToSystemPath();
   if CurStep = ssDone then
   begin
-    { proliant update (and any other silent invocation) run with /SILENT, which
-      only shows a progress bar and no wizard "Finished" page -- the installer
-      just disappears with no confirmation. Show one explicitly in that case.
-      Interactive installs already get the standard Finished wizard page, so
-      skip this to avoid a redundant second confirmation. }
-    if WizardSilent then
-    begin
-      DoneMsg := 'proliant-cli {#MyAppVersion} installed successfully.' + #13#10#13#10;
-      DoneMsg := DoneMsg + 'Location: ' + ExpandConstant('{app}') + #13#10#13#10;
-      DoneMsg := DoneMsg + 'Open a new terminal and run ''proliant --version'' to confirm.';
-      MsgBox(DoneMsg, mbInformation, MB_OK);
-    end;
+    { The standard Inno "Finished!" wizard page (interactive installs) says
+      nothing about proliant-cli itself, and 'proliant update' (and any other
+      silent invocation) runs with /SILENT, which shows only a progress bar
+      and no wizard pages at all -- the installer would otherwise just
+      disappear with zero guidance either way. Show one explicit message in
+      both cases covering where it installed and how to start using it. }
+    DoneMsg := 'proliant-cli {#MyAppVersion} installed successfully.' + #13#10#13#10;
+    DoneMsg := DoneMsg + 'Location: ' + ExpandConstant('{app}') + #13#10#13#10;
+    DoneMsg := DoneMsg + 'Getting started:' + #13#10;
+    DoneMsg := DoneMsg + '  1. Open a NEW PowerShell window -- this one won''t have' + #13#10;
+    DoneMsg := DoneMsg + '     proliant on PATH or tab completion yet.' + #13#10;
+    DoneMsg := DoneMsg + '  2. Run ''proliant --help'' to see all commands.' + #13#10;
+    DoneMsg := DoneMsg + '  3. Run ''proliant ilo init'' to create a starter inventory.ini' + #13#10;
+    DoneMsg := DoneMsg + '     for your iLO / OneView hosts.' + #13#10#13#10;
+    DoneMsg := DoneMsg + 'Tab completion (proliant i<Tab>) turns on automatically the first' + #13#10;
+    DoneMsg := DoneMsg + 'time you run ''proliant'' in that new window.';
+    MsgBox(DoneMsg, mbInformation, MB_OK);
   end;
 end;
 

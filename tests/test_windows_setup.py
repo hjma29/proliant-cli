@@ -38,6 +38,23 @@ def test_first_run_configures_completion_and_writes_sentinel(monkeypatch, tmp_pa
     assert sentinel.read_text(encoding="utf-8").strip() == "1.0.14"
 
 
+def test_first_run_banner_offers_same_window_remedy(monkeypatch, tmp_path, capsys):
+    """The one-time banner must tell the user how to get completion working
+    in THIS window (not just "open a new one") -- a wrong/unreachable install
+    is often tested in the same terminal the installer just ran in, so
+    '. $PROFILE' is the only remedy that doesn't require starting over."""
+    monkeypatch.setattr(cli, "_win_add_powershell_completion", lambda: None)
+    monkeypatch.setattr(cli, "_win_check_execution_policy", lambda: None)
+    _force_frozen_win32(monkeypatch, tmp_path, version="1.0.14")
+
+    cli._windows_first_run_check()
+
+    out = capsys.readouterr().out
+    assert "enabled" in out
+    assert ". $PROFILE" in out
+    assert "new PowerShell window" in out
+
+
 def test_first_run_is_idempotent_when_sentinel_matches_current_version(monkeypatch, tmp_path):
     (tmp_path / ".win-completion-done").write_text("1.0.14", encoding="utf-8")
     calls = {"completion": 0}

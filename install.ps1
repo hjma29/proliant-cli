@@ -194,6 +194,10 @@ if ($policy -in @('Undefined', 'Restricted')) {
 }
 
 Write-Host ""
-Write-Host "Open a new terminal and run 'proliant --version' to verify." -ForegroundColor Cyan
+Write-Host "Getting started:" -ForegroundColor Cyan
+Write-Host "  Open a new terminal (or run '. `$PROFILE' in this one) so PATH and" -ForegroundColor Cyan
+Write-Host "  tab completion take effect, then:" -ForegroundColor Cyan
+Write-Host "    proliant --help       View all commands" -ForegroundColor Cyan
+Write-Host "    proliant ilo init     Create a starter inventory.ini" -ForegroundColor Cyan
 Write-Host ""
 

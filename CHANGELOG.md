@@ -4,6 +4,13 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ---
 
+## v1.0.17 — 2026-07-05
+
+### Bug Fixes
+- Fixed tab completion not working after a fresh install, even in a brand-new PowerShell window. The GUI installer (`proliant-cli-windows-setup.exe`) never wrote anything into `$PROFILE` itself — completion was only ever set up as a side effect of running a `proliant` command for the first time, so a user who installed and went straight to `proliant i<Tab>` without running any command first got nothing. The installer now triggers that one-time setup itself right after install, so tab completion is already working the first time you open a terminal.
+
+---
+
 ## v1.0.16 — 2026-07-05
 
 ### New Features

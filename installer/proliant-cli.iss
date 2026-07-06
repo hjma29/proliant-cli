@@ -110,9 +110,29 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   DoneMsg: string;
+  ResultCode: Integer;
 begin
   if CurStep = ssPostInstall then
+  begin
     AddToSystemPath();
+    { proliant.exe wires up PowerShell tab completion (writes into $PROFILE)
+      the first time it actually runs -- see _windows_first_run_check() in
+      cli.py. Left alone, that means completion stays broken until the user
+      happens to run some proliant command first, which they usually don't
+      know to do (this is exactly what a real user hit: fresh install ->
+      new PowerShell window -> tab-complete -> nothing, because nothing had
+      ever invoked proliant.exe yet). Trigger that one-time setup ourselves,
+      right now, so completion is already working the first time the user
+      opens a terminal -- no extra step required. Best-effort: this runs
+      elevated (as whichever account approved the UAC prompt -- normally the
+      same signed-in user, just with an elevated token, so $PROFILE/%APPDATA%
+      still resolve correctly); if it's ever a genuinely different account,
+      or this fails for any reason, the ordinary first-run path in
+      proliant.exe still covers it later for the real user -- so it's safe
+      to ignore failures here. }
+    Exec(ExpandConstant('{app}\proliant.exe'), '--version', '', SW_HIDE,
+      ewWaitUntilTerminated, ResultCode);
+  end;
   if CurStep = ssDone then
   begin
     { The standard Inno "Finished!" wizard page (interactive installs) says
@@ -125,12 +145,12 @@ begin
     DoneMsg := DoneMsg + 'Location: ' + ExpandConstant('{app}') + #13#10#13#10;
     DoneMsg := DoneMsg + 'Getting started:' + #13#10;
     DoneMsg := DoneMsg + '  1. Open a NEW PowerShell window -- this one won''t have' + #13#10;
-    DoneMsg := DoneMsg + '     proliant on PATH or tab completion yet.' + #13#10;
+    DoneMsg := DoneMsg + '     proliant on PATH yet.' + #13#10;
     DoneMsg := DoneMsg + '  2. Run ''proliant --help'' to see all commands.' + #13#10;
     DoneMsg := DoneMsg + '  3. Run ''proliant ilo init'' to create a starter inventory.ini' + #13#10;
     DoneMsg := DoneMsg + '     for your iLO / OneView hosts.' + #13#10#13#10;
-    DoneMsg := DoneMsg + 'Tab completion (proliant i<Tab>) turns on automatically the first' + #13#10;
-    DoneMsg := DoneMsg + 'time you run ''proliant'' in that new window.';
+    DoneMsg := DoneMsg + 'Tab completion (proliant i<Tab>) is already set up -- it will work' + #13#10;
+    DoneMsg := DoneMsg + 'as soon as you open that new window.';
     MsgBox(DoneMsg, mbInformation, MB_OK);
   end;
 end;

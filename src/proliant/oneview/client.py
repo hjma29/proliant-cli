@@ -28,6 +28,13 @@ import httpx
 from proliant.common.http import BaseAsyncClient
 
 _TIMEOUT = httpx.Timeout(timeout=60.0, connect=10.0)
+# Tighter timeout used only for the initial handshake (version check + login)
+# so a wrong/unreachable appliance IP fails fast with a clear error instead of
+# leaving the terminal looking frozen for up to the full 60s read timeout.
+# Once authenticated, regular requests still use the more generous _TIMEOUT
+# above, since some genuine operations (large paginated fetches) can
+# legitimately take longer than a login should ever take.
+_CONNECT_TIMEOUT = httpx.Timeout(timeout=8.0, connect=5.0)
 _PAGE_SIZE = 500  # OneView default max is 65535, but 500 is safe and fast
 
 
@@ -69,7 +76,7 @@ class OneViewClient(BaseAsyncClient):
 
         # Step 1: negotiate API version (no auth required)
         try:
-            resp = await self._http.get("/rest/version")
+            resp = await self._http.get("/rest/version", timeout=_CONNECT_TIMEOUT)
             resp.raise_for_status()
             version_data = resp.json()
         except Exception as exc:
@@ -88,6 +95,7 @@ class OneViewClient(BaseAsyncClient):
                     "loginMsgAck": True,
                 },
                 headers=self._headers,
+                timeout=_CONNECT_TIMEOUT,
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:

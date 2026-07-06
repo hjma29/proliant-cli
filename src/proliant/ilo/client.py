@@ -13,8 +13,22 @@ import httpx
 
 from proliant.common.http import BaseAsyncClient
 
-ServerDownOrUnreachableError = httpx.ConnectError
+# Any network/transport-level failure -- unreachable host, DNS failure,
+# connect or read timeout, connection reset, etc. -- as opposed to
+# httpx.HTTPStatusError, which means the server WAS reached but returned an
+# error status. httpx.ConnectTimeout (raised when _CONNECT_TIMEOUT below
+# fires) is a sibling of httpx.ConnectError, not a subclass of it, so a bare
+# `httpx.ConnectError` alias here missed connect-timeout failures entirely
+# (they fell through as unhandled tracebacks instead of a friendly message).
+ServerDownOrUnreachableError = httpx.TransportError
 _TIMEOUT = httpx.Timeout(timeout=60.0, connect=10.0)
+# Tighter timeout used only for the initial login handshake (session POST +
+# root GET) so a wrong/unreachable host fails fast with a clear error instead
+# of leaving the terminal looking frozen for up to the full 60s read timeout.
+# Once authenticated, subsequent requests still use the more generous
+# _TIMEOUT above, since some genuine operations (large inventories, firmware
+# staging) can legitimately take longer than a login should ever take.
+_CONNECT_TIMEOUT = httpx.Timeout(timeout=8.0, connect=5.0)
 
 
 class ILOClient(BaseAsyncClient):
@@ -52,6 +66,7 @@ class ILOClient(BaseAsyncClient):
         resp = await self._http.post(
             "/redfish/v1/SessionService/Sessions",
             json={"UserName": self._username, "Password": self._password},
+            timeout=_CONNECT_TIMEOUT,
         )
         self._raise_for_status(resp, "POST", "/redfish/v1/SessionService/Sessions")
 
@@ -63,7 +78,7 @@ class ILOClient(BaseAsyncClient):
         if not self._session_uri:
             raise RuntimeError("Redfish login succeeded but session @odata.id is missing")
 
-        self._root = await self.get("/redfish/v1/")
+        self._root = await self.get("/redfish/v1/", timeout=_CONNECT_TIMEOUT)
         return self
 
     async def __aexit__(self, *_exc: object) -> None:
@@ -100,19 +115,27 @@ class ILOClient(BaseAsyncClient):
         timeout: httpx.Timeout | float | None = None,
     ) -> httpx.Response:
         http = self._ensure_http()
+        # NOTE: httpx treats an *explicit* timeout=None as "no timeout at all"
+        # (unbounded), not "use the client's default timeout" -- so `timeout`
+        # must be omitted entirely (not forwarded as None) to actually fall
+        # back to the AsyncClient's own _TIMEOUT/_CONNECT_TIMEOUT default.
+        # Passing timeout=None straight through here previously meant every
+        # normal request after login had no timeout bound whatsoever, so a
+        # host that stopped responding mid-session could hang forever.
+        extra: dict[str, Any] = {} if timeout is None else {"timeout": timeout}
         resp = await http.request(
             method,
             uri,
             json=json,
             files=files,
             headers=self._auth_headers,
-            timeout=timeout,
+            **extra,
         )
         self._raise_for_status(resp, method, uri)
         return resp
 
-    async def get(self, uri: str) -> dict[str, Any]:
-        resp = await self.request("GET", uri)
+    async def get(self, uri: str, *, timeout: httpx.Timeout | float | None = None) -> dict[str, Any]:
+        resp = await self.request("GET", uri, timeout=timeout)
         return self._safe_json(resp)
 
     async def post(self, uri: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -187,7 +210,24 @@ class ILOClient(BaseAsyncClient):
 
 
 @asynccontextmanager
-async def ilo_session(host: dict) -> AsyncIterator[ILOClient]:
-    """Yield an authenticated async iLO client for one host."""
-    async with ILOClient(host["url"], host["username"], host["password"]) as client:
+async def ilo_session(host: dict, *, show_hint: bool = False) -> AsyncIterator[ILOClient]:
+    """Yield an authenticated async iLO client for one host.
+
+    If show_hint is True, prints a "Connecting to <name>..." status message
+    for the duration of the login handshake only -- cleared as soon as we get
+    a real response (success or failure). Off by default so tab-completion
+    callbacks and concurrent fleet-wide queries (which drive many overlapping
+    sessions at once, where a single shared spinner would conflict) stay
+    silent; interactive single/sequential-host commands opt in explicitly.
+    """
+    client = ILOClient(host["url"], host["username"], host["password"])
+    if show_hint:
+        from proliant.common.display import get_console  # noqa: PLC0415
+        with get_console().status(f"[dim]Connecting to {host['name']} ({host['url']})…[/dim]"):
+            await client.__aenter__()
+    else:
+        await client.__aenter__()
+    try:
         yield client
+    finally:
+        await client.__aexit__(None, None, None)

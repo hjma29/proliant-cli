@@ -6,7 +6,7 @@ import sys
 
 from proliant.common.display import get_console
 from proliant.ilo import inventory
-from proliant.ilo.client import ILOClient, ServerDownOrUnreachableError
+from proliant.ilo.client import ilo_session, ServerDownOrUnreachableError
 
 
 
@@ -18,8 +18,8 @@ async def run_describe(host: dict) -> None:
 
     console = get_console()
 
-    async with ILOClient(host["url"], host["username"], host["password"]) as c:
-        try:
+    try:
+        async with ilo_session(host, show_hint=True) as c:
             with console.status("[dim]Fetching server details…[/dim]"):
                 # Sequential requests — iLO 6 (Gen11) does not handle concurrent
                 # requests per session reliably; gather caused ConnectError on Gen11.
@@ -33,9 +33,12 @@ async def run_describe(host: dict) -> None:
                 cpus    = await inventory.fetch_cpu_report_data(c)
                 gpus    = await inventory.fetch_gpu_report_data(c)
                 dimms   = await inventory.fetch_memory_population(c)
-        except Exception as exc:
-            console.print(f"[red]Error fetching server details: {type(exc).__name__}: {exc}[/red]")
-            sys.exit(1)
+    except ServerDownOrUnreachableError as exc:
+        console.print(f"[red]{host['name']} unreachable: {exc}[/red]")
+        sys.exit(1)
+    except Exception as exc:
+        console.print(f"[red]Error fetching server details: {type(exc).__name__}: {exc}[/red]")
+        sys.exit(1)
 
     model      = system.get("Model", "—")
     serial     = system.get("SerialNumber", "—")
@@ -230,8 +233,8 @@ async def run_describe_fw_update(host: dict) -> None:
 
     console = get_console()
 
-    async with ILOClient(host["url"], host["username"], host["password"]) as c:
-        try:
+    try:
+        async with ilo_session(host, show_hint=True) as c:
             with console.status("[dim]Fetching firmware update details…[/dim]"):
                 upd_svc    = await c.get("/redfish/v1/UpdateService")
                 fw_list    = await inventory.fetch_firmware_inventory_full(c)
@@ -250,9 +253,12 @@ async def run_describe_fw_update(host: dict) -> None:
                     repo_items  = [await c.get(m["@odata.id"]) for m in repo_col.get("Members", [])]
                 except Exception:
                     repo_items = []
-        except Exception as exc:
-            console.print(f"[red]Error: {type(exc).__name__}: {exc}[/red]")
-            return
+    except ServerDownOrUnreachableError as exc:
+        console.print(f"[red]{host['name']} unreachable: {exc}[/red]")
+        return
+    except Exception as exc:
+        console.print(f"[red]Error: {type(exc).__name__}: {exc}[/red]")
+        return
 
     oem_upd    = (upd_svc.get("Oem") or {}).get("Hpe", {})
     upd_state  = oem_upd.get("State", "—")
@@ -355,13 +361,16 @@ async def run_describe_ilo_nic(host: dict) -> None:
 
     console = get_console()
 
-    async with ILOClient(host["url"], host["username"], host["password"]) as c:
-        try:
+    try:
+        async with ilo_session(host, show_hint=True) as c:
             with console.status("[dim]Fetching iLO NIC details…[/dim]"):
                 nic = await inventory.fetch_ilo_nic_details(c)
-        except Exception as exc:
-            console.print(f"[red]Error fetching iLO NIC details: {type(exc).__name__}: {exc}[/red]")
-            sys.exit(1)
+    except ServerDownOrUnreachableError as exc:
+        console.print(f"[red]{host['name']} unreachable: {exc}[/red]")
+        sys.exit(1)
+    except Exception as exc:
+        console.print(f"[red]Error fetching iLO NIC details: {type(exc).__name__}: {exc}[/red]")
+        sys.exit(1)
 
     if not nic:
         console.print("[red]No iLO EthernetInterface data found.[/red]")

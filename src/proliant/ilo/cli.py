@@ -823,7 +823,7 @@ async def _run_set_dhcp(args: argparse.Namespace) -> None:
     for host in hosts:
         name = host["name"]
         try:
-            async with ilo_session(host) as client:
+            async with ilo_session(host, show_hint=True) as client:
                 interface_uri, reset_target = await _manager_network_targets(client)
                 # Check current state first
                 data = await client.get(interface_uri)
@@ -918,7 +918,7 @@ async def _run_set_static(args: argparse.Namespace) -> None:
     for host in hosts:
         name = host["name"]
         try:
-            async with ilo_session(host) as client:
+            async with ilo_session(host, show_hint=True) as client:
                 interface_uri, reset_target = await _manager_network_targets(client)
                 data = await client.get(interface_uri)
 
@@ -1016,7 +1016,7 @@ async def _run_set_route(args: argparse.Namespace) -> None:
     for host in hosts:
         name = host["name"]
         try:
-            async with ilo_session(host) as client:
+            async with ilo_session(host, show_hint=True) as client:
                 interface_uri, reset_target = await _manager_network_targets(client)
                 data    = await client.get(interface_uri)
                 oem_hpe = (data.get("Oem") or {}).get("Hpe", {})
@@ -1098,7 +1098,9 @@ async def _run_get(args: argparse.Namespace) -> None:
     hosts = _load_hosts_or_exit(getattr(args, "host", None), getattr(args, "hosts_from", None))
     raw = getattr(args, "raw", False)
     fetch_fn = _RAW_DISPATCH[what] if raw else _FETCH_DISPATCH[what]
-    results = await _run_parallel_async(hosts, fetch_fn)
+    noun = "host" if len(hosts) == 1 else "hosts"
+    with get_console().status(f"[dim]Querying {len(hosts)} {noun}…[/dim]"):
+        results = await _run_parallel_async(hosts, fetch_fn)
 
     # --json output mode: emit structured data and return
     if get_output_mode() == OutputMode.JSON:
@@ -1158,7 +1160,7 @@ async def _run_set_ipmi(args: argparse.Namespace) -> None:
     host = _load_hosts_or_exit(args.host)[0]
     enabled = args.state == "enable"
     try:
-        async with ilo_session(host) as client:
+        async with ilo_session(host, show_hint=True) as client:
             resp = await client.patch(
                 "/redfish/v1/Managers/1/NetworkProtocol/",
                 {"IPMI": {"ProtocolEnabled": enabled}},
@@ -1180,7 +1182,7 @@ async def _run_uid(args: argparse.Namespace) -> None:
     host = _load_hosts_or_exit(args.host)[0]
     turn_on = args.uid_action == "on"
     try:
-        async with ilo_session(host) as client:
+        async with ilo_session(host, show_hint=True) as client:
             sys_uri = await client.get_system_uri()
             system  = await client.get(sys_uri)
             # iLO 7 uses LocationIndicatorActive (bool); iLO 6 uses IndicatorLED (str)
@@ -1208,7 +1210,7 @@ async def _run_power(args: argparse.Namespace) -> None:
     host = _load_hosts_or_exit(args.host)[0]
 
     try:
-        async with ilo_session(host) as client:
+        async with ilo_session(host, show_hint=True) as client:
             if action == "reset":
                 result = await reset_server(
                     client,
@@ -1254,7 +1256,7 @@ async def _run_boot(args: argparse.Namespace) -> None:
     host = _load_hosts_or_exit(args.host)[0]
 
     try:
-        async with ilo_session(host) as client:
+        async with ilo_session(host, show_hint=True) as client:
             if action == "show":
                 result = await fetch_boot_order(client)
             elif action == "pxe":
@@ -1381,7 +1383,7 @@ async def _run_bios(args: argparse.Namespace) -> None:
     host = _load_hosts_or_exit(args.host)[0]
     action = args.bios_action
     try:
-        async with ilo_session(host) as client:
+        async with ilo_session(host, show_hint=True) as client:
             if action == "show":
                 pending = getattr(args, "pending", False)
                 attrs = await fetch_bios(client, pending=pending)
@@ -1421,7 +1423,7 @@ async def _run_license(args: argparse.Namespace) -> None:
     elif action == "set":
         host = _load_hosts_or_exit(args.host)[0]
         try:
-            async with ilo_session(host) as client:
+            async with ilo_session(host, show_hint=True) as client:
                 await apply_license_key(client, args.key)
         except ServerDownOrUnreachableError as exc:
             print(f"ERROR: {host['name']} unreachable: {exc}", file=sys.stderr)
@@ -1439,7 +1441,8 @@ async def _cmd_describe(args: argparse.Namespace) -> None:
         sys.exit(1)
     if getattr(args, "ilo_nic", False):
         if getattr(args, "raw", False):
-            results = await _run_parallel_async(hosts[:1], inventory.fetch_ilo_nic_raw)
+            with get_console().status(f"[dim]Connecting to {hosts[0]['name']} ({hosts[0]['url']})…[/dim]"):
+                results = await _run_parallel_async(hosts[:1], inventory.fetch_ilo_nic_raw)
             _print_raw_table(results)
         else:
             await run_describe_ilo_nic(hosts[0])

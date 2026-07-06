@@ -13,6 +13,7 @@ import argparse
 import asyncio
 import re
 import sys
+from contextlib import asynccontextmanager
 
 
 from rich import box
@@ -42,12 +43,29 @@ def _short_server_name(name: str) -> str:
 
 
 def _load_client():
-    """Return a connected OneViewClient context manager."""
+    """Yield a connected OneViewClient, showing a "Connecting..." hint.
+
+    A wrong/unreachable appliance host previously left the terminal looking
+    frozen with zero feedback until the login handshake finally timed out.
+    Print a status hint for the duration of the connect/login only -- it
+    disappears the moment we get a real response (success or failure).
+    """
     from proliant.oneview.config import load_oneview_config
     from proliant.oneview.client import OneViewClient
 
     cfg = load_oneview_config()
-    return OneViewClient(cfg["host"], cfg["username"], cfg["password"])
+    client = OneViewClient(cfg["host"], cfg["username"], cfg["password"])
+
+    @asynccontextmanager
+    async def _connect():
+        with get_console().status(f"[dim]Connecting to OneView at {cfg['host']}…[/dim]"):
+            await client.__aenter__()
+        try:
+            yield client
+        finally:
+            await client.__aexit__(None, None, None)
+
+    return _connect()
 
 
 def _oneview_cached_object_names(cache_key: str, uri: str) -> list[str]:

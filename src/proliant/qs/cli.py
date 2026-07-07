@@ -32,6 +32,12 @@ _SEP_RE = re.compile(r"^\|[\s\-:|]+\|")
 _OPTION_ENTRY_RE = re.compile(r"HPE\s+(.*?)\s+([A-Z]\d{5}-[A-Z]\d{2})", re.DOTALL)
 _PAGE_NUM_RE = re.compile(r"\bPage\s+\d+\b", re.I)
 
+# html2text renders <table> rows as 'cell |  cell  ' — trailing double-space, no leading |
+# Pattern: non-whitespace + anything + whitespace + pipe (trailing space after | is optional)
+_HTML2TEXT_PIPE_ROW_RE = re.compile(r"\S.*\s\|")
+# SKU/part-number pattern: P79656-B21, R7A11AAE, S6C28AAE (all-caps, no spaces, short)
+_SKU_RE = re.compile(r"^[A-Z][A-Z0-9]{3,}(-[A-Z0-9]+)?$")
+
 
 def _parse_md_row(line: str) -> list[str]:
     """Parse '| **A** | [B](url) | C |' → ['A', 'B', 'C']."""
@@ -155,6 +161,104 @@ def _split_sections(markdown: str) -> list[tuple[str, str]]:
     return result
 
 
+def _is_html2text_pipe_row(line: str) -> bool:
+    """Detect html2text table rows: 'cell |  cell  ' (no leading pipe).
+
+    html2text converts <td> rows to 'cell1 |  cell2  ' with a trailing double-space.
+    The fallback ` | ` pattern catches the rare row without trailing spaces.
+    """
+    s = line.rstrip()
+    if not s or s.lstrip().startswith("|") or s.lstrip().startswith("#"):
+        return False
+    return bool(_HTML2TEXT_PIPE_ROW_RE.search(s))
+
+
+def _normalize_html2text_row(line: str) -> str:
+    """Convert html2text 'a |  b |  c  ' → '| a | b | c |'."""
+    cells = [c.strip() for c in line.rstrip().split("|")]
+    while cells and not cells[-1]:
+        cells.pop()
+    return "| " + " | ".join(cells) + " |"
+
+
+def _render_html2text_table(raw_lines: list[str]) -> None:
+    """Render a block of html2text pipe rows as a Rich table.
+
+    Multi-column blocks (spec tables like processor tables) treat the first row
+    as a column header.  Two-column blocks (options lists like Core Options) treat
+    all rows as data with the right column rendered as a part/SKU number.
+    """
+    if not raw_lines:
+        return
+    normalized = [_normalize_html2text_row(ln) for ln in raw_lines]
+
+    # Determine format by inspecting all rows:
+    #  - Options list: at least one row has a SKU/part# in the right cell
+    #  - Spec table: first row has multiple column-header cells
+    #  - Single-column block: standalone notes row → render as plain text
+    first_cells = _parse_md_row(normalized[0])
+    col_count = len(first_cells)
+
+    if col_count == 1:
+        # Standalone notes/context row — render as plain Markdown, not a table
+        text = "\n\n".join(
+            _parse_md_row(ln)[0] for ln in normalized if _parse_md_row(ln)
+        )
+        get_console().print(Markdown(text))
+        return
+
+    def _cell_is_sku(ln: str) -> bool:
+        cells = _parse_md_row(ln)
+        if not cells:
+            return False
+        last = cells[-1].strip()
+        return bool(_SKU_RE.match(last)) and " " not in last
+
+    is_options_list = col_count <= 2 and any(_cell_is_sku(ln) for ln in normalized)
+
+    if not is_options_list:
+        # Spec table: first row is the column header.
+        # Build directly (not via _render_md_table) so we can set no_wrap on col 0
+        # to prevent model names like "6710E Processor" from wrapping.
+        header_row = _parse_md_row(normalized[0])
+        data_rows = [_parse_md_row(ln) for ln in normalized[1:] if not _SEP_RE.match(ln)]
+        col_count = len(header_row)
+        col_opts = [{"no_wrap": True}] + [{}] * max(0, col_count - 1)
+        t = make_table(
+            "",
+            *[(h, opt) for h, opt in zip(header_row, col_opts)],
+            box_style=box.SIMPLE_HEAD,
+            show_header=bool(any(header_row)),
+            header_style="bold",
+            padding=(0, 1),
+        )
+        for row in data_rows:
+            padded = (row + [""] * col_count)[:col_count]
+            t.add_row(*padded)
+        get_console().print(t)
+        return
+
+    # Options list: 2-col, all rows are data.  Rows with an empty right column
+    # are notes/context lines and are rendered dim/full-width.
+    t = make_table(
+        "",
+        ("", {"ratio": 5}),
+        ("", {"style": "cyan", "no_wrap": True, "justify": "right"}),
+        box_style=box.SIMPLE,
+        show_header=False,
+        padding=(0, 1),
+    )
+    for ln in normalized:
+        cells = _parse_md_row(ln)
+        desc = cells[0] if cells else ""
+        pn   = cells[1] if len(cells) > 1 else ""
+        if not pn:
+            t.add_row(f"[dim]{desc}[/dim]", "")
+        else:
+            t.add_row(desc, pn)
+    get_console().print(t)
+
+
 def _render_section_body(body: str) -> None:
     """Render section body: Rich tables for markdown tables, option-list tables
     for HPE drive/accessory entries, and Markdown for everything else."""
@@ -174,15 +278,23 @@ def _render_section_body(body: str) -> None:
 
     i = 0
     while i < len(lines):
-        if lines[i].startswith("|"):
+        line = lines[i]
+        if line.startswith("|"):
             _flush_pending()
             table_lines = []
             while i < len(lines) and lines[i].startswith("|"):
                 table_lines.append(lines[i])
                 i += 1
             _render_md_table(table_lines)
+        elif _is_html2text_pipe_row(line):
+            _flush_pending()
+            table_lines = []
+            while i < len(lines) and _is_html2text_pipe_row(lines[i]):
+                table_lines.append(lines[i])
+                i += 1
+            _render_html2text_table(table_lines)
         else:
-            pending.append(lines[i])
+            pending.append(line)
             i += 1
     _flush_pending()
 

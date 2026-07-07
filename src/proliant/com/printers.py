@@ -86,8 +86,7 @@ def _fmt_os_name(d) -> str:
     """OS hostname (secondary_name); — colored by device type if absent."""
     name = (d.raw.get("secondary_name") or d.raw.get("secondaryName") or "").strip()
     if name and name.lower() not in _UNNAMED_OS:
-        display = name[:17] + "…" if len(name) > 18 else name
-        return f"[cyan]{display}[/cyan]"
+        return f"[cyan]{name}[/cyan]"
     return "[cyan]—[/cyan]" if _is_compute(d) else "[grey70]—[/grey70]"
 
 
@@ -95,7 +94,7 @@ def _fmt_ilo_name(d) -> str:
     """iLO hostname (name/deviceName); — colored by device type if absent."""
     name = d.raw.get("name") or d.raw.get("deviceName") or ""
     if name:
-        return name[:17] + "…" if len(name) > 18 else name
+        return name
     return "—" if _is_compute(d) else "[grey70]—[/grey70]"
 
 
@@ -141,9 +140,9 @@ def _fmt_type(d) -> str:
 _DEVICE_FIELDS: dict = {
     "device":   ("Device",    "default",    {"no_wrap": True, "min_width": 14, "ratio": 3},
                  lambda d, _u: _fmt_device_cell(d)),
-    "os-name":  ("OS Name",   "default",    {"no_wrap": True, "ratio": 2, "max_width": 18},
+    "os-name":  ("OS Name",   "default",    {"no_wrap": True, "min_width": 10, "max_width": 36},
                  lambda d, _u: _fmt_os_name(d)),
-    "ilo-name": ("iLO Name",  "green",      {"no_wrap": True, "ratio": 2, "max_width": 18},
+    "ilo-name": ("iLO Name",  "green",      {"no_wrap": True, "min_width": 10, "max_width": 36},
                  lambda d, _u: _fmt_ilo_name(d)),
     "name":     ("Name",      "bold cyan",  {"no_wrap": True, "ratio": 4},
                  lambda d, _u: d.display_name),

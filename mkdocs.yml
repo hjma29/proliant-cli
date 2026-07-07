@@ -1,4 +1,4 @@
-site_name: proliant-cli
+site_name: Proliant CLI
 site_description: >-
   HPE ProLiant CLI — iLO Redfish, Compute Ops Management, and Synergy OneView
   from your terminal.
@@ -7,6 +7,9 @@ repo_name: hjma29/proliant-cli
 repo_url: https://github.com/hjma29/proliant-cli
 edit_uri: edit/main/docs/
 docs_dir: docs
+
+extra_css:
+  - stylesheets/extra.css
 
 nav:
   - Getting Started: index.md

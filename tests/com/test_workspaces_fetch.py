@@ -32,7 +32,7 @@ class TestFetchWorkspacesRefresh:
 
         with patch(
             "proliant.com.login.load_token",
-            return_value={"id_token": "idtok", "workspaces": [WS_CACHED]},
+            return_value={"ccs_session": "cookie", "workspaces": [WS_CACHED]},
         ), patch(
             "proliant.com.login.refresh_workspaces",
             new_callable=AsyncMock,
@@ -50,7 +50,7 @@ class TestFetchWorkspacesRefresh:
 
         with patch(
             "proliant.com.login.load_token",
-            return_value={"id_token": "idtok", "workspaces": [WS_CACHED]},
+            return_value={"ccs_session": "cookie", "workspaces": [WS_CACHED]},
         ), patch(
             "proliant.com.login.refresh_workspaces",
             new_callable=AsyncMock,
@@ -62,13 +62,13 @@ class TestFetchWorkspacesRefresh:
 
     @pytest.mark.asyncio
     async def test_no_id_token_skips_live_refresh(self, monkeypatch):
-        """A pure --api-client/GLP session has no id_token -- must not attempt
-        a live refresh call at all, just use the cache."""
+        """A pure --api-client/GLP session has no ccs_session -- must not
+        attempt a live refresh call at all, just use the cache."""
         session = _fake_session()
 
         with patch(
             "proliant.com.login.load_token",
-            return_value={"workspaces": [WS_CACHED]},  # no id_token
+            return_value={"workspaces": [WS_CACHED]},  # no ccs_session
         ), patch(
             "proliant.com.login.refresh_workspaces",
             new_callable=AsyncMock,
@@ -84,7 +84,7 @@ class TestFetchWorkspacesRefresh:
 
         with patch(
             "proliant.com.login.load_token",
-            return_value={"id_token": "idtok", "workspaces": [WS_CACHED]},
+            return_value={"ccs_session": "cookie", "workspaces": [WS_CACHED]},
         ), patch(
             "proliant.com.login.refresh_workspaces",
             new_callable=AsyncMock,

@@ -60,11 +60,11 @@ async def fetch_workspaces(session: COMSession, refresh: bool = True) -> list[Wo
     """Return all workspaces for the current account.
 
     By default, refreshes the workspace list live from GreenLake first (using
-    the cached access/id token — no re-login required) so a workspace created
-    or joined after the last 'proliant com login' shows up immediately. Falls
-    back to the cached list from token.json if the live refresh isn't possible
-    (e.g. a pure --api-client session with no id_token) or fails.
-    Marks the currently active workspace with active=True.
+    the cached access token + ccs-session cookie — no re-login required) so a
+    workspace created or joined after the last 'proliant com login' shows up
+    immediately. Falls back to the cached list from token.json if the live
+    refresh isn't possible (e.g. a pure --api-client session with no
+    ccs_session) or fails. Marks the currently active workspace with active=True.
 
     Corresponds to: Get-HPEGLWorkspace
     """
@@ -83,7 +83,7 @@ async def fetch_workspaces(session: COMSession, refresh: bool = True) -> list[Wo
         )
 
     ws_list = cached_ws
-    if refresh and data and data.get("id_token"):
+    if refresh and data and data.get("ccs_session"):
         try:
             ws_list = await _refresh_workspaces()
         except Exception:

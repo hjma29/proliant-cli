@@ -600,6 +600,55 @@ async def _exchange_token(
 # Workspace session (ccs-session cookie)
 # ---------------------------------------------------------------------------
 
+async def _fetch_list_accounts(access_token: str, ccs_session: str) -> list:
+    """
+    GET /accounts/ui/v1/customer/list-accounts → self-service (IAMv2) workspaces.
+
+    This is a *separate* workspace universe from /authn/v1/session's "accounts"
+    list. /authn/v1/session only returns the IAMv1 "home org" a user was
+    invited into (e.g. a company workspace someone else created and added you
+    to). Workspaces a user creates themselves via GreenLake self-signup
+    (IAMv2, e.g. via the "Create workspace" button in the GUI) never appear
+    there -- they only show up via this list-accounts endpoint. Also note this
+    endpoint excludes whatever workspace is *currently* active/loaded.
+
+    Best-effort: requires a valid ccs-session cookie (returns [] without one).
+    Any failure here must not break login/refresh -- callers merge this with
+    the /authn/v1/session result and fall back to that alone if this is empty.
+    """
+    if not ccs_session:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(
+                f"{USER_API_BASE}/accounts/ui/v1/customer/list-accounts",
+                params={"count_per_page": 50},
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Accept": "application/json",
+                },
+                cookies={"ccs-session": ccs_session},
+            )
+            if r.status_code != 200:
+                return []
+            return r.json().get("customers", []) or []
+    except Exception:
+        return []
+
+
+def _merge_workspaces(primary: list, extra: list) -> list:
+    """Merge two workspace lists, deduped by platform_customer_id.
+    Entries in `primary` win on conflict; unique `extra` entries are appended."""
+    merged = list(primary)
+    seen = {w.get("platform_customer_id") for w in primary}
+    for w in extra:
+        pcid = w.get("platform_customer_id")
+        if pcid not in seen:
+            merged.append(w)
+            seen.add(pcid)
+    return merged
+
+
 async def _init_workspace_session(
     access_token: str,
     id_token: str,
@@ -607,6 +656,11 @@ async def _init_workspace_session(
     """
     POST /authn/v1/session → returns (active_workspaces_list, initial_ccs_session).
     Does NOT load a workspace yet.
+
+    Also merges in self-service (IAMv2) workspaces from list-accounts (see
+    _fetch_list_accounts) so workspaces the user created themselves -- not
+    just ones they were invited to -- are offered at login / shown in
+    listings.
     """
     async with httpx.AsyncClient(timeout=15) as client:
         r = await client.post(
@@ -627,14 +681,19 @@ async def _init_workspace_session(
             w for w in data.get("accounts", [])
             if w.get("account_status") == "ACTIVE"
         ]
-        if not workspaces:
-            raise AuthFlowError("No active workspaces found in HPE GreenLake account.")
         ccs_session = ""
         for c in client.cookies.jar:
             if c.name == "ccs-session":
                 ccs_session = c.value
                 break
-        return workspaces, ccs_session
+
+    extra = await _fetch_list_accounts(access_token, ccs_session)
+    extra = [w for w in extra if w.get("account_status") == "ACTIVE"]
+    workspaces = _merge_workspaces(workspaces, extra)
+
+    if not workspaces:
+        raise AuthFlowError("No active workspaces found in HPE GreenLake account.")
+    return workspaces, ccs_session
 
 
 async def _load_workspace(
@@ -1108,19 +1167,30 @@ async def refresh_workspaces() -> list:
     """Fetch a live workspace list from HPE GreenLake and update the cached
     'workspaces' list in token.json.
 
-    Uses the cached access/id token — no re-login required. This is what
-    makes a workspace created/joined *after* the last 'proliant com login'
-    show up without a full re-authentication. Does NOT change the currently
-    active workspace (workspace_id/ccs_session are left untouched).
+    Uses the cached access token + ccs-session cookie — no re-login required.
+    This is what makes a workspace created/joined *after* the last
+    'proliant com login' show up without a full re-authentication. Does NOT
+    change the currently active workspace (workspace_id/ccs_session are left
+    untouched).
+
+    Deliberately does NOT re-POST /authn/v1/session (i.e. does not call
+    _init_workspace_session): that call requires the original OAuth id_token,
+    which HPE only accepts for ~5 minutes after issuance ("JWT token is older
+    than 5 minute(s)" 412), so it would fail on almost every real-world call
+    to this function (which by definition happens sometime *after* login).
+    Instead this merges the durable IAMv1 "invited org" accounts already
+    cached from login with a fresh live call to list-accounts for self-service
+    (IAMv2) workspaces, which only needs the independently-refreshable
+    access_token + ccs-session cookie.
 
     Raises CredentialsError if not logged in, or if the cached session has no
-    id_token (e.g. a pure --api-client/GLP client-credentials session that
+    ccs_session (e.g. a pure --api-client/GLP client-credentials session that
     never went through the Okta user login flow).
     """
     data = load_token()
     if not data:
         raise CredentialsError("Not logged in. Run 'proliant com login' first.")
-    if not data.get("id_token"):
+    if not data.get("ccs_session"):
         raise CredentialsError(
             "Refreshing the workspace list requires a user login session. "
             "Run 'proliant com login' (not --api-client) first."
@@ -1130,8 +1200,12 @@ async def refresh_workspaces() -> list:
     data = await refresh_token_if_needed() or data
 
     access_token = data.get("access_token", "")
-    id_token = data.get("id_token", "")
-    workspaces, _throwaway_ccs = await _init_workspace_session(access_token, id_token)
+    ccs_session = data.get("ccs_session", "")
+    cached_workspaces = data.get("workspaces", [])
+
+    extra = await _fetch_list_accounts(access_token, ccs_session)
+    extra = [w for w in extra if w.get("account_status") == "ACTIVE"]
+    workspaces = _merge_workspaces(cached_workspaces, extra)
 
     data["workspaces"] = workspaces
     TOKEN_CACHE.write_text(json.dumps(data, indent=2))
@@ -1148,6 +1222,10 @@ async def switch_workspace(name_or_id: str) -> str:
     If the workspace isn't found in the cached list (e.g. it was created or
     joined after the last login), automatically refreshes the workspace list
     live from GreenLake and retries before giving up.
+
+    Also regenerates the workspace-scoped GLP API credential used for
+    compute-ops-mgmt calls (com devices/servers/bundles/...) -- see the
+    comment above the credential-reset block below for why this is required.
     """
     data = load_token()
     if not data:
@@ -1209,6 +1287,32 @@ async def switch_workspace(name_or_id: str) -> str:
     data["workspace_id"]   = new_ws_id
     data["workspace_name"] = new_ws_name
     data["ccs_session"]    = ccs_session
+
+    # Regenerate the GLP API credential for the new workspace. The GLP
+    # client-credentials token used for all compute-ops-mgmt API calls
+    # (devices, servers, bundles, ...) is scoped to whatever workspace_id it
+    # was created for -- normally at 'proliant com login' time. Without this,
+    # 'com devices list' (and everything else hitting compute-ops-mgmt) would
+    # silently keep returning data from the OLD workspace after switching,
+    # even though 'com workspace use' reports success. Clear the old
+    # credential/token fields first so a stale (still "valid" but
+    # wrong-workspace) cached glp_access_token is never reused if regeneration
+    # fails -- callers should see COM API calls fail loudly rather than
+    # silently return the wrong workspace's data.
+    data["glp_client_id"] = ""
+    data["glp_client_secret"] = ""
+    data["glp_credential_name"] = ""
+    data["glp_access_token"] = ""
+    data["glp_token_expires_at"] = 0
+    try:
+        glp_cred = await create_glp_api_credential(access_token, ccs_session, new_ws_id)
+        if glp_cred:
+            data["glp_client_id"]       = glp_cred["client_id"]
+            data["glp_client_secret"]   = glp_cred["client_secret"]
+            data["glp_credential_name"] = glp_cred.get("name", "")
+    except Exception:
+        pass  # GLP credential creation is best-effort, same as at login
+
     TOKEN_CACHE.write_text(json.dumps(data, indent=2))
     TOKEN_CACHE.chmod(0o600)
     return new_ws_name  # return resolved name for display

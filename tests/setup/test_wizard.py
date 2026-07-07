@@ -28,6 +28,87 @@ def test_prompt_name_rejects_empty_and_reserved_and_duplicate_then_accepts():
 
 
 # ---------------------------------------------------------------------------
+# _open_in_editor
+# ---------------------------------------------------------------------------
+
+def test_open_in_editor_missing_file_does_nothing(tmp_path):
+    missing = tmp_path / "nope.ini"
+    with patch("subprocess.run") as run, patch("os.startfile", create=True) as startfile:
+        wiz._open_in_editor(missing)
+    run.assert_not_called()
+    startfile.assert_not_called()
+
+
+def test_open_in_editor_prefers_editor_env(tmp_path, monkeypatch):
+    path = tmp_path / "inv.ini"
+    path.write_text("[srv1]\nhost = 10.0.0.5\n")
+    monkeypatch.setenv("EDITOR", "myeditor --wait")
+    monkeypatch.delenv("VISUAL", raising=False)
+    with patch("subprocess.run") as run:
+        wiz._open_in_editor(path)
+    run.assert_called_once_with(["myeditor", "--wait", str(path)], check=False)
+
+
+def test_open_in_editor_windows_uses_startfile(tmp_path, monkeypatch):
+    path = tmp_path / "inv.ini"
+    path.write_text("[srv1]\nhost = 10.0.0.5\n")
+    monkeypatch.delenv("EDITOR", raising=False)
+    monkeypatch.delenv("VISUAL", raising=False)
+    with patch.object(wiz.sys, "platform", "win32"), patch(
+        "os.startfile", create=True
+    ) as startfile:
+        wiz._open_in_editor(path)
+    startfile.assert_called_once_with(str(path))
+
+
+# ---------------------------------------------------------------------------
+# _backup_ini rotation
+# ---------------------------------------------------------------------------
+
+def test_backup_ini_noop_when_source_missing(tmp_path):
+    dest = tmp_path / "inventory.ini"
+    wiz._backup_ini(dest)  # must not raise
+    assert not (tmp_path / "inventory.ini.bak1").exists()
+
+
+def test_backup_ini_creates_bak1_on_first_save(tmp_path):
+    dest = tmp_path / "inventory.ini"
+    dest.write_text("v1")
+    wiz._backup_ini(dest)
+    assert (tmp_path / "inventory.ini.bak1").read_text() == "v1"
+
+
+def test_backup_ini_rotates_and_caps_at_three(tmp_path):
+    dest = tmp_path / "inventory.ini"
+    # Simulate four successive saves of distinct contents.
+    for content in ["v1", "v2", "v3", "v4"]:
+        dest.write_text(content)
+        wiz._backup_ini(dest)
+
+    # After 4 backups, only the 3 most recent snapshots survive.
+    # Each _backup_ini copies the *current* file to .bak1 before the next write.
+    assert (tmp_path / "inventory.ini.bak1").read_text() == "v4"
+    assert (tmp_path / "inventory.ini.bak2").read_text() == "v3"
+    assert (tmp_path / "inventory.ini.bak3").read_text() == "v2"
+    # 'v1' has aged out.
+    assert not (tmp_path / "inventory.ini.bak4").exists()
+
+
+def test_save_ini_makes_backup_of_previous_version(tmp_path):
+    dest = tmp_path / "inventory.ini"
+    cfg = configparser.ConfigParser(interpolation=None)
+    cfg.add_section("srv1")
+    cfg.set("srv1", "host", "10.0.0.5")
+    wiz._save_ini(cfg, dest)  # first save -- nothing to back up yet
+    assert not (tmp_path / "inventory.ini.bak1").exists()
+
+    cfg.set("srv1", "host", "10.0.0.6")
+    wiz._save_ini(cfg, dest)  # second save -- backs up the first version
+    backup = _read_cfg(tmp_path / "inventory.ini.bak1")
+    assert backup.get("srv1", "host") == "10.0.0.5"
+
+
+# ---------------------------------------------------------------------------
 # _add_ilo_server
 # ---------------------------------------------------------------------------
 
@@ -408,8 +489,8 @@ def test_prompt_menu_reprompts_on_invalid_then_out_of_range_then_accepts():
 async def test_run_setup_wizard_creates_new_file(tmp_path):
     dest = tmp_path / "inventory.ini"
     # menu: Add(1)/Done(2) -> "1"; kind: iLO(1)/OneView(2) -> "1"; then fields;
-    # loop again with 1 entry -> Add(1)/Edit(2)/Delete(3)/Done(4) -> "4"
-    prompt_answers = iter(["1", "1", "srv1", "10.0.0.5", "Administrator", "4"])
+    # loop again with 1 entry -> Add(1)/Edit(2)/Delete(3)/Open(4)/Done(5) -> "5"
+    prompt_answers = iter(["1", "1", "srv1", "10.0.0.5", "Administrator", "5"])
 
     with patch("rich.prompt.Prompt.ask", side_effect=lambda *a, **kw: next(prompt_answers)), \
          patch.object(wiz, "prompt_password_async", AsyncMock(return_value="hunter2")), \
@@ -425,9 +506,9 @@ async def test_run_setup_wizard_merges_into_existing_file(tmp_path):
     dest = tmp_path / "inventory.ini"
     dest.write_text("[defaults]\nusername = Administrator\npassword = defaultpass\n\n[existing1]\nhost = 10.0.0.9\n")
 
-    # starts with 1 entry -> Add(1)/Edit(2)/Delete(3)/Done(4) -> "1"; kind iLO(1)/OneView(2) -> "1";
-    # then fields; loop again with 2 entries -> Done is "4"
-    prompt_answers = iter(["1", "1", "srv2", "10.0.0.10", "localadmin", "4"])
+    # starts with 1 entry -> Add(1)/Edit(2)/Delete(3)/Open(4)/Done(5) -> "1"; kind iLO(1)/OneView(2) -> "1";
+    # then fields; loop again with 2 entries -> Done is "5"
+    prompt_answers = iter(["1", "1", "srv2", "10.0.0.10", "localadmin", "5"])
 
     with patch("rich.prompt.Prompt.ask", side_effect=lambda *a, **kw: next(prompt_answers)), \
          patch.object(wiz, "prompt_password_async", AsyncMock(return_value="p@ss%word")), \
@@ -460,7 +541,7 @@ async def test_run_setup_wizard_adds_oneview_when_confirmed(tmp_path):
     prompt_answers = iter([
         "1", "1", "srv1", "10.0.0.5", "Administrator",              # menu:add, kind:ilo -- add iLO server
         "1", "2", "oneview", "10.0.0.100", "Administrator",         # menu:add, kind:oneview -- add OneView appliance
-        "4",                                                         # menu:done (2 entries now, done is #4)
+        "5",                                                         # menu:done (2 entries now, done is #5)
     ])
 
     with patch("rich.prompt.Prompt.ask", side_effect=lambda *a, **kw: next(prompt_answers)), \
@@ -483,7 +564,7 @@ async def test_run_setup_wizard_edit_then_delete(tmp_path):
     prompt_answers = iter([
         "2", "1", "srv1", "10.0.0.6", "Administrator",  # menu:edit -- select #1, keep name, new host, same username
         "3", "1",                                # menu:delete -- select #1
-        "2",                                     # menu:done (0 entries now, Add(1)/Done(2))
+        "3",                                     # menu:done (0 entries now, Add(1)/Open(2)/Done(3))
     ])
     confirm_answers = iter([True])  # confirm the deletion
 
@@ -779,7 +860,7 @@ async def test_run_setup_wizard_checks_statuses_at_start_for_existing_entries(tm
     dest = tmp_path / "inventory.ini"
     dest.write_text("[srv1]\nhost = 10.0.0.5\nusername = Administrator\n")
 
-    prompt_answers = iter(["4"])  # menu:done immediately (1 entry -> Done is #4)
+    prompt_answers = iter(["5"])  # menu:done immediately (1 entry -> Done is #5)
 
     with patch("rich.prompt.Prompt.ask", side_effect=lambda *a, **kw: next(prompt_answers)), \
          patch.object(wiz, "_test_ilo", AsyncMock(return_value=(True, "Connected successfully."))) as fake_test, \
@@ -798,7 +879,7 @@ async def test_run_setup_wizard_checks_statuses_at_start_for_existing_entries(tm
 async def test_run_setup_wizard_skips_status_check_when_no_entries(tmp_path):
     dest = tmp_path / "inventory.ini"
 
-    prompt_answers = iter(["2"])  # menu:done immediately (0 entries -> Add(1)/Done(2))
+    prompt_answers = iter(["3"])  # menu:done immediately (0 entries -> Add(1)/Open(2)/Done(3))
 
     with patch("rich.prompt.Prompt.ask", side_effect=lambda *a, **kw: next(prompt_answers)), \
          patch.object(wiz, "_test_ilo", AsyncMock(return_value=(True, "Connected successfully."))) as fake_test:

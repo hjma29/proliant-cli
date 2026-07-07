@@ -16,6 +16,9 @@ ilorest_logs/
 
 .venv/
 
+# uv lockfile — project uses setuptools/pip, uv is not part of the workflow
+uv.lock
+
 # Release build artifacts (attached to GitHub Releases, not committed)
 proliant-cli-windows.zip
 proliant-cli-macos
@@ -24,6 +27,8 @@ proliant-cli-linux
 # Cursor editor
 .cursor/
 inventory.ini
+# setup wizard rotating backups (contain the same credentials as inventory.ini)
+inventory.ini.bak*
 
 # Obsidian editor
 .obsidian/

@@ -4,6 +4,15 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ---
 
+## v1.0.21 — 2026-07-08
+
+### Enhancements
+- `proliant setup`: the server name prompt is now labeled "Server alias (friendly label)" with a hint explaining it's a short label you choose (used with `--host`; it need not match the iLO or OS hostname).
+- `proliant setup`: added an "Open inventory.ini in editor" menu option that opens the config in your `$EDITOR`/`$VISUAL` (falling back to the OS default handler), then offers to reload and re-test connections.
+- `proliant setup`: now keeps automatic rotating backups of `inventory.ini` (the last 3 versions, as `inventory.ini.bak1`–`.bak3`) before saving any change, so an accidental edit or deletion can be recovered.
+
+---
+
 ## v1.0.20 — 2026-07-08
 
 ### New Features

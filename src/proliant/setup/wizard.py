@@ -14,6 +14,10 @@ from __future__ import annotations
 
 import asyncio
 import configparser
+import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import httpx
@@ -30,7 +34,8 @@ _INI_HEADER = (
     "# proliant inventory.ini -- created by 'proliant setup'\n"
     "#\n"
     "# [defaults]  shared iLO credentials (can be overridden per server)\n"
-    "# [section]   one section per server; section name = display name\n"
+    "# [section]   one section per server; section name = friendly alias you\n"
+    "#             choose (used with --host; need not match the iLO or OS hostname)\n"
     "#             'host' is the only required field (IP or hostname, no https://)\n"
     "# add 'type = oneview' to a section to store a OneView appliance instead\n"
     "# of an iLO host -- 'proliant ilo' commands skip those automatically.\n"
@@ -59,8 +64,37 @@ def _load_ini(dest: Path) -> configparser.ConfigParser:
     return cfg
 
 
+_MAX_BACKUPS = 3
+
+
+def _backup_ini(dest: Path) -> None:
+    """Rotate up to _MAX_BACKUPS copies of *dest* before it is overwritten.
+
+    Newest backup is '<name>.bak1', oldest is '<name>.bak{_MAX_BACKUPS}'.
+    Rotation shifts each existing backup up by one (bak1->bak2, ...), drops
+    anything past the limit, then copies the current file to '.bak1'. A missing
+    source file (first-ever save) is a no-op. Backup failures never block the
+    save -- they only print a warning.
+    """
+    if not dest.exists():
+        return
+    try:
+        # Drop the oldest, then shift the rest up one slot.
+        oldest = dest.with_name(f"{dest.name}.bak{_MAX_BACKUPS}")
+        if oldest.exists():
+            oldest.unlink()
+        for i in range(_MAX_BACKUPS - 1, 0, -1):
+            src = dest.with_name(f"{dest.name}.bak{i}")
+            if src.exists():
+                src.replace(dest.with_name(f"{dest.name}.bak{i + 1}"))
+        shutil.copy2(dest, dest.with_name(f"{dest.name}.bak1"))
+    except OSError as exc:  # pragma: no cover - filesystem/permission specific
+        console.print(f"  [yellow]Could not back up {dest.name} ({type(exc).__name__}: {exc}).[/yellow]")
+
+
 def _save_ini(cfg: configparser.ConfigParser, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
+    _backup_ini(dest)
     with dest.open("w", encoding="utf-8") as fh:
         fh.write(_INI_HEADER + "\n")
         cfg.write(fh)
@@ -168,6 +202,41 @@ def _prompt_menu(options: list[tuple[str, str]], prompt: str = "  Select", defau
         return keys[idx - 1]
 
 
+def _open_in_editor(path: Path) -> None:
+    """Open *path* in the user's default editor/handler, cross-platform.
+
+    Prefers the $EDITOR (or $VISUAL) environment variable when set, so users
+    can control which editor launches. Falls back to the OS default handler:
+    os.startfile on Windows, 'open' on macOS, 'xdg-open' on Linux.
+    """
+    if not path.exists():
+        console.print(f"  [red]File does not exist yet: {path}[/red]")
+        return
+
+    editor = os.environ.get("VISUAL") or os.environ.get("EDITOR")
+    try:
+        if editor:
+            subprocess.run([*editor.split(), str(path)], check=False)
+        elif sys.platform.startswith("win"):
+            os.startfile(str(path))  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            subprocess.run(["open", str(path)], check=False)
+        else:
+            opener = shutil.which("xdg-open")
+            if opener:
+                subprocess.run([opener, str(path)], check=False)
+            else:
+                console.print(
+                    "  [yellow]No editor found. Set $EDITOR or open the file manually:[/yellow]"
+                )
+                console.print(f"  [bold]{path}[/bold]")
+                return
+        console.print(f"  [green]Opened {path} in your editor.[/green]")
+    except Exception as exc:  # pragma: no cover - platform/editor specific
+        console.print(f"  [red]Could not open editor ({type(exc).__name__}: {exc}).[/red]")
+        console.print(f"  Edit the file manually: [bold]{path}[/bold]")
+
+
 async def _test_ilo(host: str, username: str, password: str) -> tuple[bool, str]:
     """Try to log into an iLO host. Returns (ok, message).
 
@@ -264,11 +333,18 @@ async def _check_all_statuses(cfg: configparser.ConfigParser, entries: list[str]
     return dict(zip(entries, results))
 
 
-def _prompt_name(existing: set[str], label: str, default: str | None = None) -> str:
+def _prompt_name(
+    existing: set[str],
+    label: str,
+    default: str | None = None,
+    hint: str | None = None,
+) -> str:
+    if hint:
+        console.print(f"  [dim]{hint}[/dim]")
     while True:
-        name = Prompt.ask(f"  {label} name", default=default).strip()
+        name = Prompt.ask(f"  {label}", default=default).strip()
         if not name:
-            console.print("  [red]Name cannot be empty.[/red]")
+            console.print("  [red]An alias is required -- pick a short label for this server.[/red]")
             continue
         if name.lower() == "defaults":
             console.print("  [red]'defaults' is reserved -- pick another name.[/red]")
@@ -287,7 +363,12 @@ async def _add_ilo_server(
 ) -> bool:
     """Prompt for one iLO server, test it, and save. Returns True if added."""
     console.print("\n[bold cyan]Add an iLO server[/bold cyan]")
-    name = _prompt_name(existing, "Server")
+    name = _prompt_name(
+        existing,
+        "Server alias (friendly label)",
+        hint="A short label you choose, e.g. 'dl380-prod'. Used with --host; "
+        "need not match the iLO or OS hostname.",
+    )
     host = Prompt.ask("  iLO IP / hostname").strip()
     if not host:
         console.print("  [red]Host cannot be empty -- skipping this entry.[/red]")
@@ -332,7 +413,7 @@ async def _add_oneview(
 ) -> bool:
     """Prompt for a OneView appliance, test it, and save. Returns True if added."""
     console.print("\n[bold cyan]Add a OneView appliance[/bold cyan]")
-    name = _prompt_name(existing, "OneView section", default="oneview")
+    name = _prompt_name(existing, "OneView section name", default="oneview")
     host = Prompt.ask("  OneView appliance IP / hostname").strip()
     if not host:
         console.print("  [red]Host cannot be empty -- skipping.[/red]")
@@ -379,7 +460,7 @@ async def _edit_ilo_server(
     current_pass = cfg.get(name, "password", fallback=default_pass)
 
     others = (existing or set()) - {name.lower()}
-    new_name = _prompt_name(others, "Server", default=name)
+    new_name = _prompt_name(others, "Server alias (friendly label)", default=name)
     host = Prompt.ask("  iLO IP / hostname", default=current_host).strip() or current_host
     username = Prompt.ask("  Username", default=current_user).strip() or current_user
     password = await prompt_password_async("  Password (leave blank to keep unchanged): ")
@@ -540,11 +621,16 @@ async def run_setup_wizard(dest: Path | None = None) -> None:
                     ("add", "Add a new entry"),
                     ("edit", "Edit an entry"),
                     ("delete", "Delete an entry"),
+                    ("open", "Open inventory.ini in editor"),
                     ("done", "Done"),
                 ]
                 default = "done"
             else:
-                options = [("add", "Add a new entry"), ("done", "Done")]
+                options = [
+                    ("add", "Add a new entry"),
+                    ("open", "Open inventory.ini in editor"),
+                    ("done", "Done"),
+                ]
                 default = "add"
             console.print("\n[bold]What would you like to do?[/bold]")
             action = _prompt_menu(options, default=default)
@@ -564,6 +650,22 @@ async def run_setup_wizard(dest: Path | None = None) -> None:
                 await _edit_entry(cfg, entries, dest, statuses, existing)
             elif action == "delete":
                 await _delete_entry(cfg, entries, existing, dest, statuses)
+            elif action == "open":
+                if not dest.exists():
+                    _save_ini(cfg, dest)
+                _open_in_editor(dest)
+                if Confirm.ask(
+                    "  Reload inventory.ini and re-test connections when you're done editing?",
+                    default=True,
+                ):
+                    cfg = _load_ini(dest)
+                    existing = _existing_names(cfg)
+                    entries = _entries(cfg)
+                    if entries:
+                        console.print("\nTesting connections...")
+                        statuses = await _check_all_statuses(cfg, entries)
+                    else:
+                        statuses = {}
     except (KeyboardInterrupt, EOFError):
         console.print("\n\n[yellow]Setup interrupted.[/yellow]")
         if _entries(cfg):

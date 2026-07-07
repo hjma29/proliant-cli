@@ -1084,11 +1084,70 @@ async def get_glp_api_token(client_id: str, client_secret: str, workspace_id: st
         return None
 
 
+def _match_workspace(workspaces: list, name_or_id: str) -> Optional[dict]:
+    """Match a workspace by exact name (case-insensitive), ID, or substring;
+    falls back to fuzzy matching on company name. Returns None if no match."""
+    needle = name_or_id.lower()
+    target = next(
+        (w for w in workspaces
+         if w.get("company_name", "").lower() == needle
+         or w.get("platform_customer_id", "") == name_or_id
+         or needle in w.get("company_name", "").lower()),
+        None,
+    )
+    if not target:
+        import difflib
+        names = [w.get("company_name", "") for w in workspaces]
+        close = difflib.get_close_matches(name_or_id, names, n=1, cutoff=0.6)
+        if close:
+            target = next(w for w in workspaces if w.get("company_name") == close[0])
+    return target
+
+
+async def refresh_workspaces() -> list:
+    """Fetch a live workspace list from HPE GreenLake and update the cached
+    'workspaces' list in token.json.
+
+    Uses the cached access/id token — no re-login required. This is what
+    makes a workspace created/joined *after* the last 'proliant com login'
+    show up without a full re-authentication. Does NOT change the currently
+    active workspace (workspace_id/ccs_session are left untouched).
+
+    Raises CredentialsError if not logged in, or if the cached session has no
+    id_token (e.g. a pure --api-client/GLP client-credentials session that
+    never went through the Okta user login flow).
+    """
+    data = load_token()
+    if not data:
+        raise CredentialsError("Not logged in. Run 'proliant com login' first.")
+    if not data.get("id_token"):
+        raise CredentialsError(
+            "Refreshing the workspace list requires a user login session. "
+            "Run 'proliant com login' (not --api-client) first."
+        )
+
+    # Make sure the access token isn't stale before calling the API.
+    data = await refresh_token_if_needed() or data
+
+    access_token = data.get("access_token", "")
+    id_token = data.get("id_token", "")
+    workspaces, _throwaway_ccs = await _init_workspace_session(access_token, id_token)
+
+    data["workspaces"] = workspaces
+    TOKEN_CACHE.write_text(json.dumps(data, indent=2))
+    TOKEN_CACHE.chmod(0o600)
+    return workspaces
+
+
 async def switch_workspace(name_or_id: str) -> str:
     """Switch the active workspace by name or platform_customer_id.
 
     Re-uses the existing access token + ccs-session to call load-account,
     then updates token.json. No re-login required.
+
+    If the workspace isn't found in the cached list (e.g. it was created or
+    joined after the last login), automatically refreshes the workspace list
+    live from GreenLake and retries before giving up.
     """
     data = load_token()
     if not data:
@@ -1100,23 +1159,20 @@ async def switch_workspace(name_or_id: str) -> str:
             "No workspace list cached. Run 'proliant com login' to refresh."
         )
 
-    # Match by exact name (case-insensitive), ID, or partial substring
-    needle = name_or_id.lower()
-    target = next(
-        (w for w in workspaces
-         if w.get("company_name", "").lower() == needle
-         or w.get("platform_customer_id", "") == name_or_id
-         or needle in w.get("company_name", "").lower()),
-        None,
-    )
+    target = _match_workspace(workspaces, name_or_id)
 
-    # Fall back to fuzzy match
+    # Not found -- it may have been created/joined after the last login.
+    # Refresh live and retry before giving up.
     if not target:
-        import difflib
-        names = [w.get("company_name", "") for w in workspaces]
-        close = difflib.get_close_matches(name_or_id, names, n=1, cutoff=0.6)
-        if close:
-            target = next(w for w in workspaces if w.get("company_name") == close[0])
+        try:
+            workspaces = await refresh_workspaces()
+        except CredentialsError:
+            pass
+        else:
+            # Reload -- refresh_workspaces() may have rotated the access/refresh
+            # token as well as the workspace list; don't clobber that below.
+            data = load_token() or data
+            target = _match_workspace(workspaces, name_or_id)
 
     if not target:
         names = [w.get("company_name", "") for w in workspaces]

@@ -56,15 +56,20 @@ class Workspace:
 # Fetch functions
 # ---------------------------------------------------------------------------
 
-async def fetch_workspaces(session: COMSession) -> list[Workspace]:
+async def fetch_workspaces(session: COMSession, refresh: bool = True) -> list[Workspace]:
     """Return all workspaces for the current account.
 
-    Uses the cached workspace list from token.json (saved at login).
+    By default, refreshes the workspace list live from GreenLake first (using
+    the cached access/id token — no re-login required) so a workspace created
+    or joined after the last 'proliant com login' shows up immediately. Falls
+    back to the cached list from token.json if the live refresh isn't possible
+    (e.g. a pure --api-client session with no id_token) or fails.
     Marks the currently active workspace with active=True.
 
     Corresponds to: Get-HPEGLWorkspace
     """
-    from proliant.com.login import load_token
+    from proliant.com.login import load_token, refresh_workspaces as _refresh_workspaces
+
     data = load_token()
     cached_ws = (data or {}).get("workspaces", [])
 
@@ -77,10 +82,17 @@ async def fetch_workspaces(session: COMSession) -> list[Workspace]:
             "Run 'proliant com login' first."
         )
 
-    if cached_ws:
+    ws_list = cached_ws
+    if refresh and data and data.get("id_token"):
+        try:
+            ws_list = await _refresh_workspaces()
+        except Exception:
+            ws_list = cached_ws  # best-effort -- fall back to the cached list
+
+    if ws_list:
         return [
             Workspace.from_api(ws, session._workspace_id, session.region)
-            for ws in cached_ws
+            for ws in ws_list
         ]
 
     # Fallback: build a single-entry list from session fields

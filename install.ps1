@@ -92,10 +92,10 @@ Register-ArgumentCompleter -Native -CommandName proliant -ScriptBlock {
     $parts = $rawLine -split '\s+' | Where-Object { $_ -ne '' }
     $endsWithSpace = $rawLine -match '\s$'
     $inSubcommand = ($parts.Count -ge 3) -or $endsWithSpace -or ($cursorPosition -gt $rawLine.Length)
-    $dispatchNamespaces = @('ilo', 'com', 'spp', 'oneview', 'setting')
+    $dispatchNamespaces = @('ilo', 'com', 'oneview', 'spp', 'setting')
     $dispatchesToNamespace = $inSubcommand -and $parts.Count -ge 2 -and ($dispatchNamespaces -contains $parts[1])
     if (-not $dispatchesToNamespace) {
-        $staticCompletions = @('-V', '--version', 'ilo', 'com', 'spp', 'oneview', 'setting', 'setup', 'update')
+        $staticCompletions = @('ilo', 'com', 'oneview', 'spp', 'setting', 'setup', 'version')
         $staticCompletions |
             Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } |
             ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, "ParameterValue", $_) }

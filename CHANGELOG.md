@@ -4,12 +4,23 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ---
 
+## v1.0.22 — 2026-07-09
+
+### Enhancements
+- **Breaking:** `proliant update` and the `-V`/`--version` flag have been replaced by a single `proliant version` command — it prints the installed version and, if a newer release is available on GitHub, offers to install it (`-y`/`--yes` to skip the confirmation prompt).
+- **Breaking:** `proliant setting list inventory` has been removed — `proliant setup` already covers viewing/adding/editing/deleting inventory.ini entries. `proliant setting list cli-tree` is now simply `proliant setting cli-tree`.
+- Namespaces are now listed/dispatched in `ilo` -> `com` -> `oneview` -> `spp` -> `setting` order everywhere (top-level help, tab completion, `setting cli-tree`).
+- Removed "unified" marketing language from the CLI help text and README — just "HPE ProLiant CLI".
+
+---
+
 ## v1.0.21 — 2026-07-08
 
 ### Enhancements
 - `proliant setup`: the server name prompt is now labeled "Server alias (friendly label)" with a hint explaining it's a short label you choose (used with `--host`; it need not match the iLO or OS hostname).
 - `proliant setup`: added an "Open inventory.ini in editor" menu option that opens the config in your `$EDITOR`/`$VISUAL` (falling back to the OS default handler), then offers to reload and re-test connections.
 - `proliant setup`: now keeps automatic rotating backups of `inventory.ini` (the last 3 versions, as `inventory.ini.bak1`–`.bak3`) before saving any change, so an accidental edit or deletion can be recovered.
+- `proliant update`: now sends an anonymous, best-effort update ping (counts updates by OS, matching the one-liner install counter) so self-updates are tracked too. No personal data is sent; set `PROLIANT_NO_TELEMETRY=1` to opt out.
 
 ---
 

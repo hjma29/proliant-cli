@@ -59,11 +59,11 @@ def test_main_can_run_multiple_times_in_one_process_without_io_error(monkeypatch
     """
     import proliant.cli as cli
 
-    monkeypatch.setattr(sys, "argv", ["proliant", "--version"])
+    monkeypatch.setattr(sys, "argv", ["proliant", "-h"])
 
     for _ in range(3):
         with pytest.raises(SystemExit):
-            cli.main(["--version"])
+            cli.main(["-h"])
         # Writing again after main() has run must not raise even if
         # sys.stdout/sys.stderr were reconfigured on a prior call.
         print("still writable")

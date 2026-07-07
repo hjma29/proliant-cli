@@ -45,7 +45,7 @@ WizardStyle=modern
 ; broadcast WM_SETTINGCHANGE so new terminals pick up PATH without a reboot.
 ChangesEnvironment=yes
 ; Close & restart the app automatically if proliant.exe is running during an
-; in-place update (e.g. launched by `proliant update`).
+; in-place update (e.g. launched by `proliant version`'s upgrade flow).
 CloseApplications=yes
 RestartApplications=no
 UninstallDisplayName={#MyAppName} {#MyAppVersion}
@@ -65,7 +65,7 @@ Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
 ; Adds a checked-by-default checkbox to the Finished wizard page so users can
 ; jump straight into a shell instead of having to go find/open one themselves.
 ; Prefers Windows Terminal (if installed) over plain powershell.exe. Skipped
-; entirely for silent installs (e.g. `proliant update`'s background
+; entirely for silent installs (e.g. `proliant version`'s background
 ; self-update) -- postinstall/Finished-page entries never appear there anyway,
 ; but skipifsilent is added defensively to match the rest of this file.
 Filename: "{code:GetTerminalExe}"; Description: "Launch a new terminal"; Flags: postinstall skipifsilent nowait
@@ -153,13 +153,13 @@ begin
       or this fails for any reason, the ordinary first-run path in
       proliant.exe still covers it later for the real user -- so it's safe
       to ignore failures here. }
-    Exec(ExpandConstant('{app}\proliant.exe'), '--version', '', SW_HIDE,
+    Exec(ExpandConstant('{app}\proliant.exe'), '-h', '', SW_HIDE,
       ewWaitUntilTerminated, ResultCode);
   end;
   if CurStep = ssDone then
   begin
     { The standard Inno "Finished!" wizard page (interactive installs) says
-      nothing about proliant-cli itself, and 'proliant update' (and any other
+      nothing about proliant-cli itself, and 'proliant version' (and any other
       silent invocation) runs with /SILENT, which shows only a progress bar
       and no wizard pages at all -- the installer would otherwise just
       disappear with zero indication of where it went. Show one explicit,

@@ -33,7 +33,7 @@ echo "════════════════════════�
 
 echo ""
 echo "▶ Core"
-run "proliant --version"            proliant --version
+run "proliant version"               proliant version
 run "proliant --help"               proliant --help
 
 echo ""

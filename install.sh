@@ -210,5 +210,5 @@ EOF
 fi
 
 echo ""
-echo "Run 'proliant --version' to verify."
+echo "Run 'proliant version' to verify."
 echo ""

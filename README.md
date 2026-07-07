@@ -1,6 +1,6 @@
-# HPE ProLiant Unified CLI
+# HPE ProLiant CLI
 
-**proliant** is a unified CLI for HPE ProLiant environments. It lets you retrieve and inspect server inventory and details across **HPE ProLiant iLO**, **Compute Ops Management (COM)**, and **Synergy OneView** — and includes built-in tools to browse **HPE Service Pack for ProLiant (SPP)** release contents directly from the terminal.
+**proliant** is a CLI for HPE ProLiant environments. It lets you retrieve and inspect server inventory and details across **HPE ProLiant iLO**, **Compute Ops Management (COM)**, and **Synergy OneView** — and includes built-in tools to browse **HPE Service Pack for ProLiant (SPP)** release contents directly from the terminal.
 
 Whether you manage a handful of bare-metal servers or a large fleet across multiple management platforms, `proliant` gives you a single consistent interface — cross-platform, no Python required. Query firmware versions across hundreds of iLO nodes in seconds, browse your Compute Ops Management device inventory, or inspect servers managed by HPE Synergy OneView — all without opening a browser or logging into a GUI.
 
@@ -30,9 +30,12 @@ folder to your PATH, and creates an Add/Remove Programs entry.
 
 ## Screenshots
 
-![proliant demo](docs/demo.gif)
+![proliant demo](docs/assets/demo.gif)
 
-![proliant demo](docs/demo.svg)
+![proliant demo](docs/assets/demo.svg)
+
+Full docs with per-page screenshots and videos:
+[hjma29.github.io/proliant-cli](https://hjma29.github.io/proliant-cli/)
 
 ## Usage
 
@@ -169,5 +172,5 @@ proliant spp diff <version1> <version2>          # Compare two SPP releases
 ## Self-update
 
 ```bash
-proliant update                                  # Update to the latest release
+proliant version                                 # Show installed version; offers to upgrade if a newer release exists
 ```

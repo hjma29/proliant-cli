@@ -1,5 +1,5 @@
 """
-proliant.cli — top-level dispatcher for the HPE ProLiant unified CLI.
+proliant.cli — top-level dispatcher for the HPE ProLiant CLI.
 
 Usage:
     proliant ilo <command>    HPE iLO direct Redfish management
@@ -17,20 +17,20 @@ from proliant.common.platform import is_frozen
 
 
 _USAGE = """\
-usage: proliant [-h] [-V] NAMESPACE ...
+usage: proliant [-h] NAMESPACE ...
 
-HPE ProLiant unified CLI
+HPE ProLiant CLI
 
 namespaces:
   ilo          Direct iLO Redfish management (firmware, inventory, power)
   com          HPE GreenLake / Compute Ops Management (devices, workspaces)
-  spp          HPE Service Pack for ProLiant catalog analysis
   oneview      HPE OneView (Synergy & ProLiant fleet management)
+  spp          HPE Service Pack for ProLiant catalog analysis
   setting      View and manage proliant configuration
 
 commands:
   setup                Guided menu to view/add/edit/delete inventory.ini entries (iLO/OneView)
-  update [-y|--yes]    Download and install the latest proliant release
+  version [-y|--yes]   Show installed version; offers to upgrade if a newer release exists
                         (-y/--yes skips the confirmation prompt)
 
 Run 'proliant <namespace> --help' for namespace-specific help.
@@ -45,14 +45,13 @@ examples:
   proliant ilo firmware upgrade myilo             Upgrade firmware via HPE SDR
   proliant com login                               Login to HPE GreenLake
   proliant com devices list                         List GreenLake devices
+  proliant oneview servers list                    List all OneView-managed servers
+  proliant oneview firmware list                   Fleet firmware inventory via OneView
   proliant spp list                                List available gen12 SPP versions
   proliant spp inspect gen12 2026.03.00.00         Analyse a gen12 SPP catalog
   proliant spp diff gen12 2025.09.01.00 2026.03.00.00  What changed between SPPs?
-  proliant oneview servers list                    List all OneView-managed servers
-  proliant oneview firmware list                   Fleet firmware inventory via OneView
-  proliant setting list inventory                  Show iLO hosts and OneView in inventory.ini
   proliant setup                                    Guided menu to manage your iLO/OneView inventory
-  proliant update                                  Upgrade proliant to the latest release
+  proliant version                                 Show version, offers to upgrade if newer exists
 """
 
 _POWERSHELL_COMPLETION_BLOCK = """\
@@ -70,10 +69,10 @@ Register-ArgumentCompleter -Native -CommandName proliant -ScriptBlock {
     $parts = $rawLine -split '\\s+' | Where-Object { $_ -ne '' }
     $endsWithSpace = $rawLine -match '\\s$'
     $inSubcommand = ($parts.Count -ge 3) -or $endsWithSpace -or ($cursorPosition -gt $rawLine.Length)
-    $dispatchNamespaces = @('ilo', 'com', 'spp', 'oneview', 'setting')
+    $dispatchNamespaces = @('ilo', 'com', 'oneview', 'spp', 'setting')
     $dispatchesToNamespace = $inSubcommand -and $parts.Count -ge 2 -and ($dispatchNamespaces -contains $parts[1])
     if (-not $dispatchesToNamespace) {
-        $staticCompletions = @('-V', '--version', 'ilo', 'com', 'spp', 'oneview', 'setting', 'setup', 'update')
+        $staticCompletions = @('ilo', 'com', 'oneview', 'spp', 'setting', 'setup', 'version')
         $staticCompletions |
             Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } |
             ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, "ParameterValue", $_) }
@@ -190,7 +189,7 @@ def _windows_first_run_check() -> None:
     The sentinel records the proliant version that last wrote the completion
     block. On later runs, if the installed version has changed we re-run the
     (idempotent) profile update so improvements to the completion block reach
-    already-set-up users after a `proliant update` — without adding the
+    already-set-up users after a `proliant version` upgrade — without adding the
     profile-lookup subprocess overhead on every single run. The "enabled"
     print is only shown once, on the very first setup.
     """
@@ -383,6 +382,39 @@ def _win_check_execution_policy() -> None:
 
 _GITHUB_REPO = "hjma29/proliant-cli"
 
+# Cloudflare Worker that counts install/update events by OS (no personal data).
+# The install.ps1 / install.sh one-liners ping /install/{windows,unix}; the
+# self-updater below pings /update/{windows,unix}.
+_TELEMETRY_BASE = "https://proliant-cli.hjma29.workers.dev"
+
+
+def _telemetry_send(url: str) -> None:
+    """Perform the actual telemetry GET. Swallows every error by design."""
+    try:
+        import urllib.request
+
+        req = urllib.request.Request(url, headers={"User-Agent": "proliant-updater"})
+        urllib.request.urlopen(req, timeout=5, context=_ssl_context()).close()
+    except Exception:
+        pass
+
+
+def _ping_telemetry(path: str) -> None:
+    """Fire a best-effort, non-blocking telemetry ping (counts events by OS).
+
+    Runs in a daemon thread so it can never delay or break the command, and
+    swallows all errors. Set PROLIANT_NO_TELEMETRY=1 to opt out.
+    """
+    if os.environ.get("PROLIANT_NO_TELEMETRY"):
+        return
+    url = f"{_TELEMETRY_BASE}{path}"
+    try:
+        import threading
+
+        threading.Thread(target=_telemetry_send, args=(url,), daemon=True).start()
+    except Exception:
+        pass
+
 
 
 # Static zsh completion script — kept as reference/fallback. Not used by default.
@@ -395,7 +427,6 @@ _proliant() {
   typeset -A opt_args
   _arguments -C \
     '(-h --help)'{-h,--help}'[show help]' \
-    '(-V --version)'{-V,--version}'[show version]' \
     '1: :_proliant__ns' \
     '*:: :->args'
   case $state in
@@ -418,7 +449,7 @@ _proliant__ns() {
     'oneview:HPE OneView fleet management'
     'setting:View and manage proliant configuration'
     'setup:Guided menu to manage inventory.ini (view/add/edit/delete)'
-    'update:Upgrade proliant to the latest release'
+    'version:Show version and check for updates'
   )
   _describe 'namespace' ns
 }
@@ -667,7 +698,7 @@ _proliant__oneview_cmds() {
 }
 
 _proliant__setting() {
-  _arguments '1: :(list telemetry uninstall)' '2: :(inventory cli-tree on off)'
+  _arguments '1: :(cli-tree telemetry uninstall)' '2: :(on off)'
 }
 
 _proliant "$@"
@@ -693,83 +724,45 @@ def _get_current_version() -> str:
         return "dev"
 
 
-def _check_for_update_hint() -> None:
-    """Print a one-liner hint if a newer version is available.
+def _resolve_github_token() -> str:
+    """Return a GitHub token to use for API calls, or '' if none is available.
 
-    Checks GitHub at most once per 24 hours; result cached in
-    ~/.cache/proliant/update-check.json. The network call is fire-and-forget
-    (subprocess) so it never blocks the CLI.
+    Prefers the GITHUB_TOKEN env var; falls back to the gh CLI's cached token
+    (works for private repos without any manual setup on the user's part).
     """
-    import json
-    import time
-
-    from proliant.common import cache_dir as _cache_dir
-    cache_dir = str(_cache_dir())
-    cache_file = os.path.join(cache_dir, "update-check.json")
-
-    current = _get_current_version()
-    if current == "dev":
-        return  # skip in dev/editable installs
-
-    latest: str | None = None
-    now = time.time()
-
-    # ── read cache ────────────────────────────────────────────────────────────
-    try:
-        with open(cache_file, encoding="utf-8") as f:
-            data = json.load(f)
-        if now - data.get("ts", 0) < 86400:  # 24 h
-            latest = data.get("latest")
-        # else: stale — kick off background refresh below
-    except Exception:
-        pass
-
-    # ── background refresh if cache missing or stale ───────────────────────
-    if latest is None:
+    token = os.environ.get("GITHUB_TOKEN", "")
+    if not token:
         try:
             import subprocess
-            subprocess.Popen(
-                [
-                    sys.executable, "-c",
-                    (
-                        "import urllib.request,json,ssl,os,time;"
-                        "import certifi;"
-                        "ctx=ssl.create_default_context(cafile=certifi.where());"
-                        "r=urllib.request.urlopen('https://api.github.com/repos/hjma29/proliant-cli/releases/latest',context=ctx,timeout=5);"
-                        "v=json.loads(r.read()).get('tag_name','').lstrip('v');"
-                        "from pathlib import Path;"
-                        "d=str(Path.home()/'.cache'/'proliant-cli');"
-                        "os.makedirs(d,exist_ok=True);"
-                        "open(os.path.join(d,'update-check.json'),'w').write(json.dumps({'latest':v,'ts':time.time()}))"
-                    ),
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
+            result = subprocess.run(
+                ["gh", "auth", "token"], capture_output=True, text=True, timeout=5
             )
+            token = result.stdout.strip()
         except Exception:
             pass
-        return  # no cached value to compare yet
+    return token
 
-    # ── compare and hint ──────────────────────────────────────────────────────
+
+def _fetch_latest_release(ssl_ctx=None) -> dict | None:
+    """Fetch the latest GitHub release metadata (tag_name, assets, ...).
+
+    Returns None on any network/parse failure (never raises).
+    """
+    import urllib.request
+    import json
+
+    ssl_ctx = ssl_ctx or _ssl_context()
+    token = _resolve_github_token()
+    headers = {"User-Agent": "proliant-updater"}
+    if token:
+        headers["Authorization"] = f"token {token}"
     try:
-        from packaging.version import Version
-        if Version(latest) > Version(current):
-            url = f"https://github.com/hjma29/proliant-cli/releases/tag/v{latest}"
-            # OSC 8 clickable hyperlink + blue underline (degrades gracefully on dumb terminals)
-            if sys.stderr.isatty():
-                link = f"\033]8;;{url}\033\\{url}\033]8;;\033\\"
-                styled = f"\033[4;34m{link}\033[0m"
-            else:
-                styled = url
-            print(
-                f"\n💡 proliant {latest} is available (you have {current})."
-                f"  Run: proliant update\n"
-                f"   Release notes: {styled}\n",
-                file=sys.stderr,
-            )
+        url = f"https://api.github.com/repos/{_GITHUB_REPO}/releases/latest"
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=15, context=ssl_ctx) as resp:
+            return json.loads(resp.read())
     except Exception:
-        pass
+        return None
 
 
 def _ssl_context():
@@ -787,11 +780,12 @@ def _ssl_context():
         return ssl.create_default_context()
 
 
-_UPDATE_USAGE = """\
-usage: proliant update [-y|--yes]
+_VERSION_USAGE = """\
+usage: proliant version [-y|--yes]
 
-Download and install the latest proliant release.
-  -y, --yes    Skip the confirmation prompt (non-interactive).\
+Show the installed proliant version. If a newer release is available on
+GitHub, offers to install it.
+  -y, --yes    Skip the upgrade confirmation prompt (non-interactive).\
 """
 
 _SETUP_USAGE = """\
@@ -808,12 +802,12 @@ def _setup_args_request_help(setup_args: list[str]) -> bool:
     return any(a in ("-h", "--help") for a in setup_args)
 
 
-def _update_args_request_help(update_args: list[str]) -> bool:
-    return any(a in ("-h", "--help") for a in update_args)
+def _version_args_request_help(version_args: list[str]) -> bool:
+    return any(a in ("-h", "--help") for a in version_args)
 
 
-def _update_args_want_auto_confirm(update_args: list[str]) -> bool:
-    return any(a in ("-y", "--yes") for a in update_args)
+def _version_args_want_auto_confirm(version_args: list[str]) -> bool:
+    return any(a in ("-y", "--yes") for a in version_args)
 
 
 def _win_install_dir_hint() -> str:
@@ -831,7 +825,7 @@ def _confirm_windows_update(latest_ver: str, auto_confirm: bool) -> bool:
 
     On Windows the update runs an elevated GUI installer with /SILENT (no
     wizard pages), so there's normally no on-screen indication of where files
-    go or how to undo it. Since `proliant update` runs unattended in a
+    go or how to undo it. Since `proliant version`'s upgrade prompt runs unattended in a
     terminal (not a wizard the user is already clicking through), surface
     that information here as plain text and require confirmation before
     downloading/installing, unless explicitly skipped with -y/--yes.
@@ -860,10 +854,12 @@ def _confirm_windows_update(latest_ver: str, auto_confirm: bool) -> bool:
     return True
 
 
-def _run_update(auto_confirm: bool = False) -> None:
-    """Download and replace the current proliant binary with the latest GitHub release."""
-    import urllib.request
-    import json
+def _run_update(auto_confirm: bool = False, release: dict | None = None) -> None:
+    """Download and replace the current proliant binary with the latest GitHub release.
+
+    If *release* is already known (e.g. the caller already checked via
+    `proliant version`), pass it in to skip a redundant GitHub API call.
+    """
     import tempfile
     import zipfile
     import shutil
@@ -871,32 +867,15 @@ def _run_update(auto_confirm: bool = False) -> None:
 
     ssl_ctx = _ssl_context()
 
-    print("Checking for updates...")
-    token = os.environ.get("GITHUB_TOKEN", "")
-    if not token:
-        # Auto-read from gh CLI if available (works for private repos without manual setup)
-        try:
-            import subprocess
-            result = subprocess.run(
-                ["gh", "auth", "token"], capture_output=True, text=True, timeout=5
-            )
-            token = result.stdout.strip()
-        except Exception:
-            pass
-    headers = {"User-Agent": "proliant-updater"}
-    if token:
-        headers["Authorization"] = f"token {token}"
-    try:
-        url = f"https://api.github.com/repos/{_GITHUB_REPO}/releases/latest"
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=15, context=ssl_ctx) as resp:
-            release = json.loads(resp.read())
-    except Exception as e:
-        print(f"ERROR: Could not reach GitHub: {e}", file=sys.stderr)
-        if not token:
-            print("  Tip: install gh CLI (github.com/cli/gh) and run 'gh auth login'.", file=sys.stderr)
-            print("       Or set GITHUB_TOKEN env var.", file=sys.stderr)
-        sys.exit(1)
+    if release is None:
+        print("Checking for updates...")
+        release = _fetch_latest_release(ssl_ctx)
+        if release is None:
+            print("ERROR: Could not reach GitHub.", file=sys.stderr)
+            if not _resolve_github_token():
+                print("  Tip: install gh CLI (github.com/cli/gh) and run 'gh auth login'.", file=sys.stderr)
+                print("       Or set GITHUB_TOKEN env var.", file=sys.stderr)
+            sys.exit(1)
 
     latest_tag = release.get("tag_name", "")
     latest_ver = latest_tag.lstrip("v")
@@ -911,6 +890,12 @@ def _run_update(auto_confirm: bool = False) -> None:
 
     if not _confirm_windows_update(latest_ver, auto_confirm):
         sys.exit(0)
+
+    # Count this update by OS (best-effort, non-blocking). Fired before the
+    # download so the network transfer gives the background thread time to
+    # complete -- important on Windows, which exits right after launching the
+    # installer. Mirrors the install-script ping to the same Cloudflare Worker.
+    _ping_telemetry(f"/update/{'windows' if sys.platform == 'win32' else 'unix'}")
 
     # Determine asset name for this platform
     if sys.platform == "win32":
@@ -1036,7 +1021,7 @@ def _run_update(auto_confirm: bool = False) -> None:
                 except Exception:
                     print(f"  Add this to your shell rc: {path_line}")
                 current_exe = new_exe
-            print(f"✓ Updated to {latest_ver}. Run 'proliant --version' to confirm.")
+            print(f"✓ Updated to {latest_ver}. Run 'proliant version' to confirm.")
             # Clean up old Nuitka extraction cache dirs (keep only the new version)
             import re as _re
             from proliant.common import cache_dir as _common_cache_dir
@@ -1050,6 +1035,50 @@ def _run_update(auto_confirm: bool = False) -> None:
                         except Exception:
                             pass
             # Tab completion is handled by install.sh — no action needed on update
+
+
+def _cmd_version(auto_confirm: bool = False) -> None:
+    """Print the installed version; if a newer release exists, offer to install it."""
+    current_ver = _get_current_version()
+    print(f"proliant {current_ver}")
+
+    if current_ver == "dev":
+        return  # dev/editable install -- no GitHub release to compare against
+
+    print("Checking for updates...")
+    release = _fetch_latest_release()
+    if release is None:
+        print("  Could not reach GitHub to check for updates.", file=sys.stderr)
+        return
+
+    latest_ver = release.get("tag_name", "").lstrip("v")
+    if not latest_ver:
+        return
+
+    try:
+        from packaging.version import Version
+        is_newer = Version(latest_ver) > Version(current_ver)
+    except Exception:
+        is_newer = latest_ver != current_ver
+
+    if not is_newer:
+        print("✓ Already up to date.")
+        return
+
+    print(f"\nA newer version is available: {latest_ver} (you have {current_ver})")
+    if auto_confirm:
+        answer = "y"
+    else:
+        try:
+            answer = input("Upgrade now? [y/N]: ").strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            print()
+            return
+
+    if answer in ("y", "yes"):
+        _run_update(auto_confirm=True, release=release)
+    else:
+        print("Run 'proliant version -y' anytime to upgrade.")
 
 
 def _dispatch_ilo(args: list[str]) -> None:
@@ -1164,14 +1193,14 @@ def main(argv: list[str] | None = None) -> None:
             os.environ["_ARGCOMPLETE"] = "2"
             _dispatch_com(parts[2:])
             return
-        if in_subcommand and len(parts) >= 2 and parts[1] == "spp":
-            os.environ["_ARGCOMPLETE"] = "2"
-            _dispatch_spp(parts[2:])
-            return
-
         if in_subcommand and len(parts) >= 2 and parts[1] == "oneview":
             os.environ["_ARGCOMPLETE"] = "2"
             _dispatch_oneview(parts[2:])
+            return
+
+        if in_subcommand and len(parts) >= 2 and parts[1] == "spp":
+            os.environ["_ARGCOMPLETE"] = "2"
+            _dispatch_spp(parts[2:])
             return
 
         if in_subcommand and len(parts) >= 2 and parts[1] == "setting":
@@ -1179,19 +1208,18 @@ def main(argv: list[str] | None = None) -> None:
             _dispatch_setting(parts[2:])
             return
 
-        # Top-level: use argparse so argcomplete can offer 'ilo', 'com', 'spp', 'oneview'
+        # Top-level: use argparse so argcomplete can offer 'ilo', 'com', 'oneview', 'spp'
         import argparse
         import argcomplete
         parser = argparse.ArgumentParser(prog="proliant", add_help=False)
-        parser.add_argument("-V", "--version", action="store_true")
         sub = parser.add_subparsers(dest="namespace")
         sub.add_parser("ilo",     help="Direct iLO Redfish management")
         sub.add_parser("com",     help="HPE GreenLake / Compute Ops Management")
-        sub.add_parser("spp",     help="HPE Service Pack for ProLiant analysis")
         sub.add_parser("oneview", help="HPE OneView fleet management")
+        sub.add_parser("spp",     help="HPE Service Pack for ProLiant analysis")
         sub.add_parser("setting", help="View and manage proliant configuration")
         sub.add_parser("setup",   help="Guided menu to view/add/edit/delete inventory.ini entries")
-        sub.add_parser("update",              help="Upgrade proliant to the latest release")
+        sub.add_parser("version", help="Show version and check for updates")
         argcomplete.autocomplete(parser)
         return  # autocomplete() exits; reaching here means no completion needed
 
@@ -1200,25 +1228,16 @@ def main(argv: list[str] | None = None) -> None:
         print(_USAGE)
         sys.exit(0)
 
-    if args[0] in ("-V", "--version"):
-        try:
-            v = _pkg_version("proliant")
-        except PackageNotFoundError:
-            v = "dev"
-        print(f"proliant {v}")
-        _check_for_update_hint()
-        sys.exit(0)
-
     namespace = args[0]
 
     if namespace == "ilo":
         _dispatch_ilo(list(args[1:]))
     elif namespace == "com":
         _dispatch_com(list(args[1:]))
-    elif namespace == "spp":
-        _dispatch_spp(list(args[1:]))
     elif namespace == "oneview":
         _dispatch_oneview(list(args[1:]))
+    elif namespace == "spp":
+        _dispatch_spp(list(args[1:]))
     elif namespace == "qs":
         _dispatch_qs(list(args[1:]))
     elif namespace == "setting":
@@ -1231,12 +1250,12 @@ def main(argv: list[str] | None = None) -> None:
         from proliant.common.runner import run_sync
         from proliant.setup.wizard import run_setup_wizard
         run_sync(run_setup_wizard())
-    elif namespace == "update":
-        update_args = list(args[1:])
-        if _update_args_request_help(update_args):
-            print(_UPDATE_USAGE)
+    elif namespace == "version":
+        version_args = list(args[1:])
+        if _version_args_request_help(version_args):
+            print(_VERSION_USAGE)
             sys.exit(0)
-        _run_update(auto_confirm=_update_args_want_auto_confirm(update_args))
+        _cmd_version(auto_confirm=_version_args_want_auto_confirm(version_args))
     else:
         print(f"proliant: unknown namespace '{namespace}'\n", file=sys.stderr)
         print(_USAGE)

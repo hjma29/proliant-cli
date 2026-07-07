@@ -103,7 +103,7 @@ def test_every_value_argument_declares_completion_behavior():
 
 def test_top_level_completion_lists_namespaces():
     completions = set(_complete("proliant "))
-    assert {"ilo", "com", "spp", "oneview", "setting", "update"} <= completions
+    assert {"ilo", "com", "oneview", "spp", "setting", "version"} <= completions
     assert "qs" not in completions
 
 
@@ -227,15 +227,12 @@ if ($global:invoked) { throw 'fast path should not invoke proliant for partial n
 if (-not (@($results.CompletionText) -contains 'ilo')) {
     throw "expected 'ilo' in fast-path results: $(@($results.CompletionText) -join ',')"
 }
-if (@($results.CompletionText) -contains '--version') {
-    throw 'unexpected --version for prefix i'
-}
 
 $global:invoked = $false
-$results2 = & $sb 'u' 'proliant u' 10
-if ($global:invoked) { throw 'fast path should not invoke proliant for u prefix' }
-if (@($results2).Count -ne 1 -or $results2[0].CompletionText -ne 'update') {
-    throw "expected only 'update': $(@($results2.CompletionText) -join ',')"
+$results2 = & $sb 'v' 'proliant v' 10
+if ($global:invoked) { throw 'fast path should not invoke proliant for v prefix' }
+if (@($results2).Count -ne 1 -or $results2[0].CompletionText -ne 'version') {
+    throw "expected only 'version': $(@($results2.CompletionText) -join ',')"
 }
 
 $global:invoked = $false

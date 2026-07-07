@@ -93,7 +93,7 @@ try {
     #    Feeding "y" answers the "add to PATH?" prompt so setup actually runs.
     $result = Invoke-Command -Session $sess -ScriptBlock {
         param($exe, $user)
-        $version = ("y`n" | & $exe --version 2>&1 | Out-String).Trim()
+        $version = ("y`n" | & $exe version 2>&1 | Out-String).Trim()
 
         $userPath          = [Environment]::GetEnvironmentVariable("Path", "User")
         $exeDir            = Split-Path $exe

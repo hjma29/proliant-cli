@@ -182,3 +182,14 @@ class OneViewClient(BaseAsyncClient):
         resp = await self._ensure_http().patch(uri, json=body, headers=self._headers)
         self._raise_for_status(resp, "PATCH", uri)
         return self._safe_json(resp)
+
+    async def delete(self, uri: str) -> dict[str, Any]:
+        """DELETE a resource. Returns the response body (often a task or empty).
+
+        OneView protects in-use resources server-side (e.g. a firmware baseline
+        assigned to a logical enclosure/server profile cannot be deleted), so a
+        failed delete raises OneViewError rather than removing anything.
+        """
+        resp = await self._ensure_http().delete(uri, headers=self._headers)
+        self._raise_for_status(resp, "DELETE", uri)
+        return self._safe_json(resp)

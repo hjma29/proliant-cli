@@ -1711,6 +1711,161 @@ async def _cmd_logical_enclosures_list(args: argparse.Namespace) -> None:
     await _async_logical_enclosures_list()
 
 
+# ── proliant oneview upgrade readiness / cleanup ──────────────────────────────
+
+_VERDICT_STYLE = {"PASS": "green", "WARN": "yellow", "FAIL": "red"}
+_STATUS_STYLE = {"PASS": "[green]PASS[/green]", "WARN": "[yellow]WARN[/yellow]",
+                 "FAIL": "[red]FAIL[/red]", "INFO": "[cyan]INFO[/cyan]"}
+
+
+async def _async_upgrade_readiness() -> None:
+    from proliant.oneview.upgrade import gather_readiness
+
+    async with _load_client() as client:
+        with get_console().status("[dim]Assessing OneView upgrade readiness…[/dim]"):
+            report = await gather_readiness(client)
+
+    if get_output_mode() == OutputMode.JSON:
+        print_json(report)
+        return
+
+    console = get_console()
+    app = report["appliance"]
+    up = report["upgrade_path"]
+    verdict = report["verdict"]
+    vstyle = _VERDICT_STYLE.get(verdict, "white")
+
+    header = [
+        f"[bold]{app.get('model') or 'OneView appliance'}[/bold]  "
+        f"({app.get('family') or '—'})",
+        f"Current version:  [bold]{app.get('software_version') or '—'}[/bold]",
+    ]
+    if up.get("at_latest"):
+        header.append(f"Upgrade path:     at/above latest ({up.get('latest')})")
+    else:
+        path = " -> ".join(up.get("path_to_latest", [])) or "—"
+        header.append(f"Recommended next: [bold cyan]{up.get('recommended_next')}[/bold cyan]  "
+                      f"(to latest {up.get('latest')}: {path})")
+    header.append(f"\nReadiness verdict: [bold {vstyle}]{verdict}[/bold {vstyle}]")
+    console.print(Panel("\n".join(header), title="OneView Upgrade Readiness", border_style=vstyle))
+
+    table = make_table(
+        "Readiness Checks",
+        ("Check", {"min_width": 26, "no_wrap": True}),
+        ("Status", {"justify": "center", "no_wrap": True}),
+        ("Detail", {"min_width": 40}),
+    )
+    for c in report["checks"]:
+        table.add_row(c["name"], _STATUS_STYLE.get(c["status"], c["status"]), c["detail"])
+    console.print(table)
+
+    stale = report.get("stale_baselines", {})
+    if stale.get("count"):
+        console.print(
+            f"[dim]Tip:[/dim] {stale['count']} unused firmware baseline(s) using "
+            f"[bold]{stale['reclaimable_gb']:.1f} GB[/bold] can be freed with "
+            f"[bold]proliant oneview upgrade cleanup[/bold].",
+            highlight=False,
+        )
+    console.print(f"[dim]Upgrade-path source: {up.get('source_url', '')}[/dim]", highlight=False)
+
+
+async def _cmd_upgrade_readiness(args: argparse.Namespace) -> None:
+    await _async_upgrade_readiness()
+
+
+def _fmt_gb(size_bytes: int) -> str:
+    gb = size_bytes / (1024 ** 3)
+    return f"{gb:.2f} GB" if gb >= 1 else f"{size_bytes / (1024 ** 2):.0f} MB"
+
+
+async def _async_upgrade_cleanup(do_delete: bool) -> None:
+    from proliant.oneview.upgrade import delete_baseline, gather_stale_baselines
+
+    async with _load_client() as client:
+        with get_console().status("[dim]Scanning firmware baselines…[/dim]"):
+            summary = await gather_stale_baselines(client)
+
+        prunable = summary["prunable"]
+        retained = summary.get("retained_newer", [])
+
+        if get_output_mode() == OutputMode.JSON and not do_delete:
+            print_json(summary)
+            return
+
+        console = get_console()
+        if not prunable:
+            if get_output_mode() == OutputMode.JSON:
+                print_json({"deleted": [], "failed": [], "reclaimed_gb": 0})
+            else:
+                console.print("[green]No old unused firmware baselines to remove.[/green] "
+                              "All baselines are either assigned/in use or newer than the "
+                              "assigned baseline (kept as upgrade targets).")
+            return
+
+        table = make_table(
+            f"Prunable Firmware Baselines  ({len(prunable)} — {summary['reclaimable_gb']:.1f} GB reclaimable)",
+            ("Name", {"min_width": 22, "no_wrap": True}),
+            ("Version", {"no_wrap": True}),
+            ("Type", {"no_wrap": True}),
+            ("Released", {"no_wrap": True}),
+            ("Size", {"justify": "right", "no_wrap": True}),
+        )
+        for b in prunable:
+            released = (b.get("release_date") or "")[:10]
+            table.add_row(b["name"], b["version"], b.get("bundle_type", ""),
+                          released, _fmt_gb(b["size_bytes"]))
+        console.print(table)
+
+        if retained:
+            names = ", ".join(b["version"] for b in retained[:6])
+            more = f" (+{len(retained) - 6} more)" if len(retained) > 6 else ""
+            console.print(
+                f"[dim]Retained {len(retained)} newer unused baseline(s) as upgrade "
+                f"targets: {names}{more}[/dim]",
+                highlight=False,
+            )
+
+        if not do_delete:
+            console.print(
+                "\n[yellow]Dry run.[/yellow] These baselines are unused (not assigned to any "
+                "logical enclosure, logical interconnect, or server profile) and older than "
+                "your assigned baseline.\n"
+                "Re-run with [bold]--yes[/bold] to delete them and reclaim disk. "
+                "This only removes SPP/SSP files from the appliance repository — "
+                "it never touches running enclosures or interconnects.",
+                highlight=False,
+            )
+            return
+
+        # Actual deletion — per-item so one protected baseline can't abort the rest.
+        deleted, failed = [], []
+        with console.status("[dim]Deleting unused baselines…[/dim]"):
+            for b in prunable:
+                try:
+                    await delete_baseline(client, b["uri"])
+                    deleted.append(b)
+                except Exception as exc:  # noqa: BLE001 — report and continue
+                    failed.append({**b, "error": str(exc)})
+
+    reclaimed = sum(b["size_bytes"] for b in deleted) / (1024 ** 3)
+    if get_output_mode() == OutputMode.JSON:
+        print_json({
+            "deleted": [b["name"] for b in deleted],
+            "failed": [{"name": b["name"], "error": b["error"]} for b in failed],
+            "reclaimed_gb": round(reclaimed, 2),
+        })
+        return
+
+    console = get_console()
+    console.print(f"[green]Deleted {len(deleted)} baseline(s), reclaimed "
+                  f"{reclaimed:.2f} GB.[/green]")
+    for b in failed:
+        console.print(f"[yellow]Skipped[/yellow] {b['name']}: {b['error']}", highlight=False)
+
+
+async def _cmd_upgrade_cleanup(args: argparse.Namespace) -> None:
+    await _async_upgrade_cleanup(do_delete=bool(getattr(args, "yes", False)))
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -1742,6 +1897,9 @@ examples:
   proliant oneview networksets describe "network-set-for-FM"
   proliant oneview server-profiles describe "ocp-single-node"
   proliant oneview reports memory
+  proliant oneview upgrade readiness                     Pre-upgrade readiness report
+  proliant oneview upgrade cleanup                       Preview unused firmware baselines
+  proliant oneview upgrade cleanup --yes                 Delete unused baselines (free disk)
 """,
     )
 
@@ -1876,6 +2034,19 @@ examples:
     s_reports.required = True
     p_rep_mem = s_reports.add_parser("memory", aliases=["mem"], help="Memory DIMM part-number breakdown")
     p_rep_mem.set_defaults(func=_cmd_report_memory)
+
+    # ── upgrade (readiness + disk cleanup) ────────────────────────────────
+    p_upgrade = sub.add_parser("upgrade", help="Appliance upgrade readiness & disk cleanup")
+    s_upgrade = p_upgrade.add_subparsers(dest="what", metavar="ACTION")
+    s_upgrade.required = True
+    p_up_ready = s_upgrade.add_parser("readiness", aliases=["check"],
+        help="Read-only pre-upgrade readiness report (version, health, path)")
+    p_up_ready.set_defaults(func=_cmd_upgrade_readiness)
+    p_up_clean = s_upgrade.add_parser("cleanup",
+        help="List (and optionally delete) unused firmware baselines to free disk")
+    p_up_clean.add_argument("--yes", "-y", action="store_true",
+        help="Actually delete the unused baselines (default is a dry-run preview)")
+    p_up_clean.set_defaults(func=_cmd_upgrade_cleanup)
 
     return parser
 

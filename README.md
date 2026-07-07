@@ -121,7 +121,25 @@ proliant oneview mac list --address <mac>
 proliant oneview mac list --network-name <name>
 proliant oneview mac describe <mac>
 proliant oneview reports memory
+proliant oneview upgrade readiness              # pre-upgrade readiness report
+proliant oneview upgrade cleanup                # preview unused firmware baselines
+proliant oneview upgrade cleanup --yes          # delete unused baselines (free disk)
 ```
+
+#### Upgrade readiness & disk cleanup
+
+`proliant oneview upgrade readiness` is a **read-only** pre-upgrade check. It reports
+the appliance software version, the supported Synergy Composer upgrade path (with the
+recommended next hop and full milestone chain to the latest release), and a PASS/WARN/FAIL
+assessment of appliance disk space, memory/CPU, active alerts, backup freshness, logical
+interconnect consistency, and interconnect redundancy. It never modifies anything.
+
+`proliant oneview upgrade cleanup` frees appliance disk by removing **unused** firmware
+baselines (SPP/SSP) — those not assigned to any logical enclosure, logical interconnect,
+or server profile, and older than your currently-assigned baseline. Newer unused baselines
+are retained as upgrade targets. It defaults to a dry-run preview; pass `--yes` to delete.
+This only removes files from the appliance repository and never touches running enclosures
+or interconnects (OneView also blocks deletion of any in-use baseline server-side).
 
 ### SPP (Service Pack for ProLiant)
 

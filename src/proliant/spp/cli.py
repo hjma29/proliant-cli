@@ -345,8 +345,7 @@ def _cmd_inspect(args: argparse.Namespace) -> None:
     )
     table.add_column("Type",       style="bold",   min_width=12)
     table.add_column("Name",                       min_width=30)
-    table.add_column("File",       style="dim",    min_width=20, no_wrap=True)
-    table.add_column("Version",    justify="right",min_width=13, no_wrap=True)
+    table.add_column("File",       style="dim",    min_width=20, max_width=38, no_wrap=True)
     table.add_column("Update Method",              min_width=18)
     table.add_column("Release",    justify="right",min_width=10)
 
@@ -360,8 +359,7 @@ def _cmd_inspect(args: argparse.Namespace) -> None:
         table.add_row(
             c.type_tag,
             c.name,
-            c.filename,
-            c.version or "—",
+            _trunc_filename(c.filename),
             f"[{method_style}]{c.update_method}[/{method_style}]",
             c.release_date[:10] if c.release_date else "—",
         )
@@ -985,7 +983,7 @@ def _cmd_diff(args: argparse.Namespace) -> None:
     table.add_column("Status",   justify="center", min_width=9)
     table.add_column("Category",                   min_width=22)
     table.add_column("Name",                       min_width=30)
-    table.add_column("File",     style="dim",      min_width=20, no_wrap=True)
+    table.add_column("File",     style="dim",      min_width=20, max_width=38, no_wrap=True)
     table.add_column(args.v1,    justify="right",  min_width=13, no_wrap=True)
     table.add_column(args.v2,    justify="right",  min_width=13, no_wrap=True)
 
@@ -1004,8 +1002,7 @@ def _cmd_diff(args: argparse.Namespace) -> None:
             f"[{sty}]{icon} {e.status}[/{sty}]",
             e.category,
             e.name,
-            e.filename,
-            e.old_version or "—",
+            _trunc_filename(e.filename),
             e.new_version or "—",
         )
 
@@ -1027,6 +1024,10 @@ def _cmd_diff(args: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _trunc_filename(name: str, n: int = 36) -> str:
+    return name if len(name) <= n else name[:n - 3] + "..."
+
 
 def _method_style(method: str) -> str:
     if "iLO" in method:

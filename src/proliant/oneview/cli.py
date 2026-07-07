@@ -1767,6 +1767,13 @@ async def _async_upgrade_readiness() -> None:
             f"[bold]proliant oneview upgrade cleanup[/bold].",
             highlight=False,
         )
+    if stale.get("external_unused"):
+        console.print(
+            f"[dim]Note:[/dim] {stale['external_unused']} additional unused baseline(s) exist "
+            f"only in an external repository and are not deletable via OneView — see "
+            f"[bold]proliant oneview upgrade cleanup[/bold] for details.",
+            highlight=False,
+        )
     console.print(f"[dim]Upgrade-path source: {up.get('source_url', '')}[/dim]", highlight=False)
 
 
@@ -1788,19 +1795,51 @@ async def _async_upgrade_cleanup(do_delete: bool) -> None:
 
         prunable = summary["prunable"]
         retained = summary.get("retained_newer", [])
+        external_unused = summary.get("external_unused", [])
 
         if get_output_mode() == OutputMode.JSON and not do_delete:
             print_json(summary)
             return
 
         console = get_console()
+
+        def _print_external_unused() -> None:
+            if not external_unused:
+                return
+            ext_table = make_table(
+                f"External-Repository Baselines  "
+                f"({len(external_unused)} — not deletable via OneView)",
+                ("Name", {"min_width": 22, "no_wrap": True}),
+                ("Version", {"no_wrap": True}),
+                ("Type", {"no_wrap": True}),
+                ("Released", {"no_wrap": True}),
+                ("Repository", {"no_wrap": True}),
+            )
+            for b in external_unused:
+                released = (b.get("release_date") or "")[:10]
+                repo_names = ", ".join(sorted(set((b.get("locations") or {}).values()))) or "?"
+                ext_table.add_row(b["name"], b["version"], b.get("bundle_type", ""),
+                                   released, repo_names)
+            console.print()
+            console.print(ext_table)
+            console.print(
+                "[dim]These are unused but exist only in an external repository — "
+                "OneView does not allow deleting them via this command. Remove them "
+                "from the source repository directly if no longer needed.[/dim]",
+                highlight=False,
+            )
+
         if not prunable:
             if get_output_mode() == OutputMode.JSON:
-                print_json({"deleted": [], "failed": [], "reclaimed_gb": 0})
+                print_json({
+                    "deleted": [], "failed": [], "reclaimed_gb": 0,
+                    "external_unused_count": len(external_unused),
+                })
             else:
                 console.print("[green]No old unused firmware baselines to remove.[/green] "
                               "All baselines are either assigned/in use or newer than the "
                               "assigned baseline (kept as upgrade targets).")
+                _print_external_unused()
             return
 
         table = make_table(
@@ -1825,6 +1864,8 @@ async def _async_upgrade_cleanup(do_delete: bool) -> None:
                 f"targets: {names}{more}[/dim]",
                 highlight=False,
             )
+
+        _print_external_unused()
 
         if not do_delete:
             console.print(
@@ -1854,6 +1895,7 @@ async def _async_upgrade_cleanup(do_delete: bool) -> None:
             "deleted": [b["name"] for b in deleted],
             "failed": [{"name": b["name"], "error": b["error"]} for b in failed],
             "reclaimed_gb": round(reclaimed, 2),
+            "external_unused_count": len(external_unused),
         })
         return
 

@@ -21,10 +21,20 @@ Key endpoints (all verified against a live Synergy Composer2, API v7000):
   GET  /rest/alerts?filter=alertState='Active'
   GET  /rest/backups                      → last backup state + timestamp
   GET  /rest/firmware-drivers             → uploaded SPP / SSP baselines
+  GET  /rest/repositories                 → repositoryType (Internal/External)
   GET  /rest/logical-enclosures           → assigned firmware baseline
   GET  /rest/logical-interconnects        → consistency + assigned baseline
   GET  /rest/server-profiles              → assigned firmware baseline
   DELETE /rest/firmware-drivers/{id}      → remove an unused baseline
+
+Note on external repositories: a firmware-drivers member whose ``locations``
+map points at a ``FirmwareExternalRepo`` (Firmware Bundles > External
+Repositories in the UI) is only a *reference* into that external SPP source —
+its ``bundleSize`` does not represent bytes stored on the appliance, and
+OneView unconditionally refuses ``DELETE`` for it (HTTP 400 "...exists only
+in the external repository..."). ``classify_baselines()`` excludes these from
+``prunable``/``reclaimable_gb`` and reports them separately as
+``external_unused`` so cleanup never promises disk it cannot reclaim.
 """
 
 from __future__ import annotations
@@ -205,8 +215,38 @@ def normalize_baselines(members: list[dict]) -> list[dict[str, Any]]:
             "release_date": m.get("releaseDate", ""),
             "size_bytes": int(size) if isinstance(size, (int, float)) else 0,
             "state": m.get("state", ""),
+            # dict of "/rest/repositories/{uuid}" -> repo display name; only
+            # populated when the bundle is a reference into a Firmware Bundles
+            # repository (internal or external) rather than a direct upload.
+            "locations": m.get("locations") or {},
         })
     return out
+
+
+def _is_external_baseline(locations: dict[str, str], repo_types: dict[str, str] | None) -> bool:
+    """True if a baseline is only hosted in an external repo (not deletable).
+
+    HPE OneView always rejects ``DELETE`` for a firmware baseline whose
+    ``locations`` map resolves to a repository with
+    ``repositoryType: FirmwareExternalRepo`` (HTTP 400 "...exists only in the
+    external repository..."), and that baseline's reported ``bundleSize`` does
+    not represent reclaimable appliance disk at all.
+
+    ``repo_types`` maps repository URI -> repositoryType (from
+    ``/rest/repositories``). If it's ``None`` (couldn't be fetched), or a
+    baseline's specific repository URI is missing from it, conservatively
+    treat any populated ``locations`` as external — better to under-report
+    reclaimable space than promise disk that can never actually be freed.
+    """
+    if not locations:
+        return False
+    if repo_types is None:
+        return True
+    for uri in locations:
+        repo_type = repo_types.get(uri)
+        if repo_type is None or "external" in repo_type.lower():
+            return True
+    return False
 
 
 def _collect_referenced_uris(
@@ -250,6 +290,7 @@ def classify_baselines(
     logical_interconnects: list[dict],
     server_profiles: list[dict],
     raw_members: list[dict] | None = None,
+    repo_types: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Split baselines into in-use, prunable (old & unused), and retained-newer.
 
@@ -258,10 +299,17 @@ def classify_baselines(
     than what's assigned are almost certainly intended upgrade targets, so they
     are surfaced separately as ``retained_newer`` and never offered for deletion.
 
+    Unused baselines that only exist in an external Firmware Bundles
+    repository (see ``_is_external_baseline``) are never deletable via the
+    OneView API and their size doesn't reflect appliance disk usage — these
+    are excluded from ``prunable``/``reclaimable_gb`` entirely and reported
+    separately as ``external_unused``, regardless of their release date.
+
     ``raw_members`` (optional) is the untouched firmware-drivers payload used
-    only to detect parentBundle dependencies.
-    Returns keys: in_use, prunable, retained_newer, reclaimable_bytes,
-    reclaimable_gb, cutoff_date.
+    only to detect parentBundle dependencies. ``repo_types`` (optional) maps
+    repository URI -> repositoryType from ``/rest/repositories``.
+    Returns keys: in_use, prunable, retained_newer, external_unused,
+    reclaimable_bytes, reclaimable_gb, cutoff_date.
     """
     refs = _collect_referenced_uris(
         logical_enclosures, logical_interconnects, server_profiles,
@@ -274,12 +322,22 @@ def classify_baselines(
         entry = {**b, "in_use": uri in refs}
         (in_use if uri in refs else unused).append(entry)
 
+    # Split out baselines that only live in an external repository — OneView
+    # refuses to delete these and their bundleSize isn't reclaimable appliance
+    # disk, so they must never enter the prunable/reclaimable_gb calculation.
+    unused_internal, external_unused = [], []
+    for b in unused:
+        if _is_external_baseline(b.get("locations") or {}, repo_types):
+            external_unused.append(b)
+        else:
+            unused_internal.append(b)
+
     # Newest release date among assigned baselines is the pruning cutoff.
     assigned_dates = [d for d in (_parse_iso(b.get("release_date", "")) for b in in_use) if d]
     cutoff = max(assigned_dates) if assigned_dates else None
 
     prunable, retained_newer = [], []
-    for b in unused:
+    for b in unused_internal:
         released = _parse_iso(b.get("release_date", ""))
         if cutoff is not None and released is not None and released > cutoff:
             retained_newer.append(b)
@@ -302,6 +360,7 @@ def classify_baselines(
         "in_use": in_use,
         "prunable": prunable,
         "retained_newer": retained_newer,
+        "external_unused": external_unused,
         "reclaimable_bytes": reclaimable,
         "reclaimable_gb": round(reclaimable / (1024 ** 3), 2),
         "cutoff_date": cutoff.isoformat() if cutoff else "",
@@ -433,6 +492,20 @@ def assess_readiness(data: dict[str, Any], *, now: datetime | None = None) -> di
             f"{len(prunable)} old unused baseline(s) using {bs.get('reclaimable_gb', 0):.1f} GB — "
             f"reclaim with 'proliant oneview upgrade cleanup'.")
 
+    # Unused baselines that only exist in an external repository — never
+    # deletable via OneView, shown separately so the count above never
+    # includes disk that can't actually be reclaimed this way.
+    external_unused = bs.get("external_unused", [])
+    if external_unused:
+        repo_names = sorted({
+            loc for b in external_unused for loc in (b.get("locations") or {}).values()
+        })
+        repo_note = ", ".join(repo_names) if repo_names else "an external repository"
+        add("External-repository baselines", "INFO",
+            f"{len(external_unused)} unused baseline(s) exist only in {repo_note} — "
+            f"not deletable via OneView; remove them from the source repository "
+            f"directly if no longer needed.")
+
     # Verdict = worst non-INFO status
     order = {"PASS": 0, "WARN": 1, "FAIL": 2}
     verdict = "PASS"
@@ -494,6 +567,24 @@ async def fetch_logical_interconnects(client: "OneViewClient") -> list[dict[str,
     ]
 
 
+async def fetch_repository_types(client: "OneViewClient") -> dict[str, str]:
+    """URI -> repositoryType map from /rest/repositories (best-effort).
+
+    Used to tell an internal (appliance-hosted) firmware repository apart
+    from an external one (``FirmwareExternalRepo``) so
+    ``classify_baselines()`` never offers external-only baselines for
+    deletion. Returns ``{}`` (not ``None``) if the fetch fails — callers
+    should still pass an empty dict through so ``_is_external_baseline``'s
+    "unknown repo -> assume external" fallback applies per-URI rather than
+    reverting to the coarser "any locations -> external" behavior.
+    """
+    try:
+        repos = await client.get_all("/rest/repositories")
+    except Exception:  # noqa: BLE001 — optional; classify_baselines falls back safely
+        return {}
+    return {r.get("uri", ""): r.get("repositoryType", "") for r in repos if r.get("uri")}
+
+
 async def gather_readiness(client: "OneViewClient") -> dict[str, Any]:
     """Fetch everything and build the full readiness report (all read-only)."""
     version = await fetch_appliance_version(client)
@@ -507,12 +598,14 @@ async def gather_readiness(client: "OneViewClient") -> dict[str, Any]:
     raw_baselines = await client.get_all("/rest/firmware-drivers")
     logical_enclosures = await client.get_all("/rest/logical-enclosures")
     server_profiles = await client.get_all("/rest/server-profiles")
+    repo_types = await fetch_repository_types(client)
     baseline_summary = classify_baselines(
         normalize_baselines(raw_baselines),
         logical_enclosures,
         logical_interconnects,
         server_profiles,
         raw_members=raw_baselines,
+        repo_types=repo_types,
     )
 
     report = assess_readiness({
@@ -539,6 +632,7 @@ async def gather_readiness(client: "OneViewClient") -> dict[str, Any]:
             "reclaimable_gb": baseline_summary["reclaimable_gb"],
             "retained_newer": len(baseline_summary["retained_newer"]),
             "items": baseline_summary["prunable"],
+            "external_unused": len(baseline_summary["external_unused"]),
         },
     }
 
@@ -549,12 +643,14 @@ async def gather_stale_baselines(client: "OneViewClient") -> dict[str, Any]:
     logical_interconnects = await client.get_all("/rest/logical-interconnects")
     logical_enclosures = await client.get_all("/rest/logical-enclosures")
     server_profiles = await client.get_all("/rest/server-profiles")
+    repo_types = await fetch_repository_types(client)
     return classify_baselines(
         normalize_baselines(raw_baselines),
         logical_enclosures,
         logical_interconnects,
         server_profiles,
         raw_members=raw_baselines,
+        repo_types=repo_types,
     )
 
 

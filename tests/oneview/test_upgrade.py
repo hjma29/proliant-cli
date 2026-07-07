@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import pytest
 
 from proliant.oneview.upgrade import (
+    _is_external_baseline,
     assess_readiness,
     classify_baselines,
     compute_upgrade_path,
@@ -162,6 +163,77 @@ def test_classify_baselines_respects_server_profile_and_li_and_parent():
     assert prunable_uris == set()
 
 
+# ── external-repository baseline detection ───────────────────────────────────
+
+def test_is_external_baseline_no_locations_is_internal():
+    assert _is_external_baseline({}, None) is False
+    assert _is_external_baseline({}, {"/rest/repositories/x": "FirmwareExternalRepo"}) is False
+
+
+def test_is_external_baseline_unknown_repo_types_assumes_external():
+    # repo_types couldn't be fetched at all -> conservative: any locations = external.
+    assert _is_external_baseline({"/rest/repositories/x": "hst-fileserver"}, None) is True
+
+
+def test_is_external_baseline_uses_repo_type_when_known():
+    repo_types = {
+        "/rest/repositories/ext": "FirmwareExternalRepo",
+        "/rest/repositories/internal": "FirmwareInternalRepo",
+    }
+    assert _is_external_baseline({"/rest/repositories/ext": "hst-fileserver"}, repo_types) is True
+    assert _is_external_baseline({"/rest/repositories/internal": "Internal"}, repo_types) is False
+
+
+def test_is_external_baseline_unknown_uri_in_known_map_assumes_external():
+    # repo_types fetch succeeded but doesn't contain this specific URI -> still conservative.
+    repo_types = {"/rest/repositories/internal": "FirmwareInternalRepo"}
+    assert _is_external_baseline({"/rest/repositories/other": "mystery-repo"}, repo_types) is True
+
+
+def test_classify_baselines_excludes_external_repo_from_prunable_and_reclaimable():
+    raw = _baselines_raw()
+    # 'old' is hosted only in an external repo -> must never be prunable.
+    raw[1]["locations"] = {"/rest/repositories/ext": "hst-fileserver"}
+    baselines = normalize_baselines(raw)
+    logical_enclosures = [{"firmware": {"firmwareBaselineUri": "/rest/firmware-drivers/used"}}]
+    repo_types = {"/rest/repositories/ext": "FirmwareExternalRepo"}
+    summary = classify_baselines(
+        baselines, logical_enclosures, [], [], raw_members=raw, repo_types=repo_types,
+    )
+
+    assert [b["name"] for b in summary["prunable"]] == []
+    assert [b["name"] for b in summary["external_unused"]] == ["SPP 2018.12"]
+    assert summary["reclaimable_bytes"] == 0
+    assert summary["reclaimable_gb"] == 0
+
+
+def test_classify_baselines_internal_locations_stay_prunable():
+    raw = _baselines_raw()
+    raw[1]["locations"] = {"/rest/repositories/internal": "Internal"}
+    baselines = normalize_baselines(raw)
+    logical_enclosures = [{"firmware": {"firmwareBaselineUri": "/rest/firmware-drivers/used"}}]
+    repo_types = {"/rest/repositories/internal": "FirmwareInternalRepo"}
+    summary = classify_baselines(
+        baselines, logical_enclosures, [], [], raw_members=raw, repo_types=repo_types,
+    )
+
+    assert [b["name"] for b in summary["prunable"]] == ["SPP 2018.12"]
+    assert summary["external_unused"] == []
+    assert summary["reclaimable_bytes"] == 6_000_000_000
+
+
+def test_classify_baselines_no_repo_types_treats_locations_as_external():
+    # /rest/repositories fetch failed entirely (repo_types=None) -> conservative fallback.
+    raw = _baselines_raw()
+    raw[1]["locations"] = {"/rest/repositories/ext": "hst-fileserver"}
+    baselines = normalize_baselines(raw)
+    logical_enclosures = [{"firmware": {"firmwareBaselineUri": "/rest/firmware-drivers/used"}}]
+    summary = classify_baselines(baselines, logical_enclosures, [], [], raw_members=raw)
+
+    assert summary["prunable"] == []
+    assert [b["name"] for b in summary["external_unused"]] == ["SPP 2018.12"]
+
+
 # ── readiness assessment verdict ─────────────────────────────────────────────
 
 _NOW = datetime(2026, 7, 7, tzinfo=timezone.utc)
@@ -224,3 +296,24 @@ def test_readiness_single_interconnect_warns():
     r = assess_readiness(_base_data(interconnect_count=1), now=_NOW)
     ic = next(c for c in r["checks"] if c["name"] == "Interconnect redundancy")
     assert ic["status"] == "WARN"
+
+
+def test_readiness_reports_external_unused_baselines_informationally():
+    data = _base_data(baseline_summary={
+        "prunable": [],
+        "reclaimable_gb": 0,
+        "external_unused": [
+            {"name": "SPP 2018.12", "locations": {"/rest/repositories/ext": "hst-fileserver"}},
+        ],
+    })
+    r = assess_readiness(data, now=_NOW)
+    check = next(c for c in r["checks"] if c["name"] == "External-repository baselines")
+    assert check["status"] == "INFO"
+    assert "hst-fileserver" in check["detail"]
+    # Purely informational -- must never affect the overall verdict.
+    assert r["verdict"] == "PASS"
+
+
+def test_readiness_no_check_when_no_external_unused_baselines():
+    r = assess_readiness(_base_data(), now=_NOW)
+    assert not any(c["name"] == "External-repository baselines" for c in r["checks"])

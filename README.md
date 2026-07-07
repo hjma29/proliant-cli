@@ -140,6 +140,10 @@ or server profile, and older than your currently-assigned baseline. Newer unused
 are retained as upgrade targets. It defaults to a dry-run preview; pass `--yes` to delete.
 This only removes files from the appliance repository and never touches running enclosures
 or interconnects (OneView also blocks deletion of any in-use baseline server-side).
+Unused baselines that only exist in an **external** firmware repository (added under
+Firmware Bundles > External Repositories) are listed separately as informational — OneView
+never allows deleting these via the API, and their reported size isn't appliance disk, so
+they're excluded from the reclaimable total.
 
 ### SPP (Service Pack for ProLiant)
 

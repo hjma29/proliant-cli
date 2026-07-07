@@ -25,9 +25,4 @@ Sleep 500ms
 Enter
 Sleep 6s
 
-Type "proliant qs list --model dl380gen12"
-Sleep 500ms
-Enter
-Sleep 8s
-
 Sleep 3s

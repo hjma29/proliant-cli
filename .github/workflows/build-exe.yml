@@ -83,7 +83,6 @@ jobs:
             --include-package=proliant.ilo \
             --include-package=proliant.com \
             --include-package=proliant.oneview \
-            --include-package=proliant.qs \
             --include-package=proliant.spp \
             --include-package=proliant.setting \
             --include-package=proliant.common \
@@ -120,7 +119,6 @@ jobs:
             --include-package=proliant.ilo `
             --include-package=proliant.com `
             --include-package=proliant.oneview `
-            --include-package=proliant.qs `
             --include-package=proliant.spp `
             --include-package=proliant.setting `
             --include-package=proliant.common `

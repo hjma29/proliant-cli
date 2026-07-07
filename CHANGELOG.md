@@ -11,6 +11,7 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ### Bug Fixes
 - Windows installer: the post-install confirmation message is now a simple "installed successfully" + install location — dropped the extra getting-started/tab-completion text, which isn't needed now that completion is set up automatically.
+- `proliant qs` (QuickSpecs browser) is temporarily disabled — rendering wasn't reliable enough across HPE's HTML and PDF QuickSpec formats. The command now prints a clean "currently unavailable" message instead of a broken table, and no longer appears in `--help`, tab completion, or the README/docs. The underlying module isn't deleted (may return once rendering is more reliable) but its dependencies are no longer bundled into the release binaries, shrinking their size.
 
 ---
 

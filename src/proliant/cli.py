@@ -26,7 +26,6 @@ namespaces:
   com          HPE GreenLake / Compute Ops Management (devices, workspaces)
   spp          HPE Service Pack for ProLiant catalog analysis
   oneview      HPE OneView (Synergy & ProLiant fleet management)
-  qs           HPE QuickSpecs browser (list revisions, read specs)
   setting      View and manage proliant configuration
 
 commands:
@@ -50,8 +49,6 @@ examples:
   proliant spp diff gen12 2025.09.01.00 2026.03.00.00  What changed between SPPs?
   proliant oneview servers list                    List all OneView-managed servers
   proliant oneview firmware list                   Fleet firmware inventory via OneView
-  proliant qs list --model dl380gen12              List QuickSpec revisions for DL380 Gen12
-  proliant qs describe a00073551enw               Read the DL380 Gen12 QuickSpec
   proliant setting list inventory                  Show iLO hosts and OneView in inventory.ini
   proliant update                                  Upgrade proliant to the latest release
 """
@@ -71,10 +68,10 @@ Register-ArgumentCompleter -Native -CommandName proliant -ScriptBlock {
     $parts = $rawLine -split '\\s+' | Where-Object { $_ -ne '' }
     $endsWithSpace = $rawLine -match '\\s$'
     $inSubcommand = ($parts.Count -ge 3) -or $endsWithSpace -or ($cursorPosition -gt $rawLine.Length)
-    $dispatchNamespaces = @('ilo', 'com', 'spp', 'oneview', 'qs', 'setting')
+    $dispatchNamespaces = @('ilo', 'com', 'spp', 'oneview', 'setting')
     $dispatchesToNamespace = $inSubcommand -and $parts.Count -ge 2 -and ($dispatchNamespaces -contains $parts[1])
     if (-not $dispatchesToNamespace) {
-        $staticCompletions = @('-V', '--version', 'ilo', 'com', 'spp', 'oneview', 'qs', 'setting', 'update')
+        $staticCompletions = @('-V', '--version', 'ilo', 'com', 'spp', 'oneview', 'setting', 'update')
         $staticCompletions |
             Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } |
             ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, "ParameterValue", $_) }
@@ -393,7 +390,6 @@ _proliant() {
         ilo)     _proliant__ilo ;;
         com)     _proliant__com ;;
         oneview) _proliant__oneview ;;
-        qs)      _proliant__qs ;;
         setting)  _proliant__setting ;;
       esac
       ;;
@@ -406,7 +402,6 @@ _proliant__ns() {
     'ilo:Direct iLO Redfish management'
     'com:HPE GreenLake / Compute Ops Management'
     'oneview:HPE OneView fleet management'
-    'qs:HPE QuickSpecs browser'
     'setting:View and manage proliant configuration'
     'update:Upgrade proliant to the latest release'
   )
@@ -622,10 +617,6 @@ _proliant__com_cmds() {
     'reports:Fleet inventory reports (memory, gpu)'
   )
   _describe 'command' cmds
-}
-
-_proliant__qs() {
-  _arguments '1: :(list describe diff)'
 }
 
 _proliant__oneview() {
@@ -1073,16 +1064,11 @@ def _dispatch_com(args: list[str]) -> None:
 
 
 def _dispatch_qs(args: list[str]) -> None:
-    try:
-        from proliant.qs.cli import main as qs_main
-    except ImportError as exc:
-        print(
-            f"proliant qs: missing dependencies — install with: pip install proliant[qs]\n({exc})",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    sys.argv = ["proliant qs"] + args
-    qs_main()
+    print(
+        "proliant qs: this command is currently unavailable.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 
 def _dispatch_oneview(args: list[str]) -> None:
@@ -1160,11 +1146,6 @@ def main(argv: list[str] | None = None) -> None:
             _dispatch_oneview(parts[2:])
             return
 
-        if in_subcommand and len(parts) >= 2 and parts[1] == "qs":
-            os.environ["_ARGCOMPLETE"] = "2"
-            _dispatch_qs(parts[2:])
-            return
-
         if in_subcommand and len(parts) >= 2 and parts[1] == "setting":
             os.environ["_ARGCOMPLETE"] = "2"
             _dispatch_setting(parts[2:])
@@ -1180,7 +1161,6 @@ def main(argv: list[str] | None = None) -> None:
         sub.add_parser("com",     help="HPE GreenLake / Compute Ops Management")
         sub.add_parser("spp",     help="HPE Service Pack for ProLiant analysis")
         sub.add_parser("oneview", help="HPE OneView fleet management")
-        sub.add_parser("qs",      help="HPE QuickSpecs browser")
         sub.add_parser("setting", help="View and manage proliant configuration")
         sub.add_parser("update",              help="Upgrade proliant to the latest release")
         argcomplete.autocomplete(parser)

@@ -57,7 +57,6 @@ def _value_actions_without_completion() -> list[str]:
         "ilo": "proliant.ilo.cli",
         "com": "proliant.com.cli",
         "oneview": "proliant.oneview.cli",
-        "qs": "proliant.qs.cli",
         "spp": "proliant.spp.cli",
         "setting": "proliant.setting.cli",
     }
@@ -104,7 +103,8 @@ def test_every_value_argument_declares_completion_behavior():
 
 def test_top_level_completion_lists_namespaces():
     completions = set(_complete("proliant "))
-    assert {"ilo", "com", "spp", "oneview", "qs", "setting", "update"} <= completions
+    assert {"ilo", "com", "spp", "oneview", "setting", "update"} <= completions
+    assert "qs" not in completions
 
 
 def test_powershell_trailing_space_loss_still_delegates_to_namespace():
@@ -133,7 +133,6 @@ def test_spp_type_completion():
 def test_freeform_values_do_not_fall_back_to_workspace_files():
     freeform_lines = [
         "proliant oneview mac list --address ",
-        "proliant qs list --model ",
         "proliant com login --email ",
         "proliant ilo network set static srv1 --ip ",
     ]

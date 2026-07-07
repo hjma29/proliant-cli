@@ -235,7 +235,6 @@ def print_devices_table(device_list: list, raw: bool = False,
         title=f"GreenLake Devices ({len(device_list)} total)",
         box=box.SIMPLE_HEAD,
         show_lines=(effective_defaults is _DEVICE_DEFAULT_FIELDS),
-        expand=True,
     )
     for key in selected:
         header, style, kwargs, _ = _DEVICE_FIELDS[key]

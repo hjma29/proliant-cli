@@ -304,14 +304,42 @@ async def test_delete_entry_not_confirmed_keeps_section(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# _prompt_menu
+# ---------------------------------------------------------------------------
+
+def test_prompt_menu_returns_key_for_valid_number():
+    with patch("rich.prompt.Prompt.ask", return_value="2"):
+        key = wiz._prompt_menu([("add", "Add"), ("done", "Done")])
+    assert key == "done"
+
+
+def test_prompt_menu_blank_uses_default():
+    # Simulates Rich's real behavior: blank input -> returns the `default` kwarg passed to it.
+    def fake_ask(prompt, default=None, **kw):
+        return default
+
+    with patch("rich.prompt.Prompt.ask", side_effect=fake_ask):
+        key = wiz._prompt_menu([("ilo", "iLO server"), ("oneview", "OneView appliance")], default="ilo")
+    assert key == "ilo"
+
+
+def test_prompt_menu_reprompts_on_invalid_then_out_of_range_then_accepts():
+    answers = iter(["abc", "9", "1"])
+    with patch("rich.prompt.Prompt.ask", side_effect=lambda *a, **kw: next(answers)):
+        key = wiz._prompt_menu([("add", "Add"), ("done", "Done")])
+    assert key == "add"
+
+
+# ---------------------------------------------------------------------------
 # run_setup_wizard — end-to-end flows
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_run_setup_wizard_creates_new_file(tmp_path):
     dest = tmp_path / "inventory.ini"
-    # menu action "add" -> kind "ilo" -> name/host/username -> loop again -> "done"
-    prompt_answers = iter(["add", "ilo", "srv1", "10.0.0.5", "Administrator", "done"])
+    # menu: Add(1)/Done(2) -> "1"; kind: iLO(1)/OneView(2) -> "1"; then fields;
+    # loop again with 1 entry -> Add(1)/Edit(2)/Delete(3)/Done(4) -> "4"
+    prompt_answers = iter(["1", "1", "srv1", "10.0.0.5", "Administrator", "4"])
 
     with patch("rich.prompt.Prompt.ask", side_effect=lambda *a, **kw: next(prompt_answers)), \
          patch.object(wiz, "prompt_password_async", AsyncMock(return_value="hunter2")), \
@@ -327,7 +355,9 @@ async def test_run_setup_wizard_merges_into_existing_file(tmp_path):
     dest = tmp_path / "inventory.ini"
     dest.write_text("[defaults]\nusername = Administrator\npassword = defaultpass\n\n[existing1]\nhost = 10.0.0.9\n")
 
-    prompt_answers = iter(["add", "ilo", "srv2", "10.0.0.10", "localadmin", "done"])
+    # starts with 1 entry -> Add(1)/Edit(2)/Delete(3)/Done(4) -> "1"; kind iLO(1)/OneView(2) -> "1";
+    # then fields; loop again with 2 entries -> Done is "4"
+    prompt_answers = iter(["1", "1", "srv2", "10.0.0.10", "localadmin", "4"])
 
     with patch("rich.prompt.Prompt.ask", side_effect=lambda *a, **kw: next(prompt_answers)), \
          patch.object(wiz, "prompt_password_async", AsyncMock(return_value="p@ss%word")), \
@@ -358,9 +388,9 @@ async def test_run_setup_wizard_adds_oneview_when_confirmed(tmp_path):
     dest = tmp_path / "inventory.ini"
 
     prompt_answers = iter([
-        "add", "ilo", "srv1", "10.0.0.5", "Administrator",       # add iLO server
-        "add", "oneview", "oneview", "10.0.0.100", "Administrator",  # add OneView appliance
-        "done",
+        "1", "1", "srv1", "10.0.0.5", "Administrator",              # menu:add, kind:ilo -- add iLO server
+        "1", "2", "oneview", "10.0.0.100", "Administrator",         # menu:add, kind:oneview -- add OneView appliance
+        "4",                                                         # menu:done (2 entries now, done is #4)
     ])
 
     with patch("rich.prompt.Prompt.ask", side_effect=lambda *a, **kw: next(prompt_answers)), \
@@ -381,9 +411,9 @@ async def test_run_setup_wizard_edit_then_delete(tmp_path):
 
     # edit srv1's host, then delete it, then done
     prompt_answers = iter([
-        "edit", "1", "10.0.0.6", "Administrator",  # edit: select #1, new host, same username
-        "delete", "1",                              # delete: select #1
-        "done",
+        "2", "1", "10.0.0.6", "Administrator",  # menu:edit -- select #1, new host, same username
+        "3", "1",                                # menu:delete -- select #1
+        "2",                                     # menu:done (0 entries now, Add(1)/Done(2))
     ])
     confirm_answers = iter([True])  # confirm the deletion
 

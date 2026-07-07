@@ -104,6 +104,31 @@ def _select_entry(entries: list[str], verb: str) -> str | None:
     return entries[idx - 1]
 
 
+def _prompt_menu(options: list[tuple[str, str]], prompt: str = "  Select", default: str | None = None) -> str:
+    """Print a numbered menu (key, label) pairs and prompt for a selection by number.
+
+    Returns the key of the chosen option. Re-prompts on invalid/out-of-range input.
+    """
+    for i, (_, label) in enumerate(options, start=1):
+        console.print(f"    {i}. {label}")
+    keys = [key for key, _ in options]
+    default_num = str(keys.index(default) + 1) if default in keys else None
+    while True:
+        raw = Prompt.ask(prompt, default=default_num).strip()
+        if not raw:
+            console.print(f"  [red]Please enter a number 1-{len(options)}.[/red]")
+            continue
+        try:
+            idx = int(raw)
+        except ValueError:
+            console.print(f"  [red]'{raw}' is not a valid number -- pick 1-{len(options)}.[/red]")
+            continue
+        if not (1 <= idx <= len(options)):
+            console.print(f"  [red]Out of range -- pick 1-{len(options)}.[/red]")
+            continue
+        return keys[idx - 1]
+
+
 async def _test_ilo(host: str, username: str, password: str) -> tuple[bool, str]:
     """Try to log into an iLO host. Returns (ok, message)."""
     from proliant.ilo.client import ServerDownOrUnreachableError, ilo_session
@@ -342,16 +367,27 @@ async def run_setup_wizard(dest: Path | None = None) -> None:
             entries = _entries(cfg)
             console.print()
             _print_entries(cfg, entries)
-            choices = ["add", "edit", "delete", "done"] if entries else ["add", "done"]
-            action = Prompt.ask(
-                "\nWhat would you like to do?",
-                choices=choices,
-                default="done" if entries else "add",
-            )
+            if entries:
+                options = [
+                    ("add", "Add a new entry"),
+                    ("edit", "Edit an entry"),
+                    ("delete", "Delete an entry"),
+                    ("done", "Done"),
+                ]
+                default = "done"
+            else:
+                options = [("add", "Add a new entry"), ("done", "Done")]
+                default = "add"
+            console.print("\n[bold]What would you like to do?[/bold]")
+            action = _prompt_menu(options, default=default)
             if action == "done":
                 break
             if action == "add":
-                kind = Prompt.ask("  Add a(n)", choices=["ilo", "oneview"], default="ilo")
+                kind = _prompt_menu(
+                    [("ilo", "iLO server"), ("oneview", "OneView appliance")],
+                    prompt="  Add a",
+                    default="ilo",
+                )
                 if kind == "ilo":
                     await _add_ilo_server(cfg, existing, dest)
                 else:

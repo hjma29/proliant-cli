@@ -35,8 +35,7 @@ Usage::
 
     proliant com workspaces list                All workspaces (active one marked with *)
     proliant com workspaces list --raw          Unprocessed API response
-
-    proliant com workspace use <name-or-id>     Switch active workspace
+    proliant com workspaces use <name-or-id>    Switch active workspace
     proliant com devices add --serial-number SN Add a compute device
     proliant com reports memory                 Fleet memory report
     proliant com reports gpu                    Fleet GPU report
@@ -137,6 +136,30 @@ def _server_targets_completer(prefix: str, **kwargs) -> list[str]:
         # time costs a full API round trip (~1-2s) per TAB press.
         names = cached_names(f"com-servers-{session.region}", _fetch_names)
         return [v for v in names if v.lower().startswith(prefix.lower())]
+    except Exception:  # intentional: completion must never print to stdout
+        return []
+
+
+def _model_names_completer(prefix: str, **kwargs) -> list[str]:
+    """Return distinct device/server model names for --model tab completion.
+
+    Models are returned as lowercase hyphenated slugs (e.g. 'dl380-gen11') to
+    match the --model help text examples; the existing --model filter already
+    normalizes hyphens/spaces/case, so passing a completed slug back in works.
+    """
+    try:
+        session = COMSession.load()
+
+        def _fetch_models() -> list[str]:
+            async def _fetch() -> list[str]:
+                device_list = await _devices.fetch_devices(session)
+                return sorted({d.model for d in device_list if d.model})
+
+            return asyncio.run(_fetch())
+
+        raw_models = cached_names(f"com-models-{session.region}", _fetch_models)
+        slugs = sorted({m.lower().replace(" ", "-") for m in raw_models})
+        return [s for s in slugs if s.startswith(prefix.lower())]
     except Exception:  # intentional: completion must never print to stdout
         return []
 
@@ -347,7 +370,10 @@ async def _ensure_session(args: argparse.Namespace) -> COMSession:
 
 async def _cmd_show_devices(args: argparse.Namespace) -> None:
     session = await _ensure_session(args)
-    device_type = getattr(args, "type", None)
+    is_servers_cmd = getattr(args, "command", None) == "servers"
+    # 'servers' is scoped to pure compute — force COMPUTE regardless of any
+    # --type flag (only 'devices' exposes --type, but be defensive here too).
+    device_type = "COMPUTE" if is_servers_cmd else getattr(args, "type", None)
     fields = getattr(args, "fields", None)
     sort_by = getattr(args, "sort_by", None)
     filter_text = (getattr(args, "filter_text", None) or "").strip().lower()
@@ -384,7 +410,7 @@ async def _cmd_show_devices(args: argparse.Namespace) -> None:
 
     # Resolve user IDs → emails only when added-by column is requested
     user_cache: dict = {}
-    effective_defaults = _SERVER_DEFAULT_FIELDS if getattr(args, "command", None) == "servers" else _DEVICE_DEFAULT_FIELDS
+    effective_defaults = _SERVER_DEFAULT_FIELDS if is_servers_cmd else _DEVICE_DEFAULT_FIELDS
     requested_fields = [f.strip().lower() for f in fields.split(",")] if fields else list(effective_defaults)
     if "added-by" in requested_fields:
         user_ids = {
@@ -401,7 +427,8 @@ async def _cmd_show_devices(args: argparse.Namespace) -> None:
 
     print_devices_table(device_list, raw=getattr(args, "raw", False),
                         fields=fields, sort_by=sort_by, user_cache=user_cache,
-                        default_fields=effective_defaults)
+                        default_fields=effective_defaults,
+                        title="GreenLake Servers" if is_servers_cmd else "GreenLake Devices")
 
 
 async def _cmd_show_workspaces(args: argparse.Namespace) -> None:
@@ -564,7 +591,7 @@ examples:
   proliant com servers describe TWA25380A01
   proliant com bundles list --gen 12
   proliant com workspaces list
-  proliant com workspace use MyWorkspace
+  proliant com workspaces use MyWorkspace
   proliant com reports memory
   proliant com reports gpu
 """,
@@ -629,16 +656,18 @@ examples:
         help="Remove cached credentials and token",
     )
 
-    def _add_device_list_args(p: argparse.ArgumentParser, *, default_fields: tuple[str, ...]) -> None:
-        p.add_argument("--type", metavar="TYPE",
-                       choices=["COMPUTE", "NETWORK", "STORAGE"],
-                       help="Filter by device type")
+    def _add_device_list_args(p: argparse.ArgumentParser, *, default_fields: tuple[str, ...],
+                               allow_type: bool = True) -> None:
+        if allow_type:
+            p.add_argument("--type", metavar="TYPE",
+                           choices=["COMPUTE", "NETWORK", "STORAGE"],
+                           help="Filter by device type")
         filter_arg = p.add_argument("--filter", metavar="TEXT", dest="filter_text",
                    help="Case-insensitive substring filter across serial, hostname, model, location")
         filter_arg.completer = suppress_file_completion()
         model_arg = p.add_argument("--model", metavar="MODEL", dest="filter_model",
                    help="Filter by model (e.g. dl380-gen11, dl325-gen12)")
-        model_arg.completer = suppress_file_completion()
+        model_arg.completer = _model_names_completer  # type: ignore[attr-defined]
         p.add_argument("--raw", action="store_true", help="Dump unprocessed API response (bypasses proliant field parsing)")
         fields_arg = p.add_argument(
             "--fields", metavar="FIELDS",
@@ -714,7 +743,7 @@ examples:
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    _add_device_list_args(srv_list_p, default_fields=_SERVER_DEFAULT_FIELDS)
+    _add_device_list_args(srv_list_p, default_fields=_SERVER_DEFAULT_FIELDS, allow_type=False)
 
     desc_p = servers_sub.add_parser("describe", help="Show details for a server")
     desc_server_arg = desc_p.add_argument("server", metavar="SERIAL_OR_NAME",
@@ -722,15 +751,24 @@ examples:
     desc_server_arg.completer = _server_targets_completer
 
     # ── workspaces ────────────────────────────────────────────────────────
-    workspaces_p = subparsers.add_parser("workspaces", help="List workspaces")
+    workspaces_p = subparsers.add_parser("workspaces", help="List or switch workspaces")
     workspaces_sub = workspaces_p.add_subparsers(dest="what", metavar="ACTION",
                                                  parser_class=_SuggestingArgumentParser)
     workspaces_sub.required = True
     ws_list_p = workspaces_sub.add_parser("list", help="List all workspaces (* = active)")
     ws_list_p.add_argument("--raw", action="store_true", help="Dump unprocessed API response (bypasses proliant field parsing)")
+    ws_use_p = workspaces_sub.add_parser("use", help="Switch active workspace")
+    ws_use_p.add_argument(
+        "workspace", metavar="NAME_OR_ID",
+        help="Workspace name or platform_customer_id",
+    ).completer = _workspace_names_completer  # type: ignore[attr-defined]
 
-    # ── workspace ─────────────────────────────────────────────────────────
-    workspace_p = subparsers.add_parser("workspace", help="Manage the active workspace")
+    # ── workspace (singular) ─────────────────────────────────────────────
+    # Kept as a backward-compatible alias for 'workspaces use' — the plural
+    # form above is the discoverable one (shows up under 'workspaces -h').
+    workspace_p = subparsers.add_parser(
+        "workspace", help="Alias for 'workspaces use' — switch active workspace"
+    )
     workspace_sub = workspace_p.add_subparsers(dest="what", metavar="ACTION",
                                                parser_class=_SuggestingArgumentParser)
     workspace_sub.required = True
@@ -865,6 +903,8 @@ async def _async_main(args: argparse.Namespace) -> None:
     elif args.command == "workspaces":
         if args.what == "list":
             await _cmd_show_workspaces(args)
+        elif args.what == "use":
+            await _cmd_use_workspace(args)
     elif args.command == "workspace":
         if args.what == "use":
             await _cmd_use_workspace(args)

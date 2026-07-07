@@ -49,6 +49,8 @@ def test_servers_table_columns_do_not_stretch_on_wide_terminal(monkeypatch, caps
 
 
 def test_devices_table_columns_do_not_stretch_on_wide_terminal(monkeypatch, capsys):
+    """'devices list' now renders with the same server-focused columns as
+    'servers list' (only the underlying device scope differs)."""
     wide_console = Console(width=200, force_terminal=False, no_color=True)
     monkeypatch.setattr(prn, "get_console", lambda: wide_console)
 
@@ -58,7 +60,7 @@ def test_devices_table_columns_do_not_stretch_on_wide_terminal(monkeypatch, caps
 
     out = capsys.readouterr().out
     lines = [ln for ln in out.splitlines() if ln.strip()]
-    header_line = next(ln for ln in lines if "Device" in ln and "Model" in ln)
+    header_line = next(ln for ln in lines if "Serial" in ln and "Model" in ln)
 
     assert len(header_line) < 120
 

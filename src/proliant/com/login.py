@@ -726,7 +726,8 @@ async def _pick_workspace(
     workspace_name: Optional[str] = None,
 ) -> dict:
     """
-    Select a workspace by name or interactively (arrow keys + type to search).
+    Select a workspace by name, or interactively via a numbered, multi-column
+    list (type the number or a partial name and press Enter).
     Returns the chosen workspace dict.
     """
     if len(workspaces) == 1:
@@ -746,50 +747,49 @@ async def _pick_workspace(
             )
         return ws
 
-    # Interactive picker — run questionary in a thread (it blocks; needs no running loop)
+    # Numbered, multi-column picker — no arrow-key navigation required.
     names = [w["company_name"] for w in workspaces]
+    console.print("\n[bold]Available workspaces:[/bold]")
+    _print_numbered_choices(names)
+
+    chosen: Optional[str] = None
     try:
-        import questionary
-
-        def _ask() -> Optional[str]:
-            return questionary.select(
-                "Select workspace:",
-                choices=names,
-                use_search_filter=True,
-                use_jk_keys=False,
-                instruction="(↑↓ arrows · type to filter · Enter to confirm)",
-            ).ask()
-
-        chosen = await asyncio.to_thread(_ask)
-    except ImportError:
-        # Fallback: numbered list
-        console.print("\n[bold]Available workspaces:[/bold]")
-        for i, name in enumerate(names, 1):
-            console.print(f"  [cyan]{i:2}.[/cyan] {name}")
-        from rich.prompt import Prompt
-        while True:
-            answer = Prompt.ask("\nWorkspace number or partial name").strip()
+        while chosen is None:
+            answer = Prompt.ask("\nWorkspace number or name").strip()
+            if not answer:
+                continue
             if answer.isdigit():
                 idx = int(answer) - 1
-                if 0 <= idx < len(workspaces):
+                if 0 <= idx < len(names):
                     chosen = names[idx]
-                    break
-            else:
-                matches = [n for n in names if answer.lower() in n.lower()]
-                if len(matches) == 1:
-                    chosen = matches[0]
-                    break
-                elif matches:
-                    console.print(f"[yellow]Ambiguous: {matches}[/yellow]")
                 else:
-                    console.print("[red]No match found.[/red]")
-            chosen = None
-
-    if chosen is None:  # Ctrl+C in questionary
+                    console.print(f"[red]Enter a number between 1 and {len(names)}.[/red]")
+                continue
+            matches = [n for n in names if answer.lower() in n.lower()]
+            if len(matches) == 1:
+                chosen = matches[0]
+            elif matches:
+                console.print(f"[yellow]Ambiguous — matches: {', '.join(matches)}[/yellow]")
+            else:
+                console.print("[red]No match found.[/red]")
+    except (KeyboardInterrupt, EOFError):
         console.print("[yellow]No workspace selected — using first available.[/yellow]")
         return workspaces[0]
 
     return next(w for w in workspaces if w["company_name"] == chosen)
+
+
+def _print_numbered_choices(names: list[str]) -> None:
+    """Render a numbered list of choices, wrapped into multiple columns.
+
+    Replaces the old single-column arrow-key picker (questionary.select),
+    which used a hard-to-see cursor and forced a long vertical scroll for
+    accounts with many workspaces.
+    """
+    from rich.columns import Columns
+
+    entries = [f"[cyan]{i:2}.[/cyan] {name}" for i, name in enumerate(names, 1)]
+    console.print(Columns(entries, padding=(0, 4), equal=False, column_first=True))
 
 
 async def _setup_workspace_session(

@@ -56,6 +56,62 @@ class TestMatchWorkspace:
         assert login_mod._match_workspace([WS_CACHED], "does-not-exist") is None
 
 
+class TestPickWorkspace:
+    """_pick_workspace() interactive numbered/multi-column picker.
+
+    Replaces the old questionary.select arrow-key picker — verifies the
+    numbered-choice + partial-name-match flow works without any arrow-key
+    navigation dependency.
+    """
+
+    @pytest.mark.asyncio
+    async def test_single_workspace_auto_selected_no_prompt(self):
+        result = await login_mod._pick_workspace([WS_CACHED])
+        assert result == WS_CACHED
+
+    @pytest.mark.asyncio
+    async def test_explicit_workspace_name_bypasses_prompt(self):
+        result = await login_mod._pick_workspace([WS_CACHED, WS_NEW], workspace_name="hj-tes1")
+        assert result == WS_NEW
+
+    @pytest.mark.asyncio
+    async def test_explicit_unknown_name_raises(self):
+        with pytest.raises(login_mod.AuthFlowError):
+            await login_mod._pick_workspace([WS_CACHED, WS_NEW], workspace_name="does-not-exist")
+
+    @pytest.mark.asyncio
+    async def test_numbered_selection(self):
+        with patch("proliant.com.login.Prompt.ask", return_value="2"):
+            result = await login_mod._pick_workspace([WS_CACHED, WS_NEW])
+        assert result == WS_NEW
+
+    @pytest.mark.asyncio
+    async def test_partial_name_selection(self):
+        with patch("proliant.com.login.Prompt.ask", return_value="hj-tes1"):
+            result = await login_mod._pick_workspace([WS_CACHED, WS_NEW])
+        assert result == WS_NEW
+
+    @pytest.mark.asyncio
+    async def test_out_of_range_number_reprompts(self):
+        with patch("proliant.com.login.Prompt.ask", side_effect=["9", "1"]):
+            result = await login_mod._pick_workspace([WS_CACHED, WS_NEW])
+        assert result == WS_CACHED
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_name_reprompts(self):
+        ws_a = {"platform_customer_id": "ws-a", "company_name": "acme-labs", "account_status": "ACTIVE"}
+        ws_b = {"platform_customer_id": "ws-b", "company_name": "acme-prod", "account_status": "ACTIVE"}
+        with patch("proliant.com.login.Prompt.ask", side_effect=["acme", "acme-labs"]):
+            result = await login_mod._pick_workspace([ws_a, ws_b])
+        assert result == ws_a
+
+    @pytest.mark.asyncio
+    async def test_ctrl_c_falls_back_to_first_workspace(self):
+        with patch("proliant.com.login.Prompt.ask", side_effect=KeyboardInterrupt):
+            result = await login_mod._pick_workspace([WS_CACHED, WS_NEW])
+        assert result == WS_CACHED
+
+
 class TestMergeWorkspaces:
     def test_dedups_by_platform_customer_id(self):
         merged = login_mod._merge_workspaces([WS_CACHED], [WS_CACHED, WS_NEW])

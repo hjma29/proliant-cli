@@ -96,6 +96,7 @@ proliant com servers describe <name>
 proliant com bundles list                        # Available SPP bundles
 proliant com bundles list --gen 12 --type base
 proliant com workspaces list
+proliant com workspaces use MyWorkspace           # Switch active workspace
 proliant com reports gpu                         # GPU inventory report
 proliant com reports memory
 ```

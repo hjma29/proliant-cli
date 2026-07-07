@@ -179,8 +179,12 @@ _DEVICE_FIELDS: dict = {
                  )),
 }
 
-_DEVICE_DEFAULT_FIELDS  = ("device", "model", "type", "service", "tier", "flex", "location")
+_DEVICE_DEFAULT_FIELDS  = ("serial", "os-name", "ilo-name", "model", "type", "location")
 _SERVER_DEFAULT_FIELDS  = ("serial", "os-name", "ilo-name", "model", "type", "location")
+
+# Fields that render multi-line cells (Rich \n) — used to decide whether the
+# table needs a horizontal rule between rows for readability.
+_MULTILINE_FIELDS = {"device", "service"}
 
 DEVICE_FIELD_NAMES = tuple(_DEVICE_FIELDS.keys())
 
@@ -210,7 +214,8 @@ def print_devices_table(device_list: list, raw: bool = False,
                         fields: Optional[str] = None,
                         sort_by: Optional[str] = None,
                         user_cache: Optional[dict] = None,
-                        default_fields: Optional[tuple] = None) -> None:
+                        default_fields: Optional[tuple] = None,
+                        title: str = "GreenLake Devices") -> None:
     if raw or get_output_mode() == OutputMode.JSON:
         print_json([d.raw for d in device_list])
         return
@@ -231,9 +236,9 @@ def print_devices_table(device_list: list, raw: bool = False,
                          key=lambda d: _strip_markup(_DEVICE_FIELDS[sort_key][3](d, uc)).lower())
 
     table = Table(
-        title=f"GreenLake Devices ({len(device_list)} total)",
+        title=f"{title} ({len(device_list)} total)",
         box=box.SIMPLE_HEAD,
-        show_lines=(effective_defaults is _DEVICE_DEFAULT_FIELDS),
+        show_lines=any(key in _MULTILINE_FIELDS for key in selected),
     )
     for key in selected:
         header, style, kwargs, _ = _DEVICE_FIELDS[key]

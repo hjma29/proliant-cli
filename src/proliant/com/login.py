@@ -1266,22 +1266,45 @@ async def switch_workspace(name_or_id: str) -> str:
     access_token = data.get("access_token", "")
     ccs_session  = data.get("ccs_session", "")
 
-    async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.get(
-            f"{USER_API_BASE}/authn/v1/session/load-account/{new_ws_id}",
-            headers={"Authorization": f"Bearer {access_token}"},
-            cookies={"ccs-session": ccs_session} if ccs_session else None,
-        )
-        if r.status_code not in (200, 204):
-            raise AuthFlowError(
-                f"Workspace switch failed ({r.status_code}): {r.text[:300]}"
+    async def _try_load_account(token: str, cookie: str) -> tuple[httpx.Response, str]:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{USER_API_BASE}/authn/v1/session/load-account/{new_ws_id}",
+                headers={"Authorization": f"Bearer {token}"},
+                cookies={"ccs-session": cookie} if cookie else None,
             )
+            refreshed_cookie = cookie
+            for c in client.cookies.jar:
+                if c.name == "ccs-session":
+                    refreshed_cookie = c.value
+                    break
+        return resp, refreshed_cookie
 
-        # Pick up refreshed ccs-session if the server returned one
-        for c in client.cookies.jar:
-            if c.name == "ccs-session":
-                ccs_session = c.value
-                break
+    r, ccs_session = await _try_load_account(access_token, ccs_session)
+
+    if r.status_code == 401:
+        # The ccs-session cookie can expire well before the OAuth access
+        # token does (observed: access token still valid for ~75 min, but
+        # load-account already returns 401 HPE_GL_V1_SESSION_NOT_FOUND).
+        # Force a refresh -- which also re-establishes a fresh ccs-session
+        # via refresh_token_if_needed()'s own /authn/v1/session call -- then
+        # retry the switch once before giving up.
+        refreshed = await refresh_token_if_needed(force=True)
+        if refreshed:
+            data = refreshed
+            access_token = data.get("access_token", "")
+            ccs_session = data.get("ccs_session", "")
+            r, ccs_session = await _try_load_account(access_token, ccs_session)
+
+    if r.status_code not in (200, 204):
+        if r.status_code == 401:
+            raise AuthFlowError(
+                "Workspace switch failed: your login session has expired. "
+                "Run 'proliant com login' again."
+            )
+        raise AuthFlowError(
+            f"Workspace switch failed ({r.status_code}): {r.text[:300]}"
+        )
 
     # Update token.json in-place
     data["workspace_id"]   = new_ws_id

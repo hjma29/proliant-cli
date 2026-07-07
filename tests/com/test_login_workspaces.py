@@ -334,6 +334,54 @@ class TestSwitchWorkspace:
         assert saved["glp_client_id"] == ""
 
     @pytest.mark.asyncio
+    async def test_switch_retries_after_401_with_forced_token_refresh(self, tmp_path, monkeypatch):
+        """Regression test: the ccs-session cookie can expire independently of
+        (and well before) the OAuth access token -- observed live with an
+        access token still valid for ~75 more minutes. A 401
+        'HPE_GL_V1_SESSION_NOT_FOUND' from load-account must trigger a forced
+        token refresh (which re-establishes ccs-session) and a single retry,
+        instead of failing the switch immediately."""
+        _write_token(tmp_path, monkeypatch, workspaces=[WS_CACHED, WS_NEW])
+
+        refreshed_data = {
+            "access_token": "new-acc", "ccs_session": "new-cookie",
+            "workspace_id": "ws-1", "workspace_name": "default-ws",
+            "workspaces": [WS_CACHED, WS_NEW],
+        }
+
+        with respx.mock:
+            respx.get(f"{login_mod.USER_API_BASE}/authn/v1/session/load-account/ws-2").mock(
+                side_effect=[
+                    httpx.Response(401, json={"errorCode": "HPE_GL_V1_SESSION_NOT_FOUND"}),
+                    httpx.Response(200),
+                ]
+            )
+            with patch("proliant.com.login.refresh_token_if_needed", new_callable=AsyncMock,
+                       return_value=refreshed_data) as mock_refresh:
+                name = await login_mod.switch_workspace("hj-tes1")
+
+        mock_refresh.assert_awaited_once_with(force=True)
+        assert name == "hj-tes1"
+        saved = json.loads(login_mod.TOKEN_CACHE.read_text())
+        assert saved["workspace_id"] == "ws-2"
+
+    @pytest.mark.asyncio
+    async def test_switch_401_after_failed_refresh_raises_clean_error(self, tmp_path, monkeypatch):
+        """If the forced refresh itself fails (e.g. the refresh_token has also
+        expired), surface a clean re-login hint instead of the raw HPE JSON
+        error body."""
+        _write_token(tmp_path, monkeypatch, workspaces=[WS_CACHED, WS_NEW])
+
+        with respx.mock:
+            respx.get(f"{login_mod.USER_API_BASE}/authn/v1/session/load-account/ws-2").mock(
+                return_value=httpx.Response(401, json={"errorCode": "HPE_GL_V1_SESSION_NOT_FOUND"})
+            )
+            with patch("proliant.com.login.refresh_token_if_needed", new_callable=AsyncMock,
+                       return_value=None):
+                with pytest.raises(login_mod.AuthFlowError, match="login session has expired"):
+                    await login_mod.switch_workspace("hj-tes1")
+
+    @pytest.mark.asyncio
     async def test_switch_to_new_workspace_triggers_live_refresh(self, tmp_path, monkeypatch):
         """Regression test: a workspace created after the last login isn't in
         the cached list -- switch_workspace() must refresh live and retry

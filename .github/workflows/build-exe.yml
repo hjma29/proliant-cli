@@ -85,6 +85,7 @@ jobs:
             --include-package=proliant.oneview \
             --include-package=proliant.spp \
             --include-package=proliant.setting \
+            --include-package=proliant.setup \
             --include-package=proliant.common \
             --include-package=yaml \
             --include-package=certifi \
@@ -121,6 +122,7 @@ jobs:
             --include-package=proliant.oneview `
             --include-package=proliant.spp `
             --include-package=proliant.setting `
+            --include-package=proliant.setup `
             --include-package=proliant.common `
             --include-package=yaml `
             --include-package=certifi `

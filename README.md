@@ -45,9 +45,20 @@ proliant spp <action>                 # HPE Service Pack for ProLiant (SPP)
 
 Use `--help` at any level (`proliant ilo --help`, `proliant ilo firmware --help`) for full options.
 
+### Getting started
+
+Run `proliant setup` once to add your iLO servers (and, optionally, a OneView
+appliance) to `inventory.ini` — a guided, step-by-step wizard that tests each
+connection live before saving it. Safe to run again any time to add more
+servers.
+
+```bash
+proliant setup
+```
+
 ### iLO
 
-Talks directly to iLO via Redfish. Requires a `hosts-ilo.ini` in the current directory — run `proliant ilo init` to create one.
+Talks directly to iLO via Redfish. Requires an `inventory.ini` — run `proliant setup` to create one.
 
 ```bash
 # Inventory
@@ -89,6 +100,8 @@ proliant com reports memory
 ```
 
 ### OneView
+
+Requires an `inventory.ini` with a `[oneview]` (or `type = oneview`) section — run `proliant setup` to add one.
 
 ```bash
 proliant oneview servers list

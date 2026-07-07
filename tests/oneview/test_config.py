@@ -56,7 +56,7 @@ def test_main_reports_missing_config_cleanly_instead_of_raw_traceback(capsys):
     def _raise(*_a, **_kw):
         raise FileNotFoundError(
             "inventory.ini not found. Expected at: /fake/path/inventory.ini\n"
-            "Run 'proliant ilo init' to create a starter config."
+            "Run 'proliant setup' to add one."
         )
 
     with patch("proliant.oneview.config.load_oneview_config", side_effect=_raise):

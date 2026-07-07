@@ -27,7 +27,7 @@ def _find_config_file() -> Path:
 
     When no candidate exists on disk, fall back to the canonical
     ``~/.config/proliant-cli/inventory.ini`` location — the same one
-    ``ilo/config.py`` uses and ``proliant ilo init`` creates — so error
+    ``ilo/config.py`` uses and ``proliant setup`` writes to — so error
     messages always point somewhere consistent and actionable, instead of
     whatever the current working directory happens to be.
     """
@@ -55,7 +55,7 @@ def load_oneview_config() -> dict[str, str]:
     Raises
     ------
     FileNotFoundError
-        If hosts-ilo.ini is not found.
+        If inventory.ini is not found.
     ValueError
         If [oneview] section or required 'host' key is missing.
     """
@@ -63,10 +63,11 @@ def load_oneview_config() -> dict[str, str]:
     if not config_file.exists():
         raise FileNotFoundError(
             f"inventory.ini not found. Expected at: {config_file}\n"
-            "Run 'proliant ilo init' to create a starter config."
+            "Run 'proliant setup' to add one."
         )
 
-    cfg = configparser.ConfigParser()
+    # interpolation=None: passwords may legitimately contain a literal '%'.
+    cfg = configparser.ConfigParser(interpolation=None)
     cfg.read(config_file)
 
     # Find the OneView section: either literally named [oneview] or any section
@@ -83,7 +84,7 @@ def load_oneview_config() -> dict[str, str]:
     if ov_section is None:
         raise ValueError(
             f"No OneView section found in {config_file}.\n"
-            "Add one:\n\n"
+            "Run 'proliant setup' to add one, or add it by hand:\n\n"
             "  [my-oneview]\n"
             "  host     = <oneview-appliance-ip>\n"
             "  username = Administrator\n"

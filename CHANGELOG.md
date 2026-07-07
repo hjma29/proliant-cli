@@ -6,6 +6,9 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ## v1.0.18 — 2026-07-06
 
+### New Features
+- `proliant setup`: new guided, step-by-step wizard for onboarding your iLO servers and OneView appliance into `inventory.ini` — prompts for connection details, live-tests each one before saving, and merges into any existing config instead of overwriting it. `proliant ilo init` still works as a shortcut to the same wizard.
+
 ### Enhancements
 - Windows installer: the "Finished" page now has a checked-by-default "Launch a new terminal" option, so you can jump straight into using `proliant` instead of having to go find/open a shell yourself. Prefers Windows Terminal, falling back to PowerShell if Windows Terminal isn't installed.
 

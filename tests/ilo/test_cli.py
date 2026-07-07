@@ -242,19 +242,14 @@ async def test_async_main_dispatches_boot():
     run_boot.assert_called_once_with(args)
 
 
-def test_run_init_creates_user_config(monkeypatch, tmp_path):
+def test_run_init_delegates_to_setup_wizard():
     from proliant.ilo import cli
 
-    monkeypatch.setattr("proliant.common.config_dir", lambda: tmp_path)
+    with patch("proliant.setup.wizard.run_setup_wizard") as wizard:
+        import asyncio
+        asyncio.run(cli._run_init())
 
-    with patch("rich.prompt.Confirm.ask", side_effect=[False]), \
-         patch("proliant.ilo.cli._open_in_editor") as open_editor:
-        cli._run_init()
-
-    dest = tmp_path / "inventory.ini"
-    assert dest.exists()
-    assert "[defaults]" in dest.read_text()
-    open_editor.assert_not_called()
+    wizard.assert_called_once_with()
 
 
 class FakeILOClient:

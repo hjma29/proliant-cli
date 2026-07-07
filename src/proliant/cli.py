@@ -29,6 +29,7 @@ namespaces:
   setting      View and manage proliant configuration
 
 commands:
+  setup                Guided step-by-step setup of inventory.ini (iLO/OneView)
   update [-y|--yes]    Download and install the latest proliant release
                         (-y/--yes skips the confirmation prompt)
 
@@ -50,6 +51,7 @@ examples:
   proliant oneview servers list                    List all OneView-managed servers
   proliant oneview firmware list                   Fleet firmware inventory via OneView
   proliant setting list inventory                  Show iLO hosts and OneView in inventory.ini
+  proliant setup                                    Guided setup of your iLO/OneView inventory
   proliant update                                  Upgrade proliant to the latest release
 """
 
@@ -71,7 +73,7 @@ Register-ArgumentCompleter -Native -CommandName proliant -ScriptBlock {
     $dispatchNamespaces = @('ilo', 'com', 'spp', 'oneview', 'setting')
     $dispatchesToNamespace = $inSubcommand -and $parts.Count -ge 2 -and ($dispatchNamespaces -contains $parts[1])
     if (-not $dispatchesToNamespace) {
-        $staticCompletions = @('-V', '--version', 'ilo', 'com', 'spp', 'oneview', 'setting', 'update')
+        $staticCompletions = @('-V', '--version', 'ilo', 'com', 'spp', 'oneview', 'setting', 'setup', 'update')
         $staticCompletions |
             Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } |
             ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, "ParameterValue", $_) }
@@ -403,6 +405,7 @@ _proliant__ns() {
     'com:HPE GreenLake / Compute Ops Management'
     'oneview:HPE OneView fleet management'
     'setting:View and manage proliant configuration'
+    'setup:Guided step-by-step setup of inventory.ini'
     'update:Upgrade proliant to the latest release'
   )
   _describe 'namespace' ns
@@ -778,6 +781,18 @@ usage: proliant update [-y|--yes]
 Download and install the latest proliant release.
   -y, --yes    Skip the confirmation prompt (non-interactive).\
 """
+
+_SETUP_USAGE = """\
+usage: proliant setup
+
+Guided, step-by-step setup of inventory.ini -- add your iLO servers (and,
+optionally, a OneView appliance), testing each connection live before it
+is saved. Safe to run again any time to add more servers.\
+"""
+
+
+def _setup_args_request_help(setup_args: list[str]) -> bool:
+    return any(a in ("-h", "--help") for a in setup_args)
 
 
 def _update_args_request_help(update_args: list[str]) -> bool:
@@ -1162,6 +1177,7 @@ def main(argv: list[str] | None = None) -> None:
         sub.add_parser("spp",     help="HPE Service Pack for ProLiant analysis")
         sub.add_parser("oneview", help="HPE OneView fleet management")
         sub.add_parser("setting", help="View and manage proliant configuration")
+        sub.add_parser("setup",   help="Guided step-by-step setup of inventory.ini")
         sub.add_parser("update",              help="Upgrade proliant to the latest release")
         argcomplete.autocomplete(parser)
         return  # autocomplete() exits; reaching here means no completion needed
@@ -1194,6 +1210,14 @@ def main(argv: list[str] | None = None) -> None:
         _dispatch_qs(list(args[1:]))
     elif namespace == "setting":
         _dispatch_setting(list(args[1:]))
+    elif namespace == "setup":
+        setup_args = list(args[1:])
+        if _setup_args_request_help(setup_args):
+            print(_SETUP_USAGE)
+            sys.exit(0)
+        from proliant.common.runner import run_sync
+        from proliant.setup.wizard import run_setup_wizard
+        run_sync(run_setup_wizard())
     elif namespace == "update":
         update_args = list(args[1:])
         if _update_args_request_help(update_args):

@@ -626,8 +626,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser(
         "init",
-        help="Create a starter inventory.ini in the current directory",
-        description="Create ./inventory.ini with example entries to fill in.",
+        help="Guided setup of inventory.ini (alias for 'proliant setup')",
+        description="Guided step-by-step setup of inventory.ini. Alias for 'proliant setup'.",
     ).set_defaults(command="init")
 
     return parser
@@ -649,7 +649,7 @@ async def _async_main(args: argparse.Namespace) -> None:
     elif args.command == "upgrade":
         await _run_upgrade(args)
     elif args.command == "init":
-        _run_init()
+        await _run_init()
     elif args.command == "report":
         if args.what in ("memory", "mem"):
             await _run_report_memory(args)
@@ -687,105 +687,27 @@ def _load_hosts_or_exit(name: str | None, hosts_from: str | None = None) -> list
             return resolve_hosts(name, hosts_from, load_hosts)
         return load_hosts(name=name)
     except FileNotFoundError:
-        from pathlib import Path
         from rich.console import Console
-        from rich.prompt import Confirm
 
         console = Console()
-        dest = Path.cwd() / "inventory.ini"
-        console.print(f"\n[green]No inventory.ini found.[/green] A config file is needed to connect to your iLO servers.")
-        console.print(f"  It would be created at: [bold]{dest}[/bold]\n")
-        if Confirm.ask("[green]Create inventory.ini now?[/green]", default=True):
-            _write_hosts_ini(dest)
-            console.print(f"\n[green]✓[/green] Created: [bold]{dest}[/bold]")
-            console.print("  Fill in your server addresses and credentials, then re-run your command.\n")
-            if Confirm.ask("[green]Open it in your default editor now?[/green]", default=True):
-                _open_in_editor(dest)
-        else:
-            console.print("\n  Run [bold]proliant ilo init[/bold] any time to create the file.\n")
-        sys.exit(0)
+        console.print(
+            "\n[red]No inventory.ini found.[/red] A config file is needed to connect to your iLO servers."
+        )
+        console.print("  Run [bold]proliant setup[/bold] to add your servers (guided, tests each connection).\n")
+        sys.exit(1)
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(1)
 
 
-_HOSTS_INI_TEMPLATE = (
-    "# proliant iLO inventory\n"
-    "# Place this file in the same directory as proliant (or proliant.exe on Windows).\n"
-    "#\n"
-    "# [defaults]  — shared credentials for all servers (can be overridden per server)\n"
-    "# [section]   — one section per iLO server; section name = display name\n"
-    "#               'host' is the only required field (IP or hostname, no https://)\n"
-    "\n"
-    "[defaults]\n"
-    "username = Administrator\n"
-    "password = yourpassword\n"
-    "\n"
-    "[my-server-1]\n"
-    "host = 10.0.0.1\n"
-    "\n"
-    "[my-server-2]\n"
-    "host = 10.0.0.2\n"
-    "\n"
-    "# Example: server with different credentials\n"
-    "# [lab-server]\n"
-    "# host = myilo.example.com\n"
-    "# username = localadmin\n"
-    "# password = differentpass\n"
-    "\n"
-    "# To store other appliances (e.g. OneView) without affecting iLO commands,\n"
-    "# add 'type = oneview' — proliant ilo will skip non-ilo entries automatically.\n"
-    "# [my-oneview]\n"
-    "# host = 10.0.0.100\n"
-    "# username = Administrator\n"
-    "# password = yourpassword\n"
-    "# type = oneview\n"
-)
+async def _run_init() -> None:
+    """Backward-compatible alias for 'proliant ilo init' -- delegates to the
+    top-level 'proliant setup' wizard, which handles both iLO and OneView
+    entries in the same inventory.ini.
+    """
+    from proliant.setup.wizard import run_setup_wizard
 
-
-def _write_hosts_ini(dest: "Path") -> None:
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(_HOSTS_INI_TEMPLATE)
-
-
-def _open_in_editor(path: "Path") -> None:
-    import subprocess
-    import os
-    import platform
-    try:
-        if platform.system() == "Windows":
-            os.startfile(str(path))
-        elif platform.system() == "Darwin":
-            subprocess.run(["open", str(path)], check=False)
-        else:
-            editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "xdg-open"
-            subprocess.run([editor, str(path)], check=False)
-    except Exception:  # intentional: editor launch is best-effort; don't crash the CLI
-        pass
-
-
-def _run_init() -> None:
-    from pathlib import Path
-    from rich.console import Console
-    from rich.prompt import Confirm
-    from proliant.common import config_dir
-
-    console = Console()
-    dest = config_dir() / "inventory.ini"
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    if dest.exists():
-        console.print(f"[green]Already exists:[/green] [bold]{dest}[/bold]")
-        console.print("  Edit it to add or update your servers.")
-        if Confirm.ask("\n[green]Open it in your default editor?[/green]", default=True):
-            _open_in_editor(dest)
-        return
-
-    _write_hosts_ini(dest)
-    console.print(f"\n[green]✓[/green] Created: [bold]{dest}[/bold]")
-    console.print("  Fill in your server addresses and credentials.\n")
-    console.print("  Then try: [bold]proliant ilo list firmwares[/bold]\n")
-    if Confirm.ask("[green]Open it in your default editor now?[/green]", default=True):
-        _open_in_editor(dest)
+    await run_setup_wizard()
 
 
 async def _manager_network_targets(client: ILOClient) -> tuple[str, str]:

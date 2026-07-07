@@ -32,11 +32,12 @@ def _cmd_list_inventory() -> None:
     if not HOSTS_FILE.exists():
         console.print(
             f"[red]Config file not found:[/red] {HOSTS_FILE}\n"
-            "Run [bold]proliant ilo init[/bold] to create a starter config."
+            "Run [bold]proliant setup[/bold] to add your iLO/OneView servers."
         )
         sys.exit(1)
 
-    cfg = configparser.ConfigParser()
+    # interpolation=None: passwords may legitimately contain a literal '%'.
+    cfg = configparser.ConfigParser(interpolation=None)
     cfg.read(HOSTS_FILE)
 
     default_user = cfg.get("defaults", "username", fallback="Administrator")

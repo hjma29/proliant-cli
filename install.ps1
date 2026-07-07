@@ -95,7 +95,7 @@ Register-ArgumentCompleter -Native -CommandName proliant -ScriptBlock {
     $dispatchNamespaces = @('ilo', 'com', 'spp', 'oneview', 'setting')
     $dispatchesToNamespace = $inSubcommand -and $parts.Count -ge 2 -and ($dispatchNamespaces -contains $parts[1])
     if (-not $dispatchesToNamespace) {
-        $staticCompletions = @('-V', '--version', 'ilo', 'com', 'spp', 'oneview', 'setting', 'update')
+        $staticCompletions = @('-V', '--version', 'ilo', 'com', 'spp', 'oneview', 'setting', 'setup', 'update')
         $staticCompletions |
             Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } |
             ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, "ParameterValue", $_) }

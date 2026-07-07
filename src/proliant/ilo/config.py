@@ -29,7 +29,7 @@ MAX_WORKERS: int = 10
 # Search order (first match wins):
 #   1. PCLI_CONFIG env var                        (explicit override)
 #   2. ./inventory.ini                            (local/project override)
-#   3. ~/.config/proliant-cli/inventory.ini       (default — created by 'proliant ilo init')
+#   3. ~/.config/proliant-cli/inventory.ini       (default — created by 'proliant setup')
 # ---------------------------------------------------------------------------
 
 def _find_config_file() -> Path:
@@ -88,7 +88,10 @@ def load_hosts(name: str | None = None) -> list[dict]:
     if not HOSTS_FILE.exists():
         raise FileNotFoundError(HOSTS_FILE)
 
-    cfg = configparser.ConfigParser()
+    # interpolation=None: passwords may legitimately contain a literal '%',
+    # which ConfigParser's default BasicInterpolation would otherwise try to
+    # parse as an interpolation directive (e.g. '%(name)s') and reject.
+    cfg = configparser.ConfigParser(interpolation=None)
     try:
         cfg.read(HOSTS_FILE)
     except configparser.Error as exc:

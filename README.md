@@ -106,7 +106,11 @@ Requires an `inventory.ini` with a `[oneview]` (or `type = oneview`) section —
 
 ```bash
 proliant oneview servers list
-proliant oneview firmware list
+proliant oneview servers firmware list
+proliant oneview servers firmware list --server "Enclosure-01, bay 1"
+proliant oneview firmware bundles list
+proliant oneview firmware repository list
+proliant oneview firmware compliance list
 proliant oneview networks list
 proliant oneview networks describe <name>
 proliant oneview networksets list

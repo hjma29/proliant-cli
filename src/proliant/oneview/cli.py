@@ -3,7 +3,10 @@ proliant.oneview.cli — OneView subcommands.
 
 Usage:
     proliant oneview servers list [--fields ...]
-    proliant oneview firmware list [--server NAME]
+    proliant oneview servers firmware list [--server NAME]
+    proliant oneview firmware bundles list
+    proliant oneview firmware repository list
+    proliant oneview firmware compliance list
 """
 
 # PYTHON_ARGCOMPLETE_OK
@@ -356,7 +359,7 @@ async def _cmd_servers_list(args: argparse.Namespace) -> None:
     await _async_servers_list(fields)
 
 
-# ── proliant oneview firmware list ────────────────────────────────────────────────
+# ── proliant oneview servers firmware list ────────────────────────────────────────
 
 async def _async_firmware_fleet() -> None:
     """Show firmware for all servers — one OneView API call."""
@@ -1786,6 +1789,136 @@ def _fmt_gb(size_bytes: int) -> str:
     return f"{gb:.2f} GB" if gb >= 1 else f"{size_bytes / (1024 ** 2):.0f} MB"
 
 
+def _fmt_gb_value(gb: float) -> str:
+    """Format a value already expressed in GB (e.g. from normalize_repositories)."""
+    return f"{gb:.2f} GB" if gb >= 1 else f"{gb * 1024:.0f} MB"
+
+
+# ── proliant oneview firmware bundles/repository/compliance ──────────────────
+# Appliance/repository-level firmware views matching the OneView GUI's
+# Firmware section — distinct from `servers firmware list` above, which is
+# per-server component inventory.
+
+async def _async_firmware_bundles_list() -> None:
+    from proliant.oneview.firmware import list_bundles
+
+    async with _load_client() as client:
+        with get_console().status("[dim]Fetching firmware bundles…[/dim]"):
+            bundles = await list_bundles(client)
+
+    if get_output_mode() == OutputMode.JSON:
+        print_json(bundles)
+        return
+
+    console = get_console()
+    if not bundles:
+        console.print("[yellow]No firmware bundles registered on this appliance.[/yellow]")
+        return
+
+    table = make_table(
+        f"Firmware Bundles  ({len(bundles)})",
+        ("Name", {"no_wrap": True}),
+        ("Version", {"no_wrap": True}),
+        ("Type", {"no_wrap": True}),
+        ("Released", {"no_wrap": True}),
+        ("Size", {"justify": "right", "no_wrap": True}),
+        ("Repository", {"no_wrap": True, "style": "dim"}),
+    )
+    for b in bundles:
+        released = (b.get("release_date") or "")[:10]
+        table.add_row(b["name"], b["version"], b.get("bundle_type", ""), released,
+                      _fmt_gb(b["size_bytes"]), b.get("repository_names", ""))
+    console.print(table)
+
+
+async def _cmd_firmware_bundles_list(args: argparse.Namespace) -> None:
+    await _async_firmware_bundles_list()
+
+
+async def _async_firmware_repository_list() -> None:
+    from proliant.oneview.firmware import list_repositories
+
+    async with _load_client() as client:
+        with get_console().status("[dim]Fetching firmware repositories…[/dim]"):
+            repos = await list_repositories(client)
+
+    if get_output_mode() == OutputMode.JSON:
+        print_json(repos)
+        return
+
+    console = get_console()
+    if not repos:
+        console.print("[yellow]No firmware repositories configured.[/yellow]")
+        return
+
+    table = make_table(
+        f"Firmware Repositories  ({len(repos)})",
+        ("Name", {"min_width": 18, "no_wrap": True}),
+        ("Type", {"no_wrap": True}),
+        ("Total", {"justify": "right", "no_wrap": True}),
+        ("Available", {"justify": "right", "no_wrap": True}),
+        ("Bundles", {"justify": "right", "no_wrap": True}),
+    )
+    for r in repos:
+        type_label = "Internal" if "internal" in r["repository_type"].lower() else "External"
+        table.add_row(r["name"], type_label, _fmt_gb_value(r["total_gb"]),
+                      _fmt_gb_value(r["available_gb"]), str(r["bundle_count"]))
+    console.print(table)
+
+
+async def _cmd_firmware_repository_list(args: argparse.Namespace) -> None:
+    await _async_firmware_repository_list()
+
+
+_COMPLIANCE_STYLE = {
+    "Consistent": "[green]Consistent[/green]",
+    "Inconsistent": "[red]Inconsistent[/red]",
+    "Unknown": "[dim]Unknown[/dim]",
+    "Not managed": "[dim]Not managed[/dim]",
+}
+
+
+async def _async_firmware_compliance_list() -> None:
+    from proliant.oneview.firmware import list_compliance
+
+    async with _load_client() as client:
+        with get_console().status("[dim]Checking firmware compliance…[/dim]"):
+            rows = await list_compliance(client)
+
+    if get_output_mode() == OutputMode.JSON:
+        print_json(rows)
+        return
+
+    console = get_console()
+    if not rows:
+        console.print("[yellow]No server profiles found.[/yellow]")
+        return
+
+    table = make_table(
+        f"Firmware Compliance  ({len(rows)})",
+        ("Hardware", {"no_wrap": True}),
+        ("Model", {"no_wrap": True}),
+        ("Logical Resource", {"no_wrap": True}),
+        ("Firmware Bundle", {}),
+        ("Status", {"no_wrap": True}),
+    )
+    for r in rows:
+        bundle = f"{r['bundle_name']} ({r['bundle_version']})" if r["bundle_name"] else "—"
+        status = _COMPLIANCE_STYLE.get(r["consistency_state"], r["consistency_state"])
+        table.add_row(_short_server_name(r["hardware"]), r["model"], r["logical_resource"], bundle, status)
+    console.print(table)
+    console.print(
+        "[dim]Status reflects OneView's own firmware consistencyState per server profile. "
+        "The GUI's Update Category / Estimated Update Time columns are computed by an "
+        "internal component-diff engine not exposed via the REST API.[/dim]",
+        highlight=False,
+    )
+
+
+async def _cmd_firmware_compliance_list(args: argparse.Namespace) -> None:
+    await _async_firmware_compliance_list()
+
+
 async def _async_upgrade_cleanup(do_delete: bool) -> None:
     from proliant.oneview.upgrade import delete_baseline, gather_stale_baselines
 
@@ -1918,8 +2051,11 @@ def _build_parser() -> argparse.ArgumentParser:
         epilog="""
 examples:
   proliant oneview servers list                          List all managed servers
-  proliant oneview firmware list                         Fleet firmware (all servers)
-  proliant oneview firmware list --server "Enc1, bay 1"
+  proliant oneview servers firmware list                 Fleet firmware (all servers)
+  proliant oneview servers firmware list --server "Enc1, bay 1"
+  proliant oneview firmware bundles list                 Registered SPP/SSP bundles
+  proliant oneview firmware repository list              Internal + external repositories
+  proliant oneview firmware compliance list              Per-server firmware drift
   proliant oneview networks list                         All ethernet networks
   proliant oneview networks describe VLAN-160            Network overview + fabric mapping
   proliant oneview networksets list                      All network sets
@@ -1960,14 +2096,38 @@ examples:
     server_fields_arg.completer = comma_sep_completer(_SERVER_FIELDS)
     p_srv.set_defaults(func=_cmd_servers_list)
 
-    p_firmware = sub.add_parser("firmware", help="Show firmware inventory")
-    s_firmware = p_firmware.add_subparsers(dest="what", metavar="ACTION")
-    s_firmware.required = True
-    p_fw = s_firmware.add_parser("list", help="Show firmware inventory")
-    server_arg = p_fw.add_argument("--server", metavar="NAME",
+    p_srv_fw = s_servers.add_parser("firmware", help="Show per-server firmware inventory")
+    s_srv_fw = p_srv_fw.add_subparsers(dest="action", metavar="ACTION")
+    s_srv_fw.required = True
+    p_srv_fw_list = s_srv_fw.add_parser("list", help="Show firmware inventory (all servers or one)")
+    server_arg = p_srv_fw_list.add_argument("--server", metavar="NAME",
         help='Server name (e.g. "Enc1, bay 1"). Omit for all servers.')
     server_arg.completer = _oneview_server_name_completer
-    p_fw.set_defaults(func=_cmd_firmware_list)
+    p_srv_fw_list.set_defaults(func=_cmd_firmware_list)
+
+    p_firmware = sub.add_parser("firmware", help="Appliance firmware bundles, repositories, and compliance")
+    s_firmware = p_firmware.add_subparsers(dest="what", metavar="ACTION")
+    s_firmware.required = True
+
+    p_fw_bundles = s_firmware.add_parser("bundles", aliases=["bundle"],
+        help="List registered firmware bundles (SPP/SSP)")
+    s_fw_bundles = p_fw_bundles.add_subparsers(dest="action", metavar="ACTION")
+    s_fw_bundles.required = True
+    s_fw_bundles.add_parser("list", help="List all firmware bundles").set_defaults(func=_cmd_firmware_bundles_list)
+
+    p_fw_repo = s_firmware.add_parser("repository", aliases=["repositories", "repo"],
+        help="List firmware repositories (Internal + external)")
+    s_fw_repo = p_fw_repo.add_subparsers(dest="action", metavar="ACTION")
+    s_fw_repo.required = True
+    s_fw_repo.add_parser("list", help="List all firmware repositories").set_defaults(func=_cmd_firmware_repository_list)
+
+    p_fw_compliance = s_firmware.add_parser("compliance",
+        help="Per-server firmware compliance vs assigned bundle")
+    s_fw_compliance = p_fw_compliance.add_subparsers(dest="action", metavar="ACTION")
+    s_fw_compliance.required = True
+    s_fw_compliance.add_parser("list", help="List per-server firmware compliance").set_defaults(
+        func=_cmd_firmware_compliance_list)
+
 
     p_networks = sub.add_parser("networks", aliases=["network"], help="List or describe ethernet networks")
     s_networks = p_networks.add_subparsers(dest="what", metavar="ACTION")

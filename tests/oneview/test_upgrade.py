@@ -12,6 +12,7 @@ from proliant.oneview.upgrade import (
     classify_baselines,
     compute_upgrade_path,
     normalize_baselines,
+    normalize_repositories,
     parse_health,
     parse_size_to_gb,
     parse_version,
@@ -274,6 +275,48 @@ def test_classify_baselines_no_repo_types_treats_locations_as_external():
 
     assert summary["prunable"] == []
     assert [b["name"] for b in summary["external_unused"]] == ["SPP 2018.12"]
+
+
+# ── repository normalization (KiB → GB) ──────────────────────────────────────
+
+def test_normalize_repositories_converts_kib_to_gb():
+    # Verified live against the GUI: 65,011,712 KiB == exactly 62.00 GB.
+    raw = [
+        {
+            "uri": "/rest/repositories/internal",
+            "name": "Internal",
+            "repositoryType": "FirmwareInternalRepo",
+            "totalSpace": 65_011_712,
+            "availableSpace": 63_500_000,
+            "state": "Normal",
+        },
+        {
+            "uri": "/rest/repositories/ext",
+            "name": "hst-fileserver",
+            "repositoryType": "FirmwareExternalRepo",
+            "totalSpace": 262_144_000,
+            "availableSpace": 105_611_656,
+            "repositoryUrl": "https://hst-fileserver/",
+        },
+    ]
+    repos = normalize_repositories(raw)
+
+    assert repos[0]["total_gb"] == pytest.approx(62.0, abs=0.01)
+    assert repos[1]["total_gb"] == pytest.approx(250.0, abs=0.01)
+    assert repos[1]["available_gb"] == pytest.approx(100.72, abs=0.01)
+    assert repos[1]["url"] == "https://hst-fileserver/"
+
+
+def test_normalize_repositories_handles_missing_space_fields():
+    repos = normalize_repositories([{"uri": "/rest/repositories/x", "name": "X",
+                                      "repositoryType": "FirmwareInternalRepo"}])
+    assert repos[0]["total_gb"] == 0.0
+    assert repos[0]["available_gb"] == 0.0
+
+
+def test_normalize_repositories_empty_input():
+    assert normalize_repositories([]) == []
+    assert normalize_repositories(None) == []
 
 
 # ── readiness assessment verdict ─────────────────────────────────────────────

@@ -21,7 +21,7 @@ Key endpoints (all verified against a live Synergy Composer2, API v7000):
   GET  /rest/alerts?filter=alertState='Active'
   GET  /rest/backups                      → last backup state + timestamp
   GET  /rest/firmware-drivers             → uploaded SPP / SSP baselines
-  GET  /rest/repositories                 → repositoryType (Internal/External)
+  GET  /rest/repositories                 → repositoryType + total/available space (KiB)
   GET  /rest/logical-enclosures           → assigned firmware baseline
   GET  /rest/logical-interconnects        → consistency + assigned baseline
   GET  /rest/server-profiles              → assigned firmware baseline
@@ -219,6 +219,31 @@ def normalize_baselines(members: list[dict]) -> list[dict[str, Any]]:
             # populated when the bundle is a reference into a Firmware Bundles
             # repository (internal or external) rather than a direct upload.
             "locations": m.get("locations") or {},
+        })
+    return out
+
+
+def normalize_repositories(members: list[dict]) -> list[dict[str, Any]]:
+    """Normalize /rest/repositories members into compact dicts.
+
+    NOTE — unit gotcha: ``totalSpace``/``availableSpace`` on this endpoint
+    are reported in **KiB**, not bytes (unlike ``bundleSize`` on
+    ``/rest/firmware-drivers``, which *is* bytes — see ``normalize_baselines``).
+    Confirmed against a live Synergy Composer2 GUI: Internal repo
+    65,011,712 KiB / 1024**2 = exactly 62.00 GB, matching the GUI's "62.00 GB".
+    """
+    out: list[dict[str, Any]] = []
+    for r in members or []:
+        total_kb = r.get("totalSpace") or 0
+        avail_kb = r.get("availableSpace") or 0
+        out.append({
+            "uri": r.get("uri", ""),
+            "name": r.get("name", ""),
+            "repository_type": r.get("repositoryType", ""),
+            "total_gb": round(total_kb / (1024 ** 2), 2) if isinstance(total_kb, (int, float)) else 0.0,
+            "available_gb": round(avail_kb / (1024 ** 2), 2) if isinstance(avail_kb, (int, float)) else 0.0,
+            "state": r.get("state", ""),
+            "url": r.get("repositoryUrl", ""),
         })
     return out
 
@@ -585,6 +610,15 @@ async def fetch_logical_interconnects(client: "OneViewClient") -> list[dict[str,
     ]
 
 
+async def fetch_repositories(client: "OneViewClient") -> list[dict[str, Any]]:
+    """Fetch and normalize /rest/repositories (best-effort, [] on failure)."""
+    try:
+        raw = await client.get_all("/rest/repositories")
+    except Exception:  # noqa: BLE001 — optional; callers handle an empty list
+        return []
+    return normalize_repositories(raw)
+
+
 async def fetch_repository_types(client: "OneViewClient") -> dict[str, str]:
     """URI -> repositoryType map from /rest/repositories (best-effort).
 
@@ -596,11 +630,8 @@ async def fetch_repository_types(client: "OneViewClient") -> dict[str, str]:
     "unknown repo -> assume external" fallback applies per-URI rather than
     reverting to the coarser "any locations -> external" behavior.
     """
-    try:
-        repos = await client.get_all("/rest/repositories")
-    except Exception:  # noqa: BLE001 — optional; classify_baselines falls back safely
-        return {}
-    return {r.get("uri", ""): r.get("repositoryType", "") for r in repos if r.get("uri")}
+    repos = await fetch_repositories(client)
+    return {r["uri"]: r["repository_type"] for r in repos if r["uri"]}
 
 
 async def gather_readiness(client: "OneViewClient") -> dict[str, Any]:

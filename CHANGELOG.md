@@ -9,6 +9,10 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 ### New Features
 - `proliant oneview upgrade readiness`: read-only pre-upgrade check. Reports the appliance version, the supported Synergy Composer upgrade path (recommended next hop + full milestone chain to the latest release), and a PASS/WARN/FAIL assessment of disk space, memory/CPU, active alerts, backup freshness, logical interconnect consistency, and interconnect redundancy.
 - `proliant oneview upgrade cleanup`: reclaim appliance disk by removing unused firmware baselines (SPP/SSP) not assigned to any logical enclosure, logical interconnect, or server profile. Newer unused baselines are kept as upgrade targets. Dry-run preview by default; `--yes` performs the deletion. Repository-only — never touches running enclosures or interconnects.
+- `proliant oneview firmware bundles list`: list all registered SPP/SSP firmware bundles (name, version, type, release date, size, repository), sorted oldest -> newest.
+- `proliant oneview firmware repository list`: list firmware repositories (Internal + external Firmware Bundles sources) with total/available space and bundle count per repository — mirrors the GUI's Firmware > Repositories tab.
+- `proliant oneview firmware compliance list`: per-server firmware compliance vs. each server profile's assigned bundle, using OneView's own `consistencyState` drift signal (Consistent/Inconsistent/Not managed) — mirrors the GUI's Firmware > Firmware Compliance tab.
+- **Breaking:** `proliant oneview firmware list` has moved to `proliant oneview servers firmware list` (same `--server` flag) — the top-level `firmware` command is now appliance/repository-level (`bundles`/`repository`/`compliance`, see above) to match the OneView GUI's Firmware section, rather than per-server component inventory.
 
 ### Enhancements
 - `proliant oneview upgrade cleanup`: prunable and external-repository baseline tables are now sorted oldest -> newest by release date, instead of the API's arbitrary member order, making it easier to scan chronologically.

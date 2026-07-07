@@ -106,6 +106,31 @@ class TestOneviewParserJson:
         args = parser.parse_args(["--json", "networks", "list"])
         assert args.json_output is True
 
+    def test_parser_servers_firmware_list_parses(self):
+        from proliant.oneview.cli import _build_parser, _cmd_firmware_list
+        parser = _build_parser()
+        args = parser.parse_args(["servers", "firmware", "list", "--server", "Enc1, bay 1"])
+        assert args.func is _cmd_firmware_list
+        assert args.server == "Enc1, bay 1"
+
+    def test_parser_firmware_bundles_list_parses(self):
+        from proliant.oneview.cli import _build_parser, _cmd_firmware_bundles_list
+        parser = _build_parser()
+        args = parser.parse_args(["firmware", "bundles", "list"])
+        assert args.func is _cmd_firmware_bundles_list
+
+    def test_parser_firmware_repository_list_parses(self):
+        from proliant.oneview.cli import _build_parser, _cmd_firmware_repository_list
+        parser = _build_parser()
+        args = parser.parse_args(["firmware", "repository", "list"])
+        assert args.func is _cmd_firmware_repository_list
+
+    def test_parser_firmware_compliance_list_parses(self):
+        from proliant.oneview.cli import _build_parser, _cmd_firmware_compliance_list
+        parser = _build_parser()
+        args = parser.parse_args(["firmware", "compliance", "list"])
+        assert args.func is _cmd_firmware_compliance_list
+
 
 class TestOneviewJsonServers:
     def test_list_servers_json_is_valid(self, capsys):
@@ -149,6 +174,78 @@ class TestOneviewJsonNetworks:
         assert isinstance(result, list)
         assert result[0]["name"] == "prod-vlan100"
         assert result[0]["vlan"] == 100
+
+
+FAKE_BUNDLES = [
+    {"uri": "/rest/firmware-drivers/old", "name": "SPP 2018.12", "version": "2018.12.05.00",
+     "bundle_type": "ServicePack", "release_date": "2018-12-05T00:00:00Z",
+     "size_bytes": 5_000_000_000, "state": "Created", "locations": {}, "repository_names": "Internal"},
+]
+
+FAKE_REPOSITORIES = [
+    {"uri": "/rest/repositories/internal", "name": "Internal", "repository_type": "FirmwareInternalRepo",
+     "total_gb": 62.0, "available_gb": 60.0, "state": "Normal", "url": "", "bundle_count": 1},
+]
+
+FAKE_COMPLIANCE = [
+    {"hardware": "Enclosure-01, bay 1", "model": "Synergy 480 Gen10", "logical_resource": "aci-FM-host1",
+     "bundle_name": "SPP 2023.05", "bundle_version": "SY-2023.05.01", "managed": True,
+     "consistency_state": "Consistent"},
+]
+
+
+class TestOneviewJsonFirmwareBundles:
+    def test_firmware_bundles_list_json_is_valid(self, capsys):
+        from proliant.oneview import cli
+
+        with patch("proliant.oneview.cli._load_client", return_value=_make_mock_client()), \
+             patch("proliant.oneview.firmware.list_bundles",
+                   new_callable=AsyncMock, return_value=FAKE_BUNDLES):
+            cli.main(["--json", "firmware", "bundles", "list"])
+
+        captured = capsys.readouterr()
+        result = json.loads(captured.out)
+        assert result == FAKE_BUNDLES
+
+
+class TestOneviewJsonFirmwareRepository:
+    def test_firmware_repository_list_json_is_valid(self, capsys):
+        from proliant.oneview import cli
+
+        with patch("proliant.oneview.cli._load_client", return_value=_make_mock_client()), \
+             patch("proliant.oneview.firmware.list_repositories",
+                   new_callable=AsyncMock, return_value=FAKE_REPOSITORIES):
+            cli.main(["--json", "firmware", "repository", "list"])
+
+        captured = capsys.readouterr()
+        result = json.loads(captured.out)
+        assert result == FAKE_REPOSITORIES
+
+
+class TestOneviewJsonFirmwareCompliance:
+    def test_firmware_compliance_list_json_is_valid(self, capsys):
+        from proliant.oneview import cli
+
+        with patch("proliant.oneview.cli._load_client", return_value=_make_mock_client()), \
+             patch("proliant.oneview.firmware.list_compliance",
+                   new_callable=AsyncMock, return_value=FAKE_COMPLIANCE):
+            cli.main(["--json", "firmware", "compliance", "list"])
+
+        captured = capsys.readouterr()
+        result = json.loads(captured.out)
+        assert result == FAKE_COMPLIANCE
+
+    def test_firmware_compliance_list_table_shows_status(self, capsys):
+        from proliant.oneview import cli
+
+        with patch("proliant.oneview.cli._load_client", return_value=_make_mock_client()), \
+             patch("proliant.oneview.firmware.list_compliance",
+                   new_callable=AsyncMock, return_value=FAKE_COMPLIANCE):
+            cli.main(["firmware", "compliance", "list"])
+
+        captured = capsys.readouterr()
+        assert "aci-FM-host1" in captured.out
+        assert "Consistent" in captured.out
 
 
 class TestOneviewMacDescribe:

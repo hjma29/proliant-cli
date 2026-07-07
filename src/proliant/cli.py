@@ -282,34 +282,46 @@ def _merge_powershell_completion_block(existing: str) -> str | None:
 
 
 def _win_add_powershell_completion() -> None:
-    """Append completion block to the actual PowerShell profile(s), resolving OneDrive redirection."""
+    """Append completion block to the actual PowerShell profile(s), resolving OneDrive redirection.
+
+    Writes to BOTH profile scopes so completion works regardless of which
+    host the user's terminal is:
+      - CurrentUserCurrentHost (``Microsoft.PowerShell_profile.ps1``) -- loaded
+        only by the plain console host (Windows Terminal, powershell.exe/pwsh.exe
+        opened directly).
+      - CurrentUserAllHosts (``profile.ps1``) -- loaded by EVERY PowerShell host,
+        including VS Code's integrated terminal and ISE, which do NOT load the
+        CurrentUserCurrentHost file above.
+    """
     import subprocess
 
-    # Resolve the real $PROFILE path by asking PowerShell — handles OneDrive folder redirection
-    def _ps_profile(exe: str) -> str | None:
+    # Resolve both real profile paths by asking PowerShell -- handles OneDrive folder redirection
+    def _ps_profiles(exe: str) -> list[str]:
         try:
             result = subprocess.run(
-                [exe, "-NoProfile", "-NonInteractive", "-Command", "$PROFILE"],
+                [exe, "-NoProfile", "-NonInteractive", "-Command",
+                 "$PROFILE.CurrentUserCurrentHost; $PROFILE.CurrentUserAllHosts"],
                 capture_output=True, text=True, timeout=10,
             )
-            p = result.stdout.strip()
-            return p if p else None
+            return [line.strip() for line in result.stdout.splitlines() if line.strip()]
         except Exception:
-            return None
+            return []
 
     import shutil
     profiles: list[str] = []
     for exe in ("pwsh.exe", "powershell.exe"):
         if shutil.which(exe):
-            p = _ps_profile(exe)
-            if p and p not in profiles:
-                profiles.append(p)
+            for p in _ps_profiles(exe):
+                if p not in profiles:
+                    profiles.append(p)
 
     # Fallback to hardcoded paths if PowerShell query failed
     if not profiles:
         profiles = [
             os.path.expandvars(r"%USERPROFILE%\Documents\PowerShell\Microsoft.PowerShell_profile.ps1"),
+            os.path.expandvars(r"%USERPROFILE%\Documents\PowerShell\profile.ps1"),
             os.path.expandvars(r"%USERPROFILE%\Documents\WindowsPowerShell\Microsoft.PowerShell_profile.ps1"),
+            os.path.expandvars(r"%USERPROFILE%\Documents\WindowsPowerShell\profile.ps1"),
         ]
 
     for profile in profiles:

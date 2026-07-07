@@ -19,6 +19,7 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ### Bug Fixes
 - `proliant oneview upgrade cleanup`/`readiness`: firmware baselines that only exist in an external repository (e.g. an SPP repository added under Firmware Bundles > External Repositories) are no longer counted as reclaimable or attempted for deletion. OneView always rejects deleting these (HTTP 400 "exists only in the external repository...") and their reported size isn't appliance disk at all, so `cleanup` used to promise disk it could never free and spam a failed-deletion line per baseline. They're now listed separately as informational "not deletable via OneView" entries.
+- `proliant setup` (edit iLO/OneView entry): a failed connection test no longer shows the raw internal error (e.g. `POST /redfish/v1/SessionService/Sessions failed — HTTP 401: check username/password`) — auth failures now show a clean `Auth failed: check username/password` or `Auth failed: account lacks permission for this operation` message. The entry's name (e.g. `dl380-gen11`) is now also editable during edit, prompted first as "Server Name" / "OneView section", with uniqueness validated against other entries.
 
 ---
 

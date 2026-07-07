@@ -66,6 +66,19 @@ def _save_ini(cfg: configparser.ConfigParser, dest: Path) -> None:
         cfg.write(fh)
 
 
+def _rename_section(cfg: configparser.ConfigParser, old_name: str, new_name: str) -> None:
+    """Rename a section in place, preserving the overall section order on disk."""
+    order = cfg.sections()
+    data = {section: dict(cfg.items(section)) for section in order}
+    for section in order:
+        cfg.remove_section(section)
+    for section in order:
+        target = new_name if section == old_name else section
+        cfg.add_section(target)
+        for key, value in data[section].items():
+            cfg.set(target, key, value)
+
+
 def _existing_names(cfg: configparser.ConfigParser) -> set[str]:
     return {s.lower() for s in cfg.sections() if s.lower() != "defaults"}
 
@@ -179,8 +192,10 @@ async def _test_ilo(host: str, username: str, password: str) -> tuple[bool, str]
         return False, f"Unreachable: {exc}"
     except RuntimeError as exc:
         message = str(exc)
-        if "HTTP 401" in message or "HTTP 403" in message:
-            return False, f"Auth failed: {message}"
+        if "HTTP 401" in message:
+            return False, "Auth failed: check username/password"
+        if "HTTP 403" in message:
+            return False, "Auth failed: account lacks permission for this operation"
         return False, message
     except Exception as exc:  # noqa: BLE001 -- never let a test crash the wizard
         return False, f"{type(exc).__name__}: {exc}"
@@ -200,8 +215,10 @@ async def _test_oneview(host: str, username: str, password: str) -> tuple[bool, 
         return True, "Connected successfully."
     except OneViewError as exc:
         message = str(exc)
-        if "HTTP 401" in message or "HTTP 403" in message:
-            return False, f"Auth failed: {message}"
+        if "HTTP 401" in message:
+            return False, "Auth failed: check username/password"
+        if "HTTP 403" in message:
+            return False, "Auth failed: account lacks permission for this operation"
         # OneViewError always wraps the underlying httpx exception via
         # 'raise ... from exc' -- inspect it to tell timeout from unreachable.
         cause = exc.__cause__
@@ -351,8 +368,9 @@ async def _edit_ilo_server(
     name: str,
     dest: Path,
     statuses: dict[str, str] | None = None,
-) -> None:
-    """Edit an existing iLO server entry in place."""
+    existing: set[str] | None = None,
+) -> str:
+    """Edit an existing iLO server entry in place. Returns the entry's (possibly new) name."""
     console.print(f"\n[bold cyan]Edit iLO server '{name}'[/bold cyan]")
     current_host = cfg.get(name, "host", fallback="")
     default_user = cfg.get("defaults", "username", fallback="Administrator")
@@ -360,6 +378,8 @@ async def _edit_ilo_server(
     current_user = cfg.get(name, "username", fallback=default_user)
     current_pass = cfg.get(name, "password", fallback=default_pass)
 
+    others = (existing or set()) - {name.lower()}
+    new_name = _prompt_name(others, "Server", default=name)
     host = Prompt.ask("  iLO IP / hostname", default=current_host).strip() or current_host
     username = Prompt.ask("  Username", default=current_user).strip() or current_user
     password = await prompt_password_async("  Password (leave blank to keep unchanged): ")
@@ -370,7 +390,16 @@ async def _edit_ilo_server(
     console.print(f"  [green]OK - {message}[/green]" if ok else f"  [red]FAILED - {message}[/red]")
     if not ok and not Confirm.ask("  Save changes anyway?", default=False):
         console.print("  Discarded -- entry unchanged.")
-        return
+        return name
+
+    if new_name != name:
+        _rename_section(cfg, name, new_name)
+        if existing is not None:
+            existing.discard(name.lower())
+            existing.add(new_name.lower())
+        if statuses is not None:
+            statuses.pop(name, None)
+        name = new_name
 
     cfg.set(name, "host", host)
     if username != default_user:
@@ -386,6 +415,7 @@ async def _edit_ilo_server(
     if statuses is not None:
         statuses[name] = _status_label(ok, message)
     console.print(f"  [green]Saved changes to {dest}[/green]")
+    return name
 
 
 async def _edit_oneview(
@@ -393,13 +423,16 @@ async def _edit_oneview(
     name: str,
     dest: Path,
     statuses: dict[str, str] | None = None,
-) -> None:
-    """Edit an existing OneView appliance entry in place."""
+    existing: set[str] | None = None,
+) -> str:
+    """Edit an existing OneView appliance entry in place. Returns the entry's (possibly new) name."""
     console.print(f"\n[bold cyan]Edit OneView appliance '{name}'[/bold cyan]")
     current_host = cfg.get(name, "host", fallback="")
     current_user = cfg.get(name, "username", fallback="Administrator")
     current_pass = cfg.get(name, "password", fallback="")
 
+    others = (existing or set()) - {name.lower()}
+    new_name = _prompt_name(others, "OneView section", default=name)
     host = Prompt.ask("  OneView appliance IP / hostname", default=current_host).strip() or current_host
     username = Prompt.ask("  Username", default=current_user).strip() or current_user
     password = await prompt_password_async("  Password (leave blank to keep unchanged): ")
@@ -410,7 +443,16 @@ async def _edit_oneview(
     console.print(f"  [green]OK - {message}[/green]" if ok else f"  [red]FAILED - {message}[/red]")
     if not ok and not Confirm.ask("  Save changes anyway?", default=False):
         console.print("  Discarded -- entry unchanged.")
-        return
+        return name
+
+    if new_name != name:
+        _rename_section(cfg, name, new_name)
+        if existing is not None:
+            existing.discard(name.lower())
+            existing.add(new_name.lower())
+        if statuses is not None:
+            statuses.pop(name, None)
+        name = new_name
 
     cfg.set(name, "host", host)
     cfg.set(name, "username", username)
@@ -421,6 +463,7 @@ async def _edit_oneview(
     if statuses is not None:
         statuses[name] = _status_label(ok, message)
     console.print(f"  [green]Saved changes to {dest}[/green]")
+    return name
 
 
 async def _edit_entry(
@@ -428,15 +471,16 @@ async def _edit_entry(
     entries: list[str],
     dest: Path,
     statuses: dict[str, str] | None = None,
+    existing: set[str] | None = None,
 ) -> None:
     name = _select_entry(entries, "edit")
     if name is None:
         console.print("  Cancelled.")
         return
     if _entry_type(cfg, name) == "oneview":
-        await _edit_oneview(cfg, name, dest, statuses)
+        await _edit_oneview(cfg, name, dest, statuses, existing)
     else:
-        await _edit_ilo_server(cfg, name, dest, statuses)
+        await _edit_ilo_server(cfg, name, dest, statuses, existing)
 
 
 async def _delete_entry(
@@ -517,7 +561,7 @@ async def run_setup_wizard(dest: Path | None = None) -> None:
                 else:
                     await _add_oneview(cfg, existing, dest, statuses)
             elif action == "edit":
-                await _edit_entry(cfg, entries, dest, statuses)
+                await _edit_entry(cfg, entries, dest, statuses, existing)
             elif action == "delete":
                 await _delete_entry(cfg, entries, existing, dest, statuses)
     except (KeyboardInterrupt, EOFError):

@@ -189,7 +189,7 @@ async def test_edit_ilo_server_updates_host_and_username(tmp_path):
     cfg.add_section("srv1")
     cfg.set("srv1", "host", "10.0.0.5")
 
-    prompt_answers = iter(["10.0.0.6", "localadmin"])
+    prompt_answers = iter(["srv1", "10.0.0.6", "localadmin"])
     with patch("rich.prompt.Prompt.ask", side_effect=lambda *a, **kw: next(prompt_answers)), \
          patch.object(wiz, "prompt_password_async", AsyncMock(return_value="")), \
          patch.object(wiz, "_test_ilo", AsyncMock(return_value=(True, "Connected successfully."))) as fake_test:
@@ -214,7 +214,7 @@ async def test_edit_ilo_server_blank_password_keeps_existing_override(tmp_path):
     cfg.set("srv1", "host", "10.0.0.5")
     cfg.set("srv1", "password", "customsecret")
 
-    prompt_answers = iter(["10.0.0.5", "Administrator"])
+    prompt_answers = iter(["srv1", "10.0.0.5", "Administrator"])
     with patch("rich.prompt.Prompt.ask", side_effect=lambda *a, **kw: next(prompt_answers)), \
          patch.object(wiz, "prompt_password_async", AsyncMock(return_value="")), \
          patch.object(wiz, "_test_ilo", AsyncMock(return_value=(True, "Connected successfully."))):
@@ -233,7 +233,7 @@ async def test_edit_ilo_server_failed_test_discarded_by_default(tmp_path):
     cfg.set("srv1", "host", "10.0.0.5")
     wiz._save_ini(cfg, dest)
 
-    prompt_answers = iter(["10.0.0.9", "Administrator"])
+    prompt_answers = iter(["srv1", "10.0.0.9", "Administrator"])
     with patch("rich.prompt.Prompt.ask", side_effect=lambda *a, **kw: next(prompt_answers)), \
          patch("rich.prompt.Confirm.ask", return_value=False), \
          patch.object(wiz, "prompt_password_async", AsyncMock(return_value="x")), \
@@ -254,7 +254,7 @@ async def test_edit_oneview_updates_fields(tmp_path):
     cfg.set("oneview", "username", "Administrator")
     cfg.set("oneview", "type", "oneview")
 
-    prompt_answers = iter(["10.0.0.101", "ovadmin"])
+    prompt_answers = iter(["oneview", "10.0.0.101", "ovadmin"])
     with patch("rich.prompt.Prompt.ask", side_effect=lambda *a, **kw: next(prompt_answers)), \
          patch.object(wiz, "prompt_password_async", AsyncMock(return_value="newpass")), \
          patch.object(wiz, "_test_oneview", AsyncMock(return_value=(True, "Connected successfully."))):
@@ -264,6 +264,76 @@ async def test_edit_oneview_updates_fields(tmp_path):
     assert saved.get("oneview", "host") == "10.0.0.101"
     assert saved.get("oneview", "username") == "ovadmin"
     assert saved.get("oneview", "password") == "newpass"
+
+
+@pytest.mark.asyncio
+async def test_edit_ilo_server_renames_section_and_updates_existing_and_statuses(tmp_path):
+    dest = tmp_path / "inventory.ini"
+    cfg = configparser.ConfigParser(interpolation=None)
+    cfg.add_section("srv1")
+    cfg.set("srv1", "host", "10.0.0.5")
+    cfg.add_section("srv2")
+    cfg.set("srv2", "host", "10.0.0.6")
+    existing = {"srv1", "srv2"}
+    statuses = {"srv1": "Reachable", "srv2": "Reachable"}
+
+    prompt_answers = iter(["dl380-gen11", "10.0.0.5", "Administrator"])
+    with patch("rich.prompt.Prompt.ask", side_effect=lambda *a, **kw: next(prompt_answers)), \
+         patch.object(wiz, "prompt_password_async", AsyncMock(return_value="")), \
+         patch.object(wiz, "_test_ilo", AsyncMock(return_value=(True, "Connected successfully."))):
+        new_name = await wiz._edit_ilo_server(cfg, "srv1", dest, statuses, existing)
+
+    assert new_name == "dl380-gen11"
+    saved = _read_cfg(dest)
+    assert not saved.has_section("srv1")
+    assert saved.get("dl380-gen11", "host") == "10.0.0.5"
+    # section order preserved -- renamed entry stays in its original position
+    assert saved.sections() == ["dl380-gen11", "srv2"]
+    assert existing == {"dl380-gen11", "srv2"}
+    assert statuses == {"dl380-gen11": "Reachable", "srv2": "Reachable"}
+
+
+@pytest.mark.asyncio
+async def test_edit_ilo_server_rename_to_existing_name_reprompts(tmp_path):
+    dest = tmp_path / "inventory.ini"
+    cfg = configparser.ConfigParser(interpolation=None)
+    cfg.add_section("srv1")
+    cfg.set("srv1", "host", "10.0.0.5")
+    cfg.add_section("srv2")
+    cfg.set("srv2", "host", "10.0.0.6")
+    existing = {"srv1", "srv2"}
+
+    # first attempt collides with the other entry's name -- must re-prompt
+    prompt_answers = iter(["srv2", "srv1", "10.0.0.5", "Administrator"])
+    with patch("rich.prompt.Prompt.ask", side_effect=lambda *a, **kw: next(prompt_answers)), \
+         patch.object(wiz, "prompt_password_async", AsyncMock(return_value="")), \
+         patch.object(wiz, "_test_ilo", AsyncMock(return_value=(True, "Connected successfully."))):
+        new_name = await wiz._edit_ilo_server(cfg, "srv1", dest, existing=existing)
+
+    assert new_name == "srv1"
+
+
+@pytest.mark.asyncio
+async def test_edit_ilo_server_rename_discarded_on_failed_test_keeps_old_name(tmp_path):
+    dest = tmp_path / "inventory.ini"
+    cfg = configparser.ConfigParser(interpolation=None)
+    cfg.add_section("srv1")
+    cfg.set("srv1", "host", "10.0.0.5")
+    existing = {"srv1"}
+    statuses = {"srv1": "Reachable"}
+
+    prompt_answers = iter(["dl380-gen11", "10.0.0.9", "Administrator"])
+    with patch("rich.prompt.Prompt.ask", side_effect=lambda *a, **kw: next(prompt_answers)), \
+         patch("rich.prompt.Confirm.ask", return_value=False), \
+         patch.object(wiz, "prompt_password_async", AsyncMock(return_value="")), \
+         patch.object(wiz, "_test_ilo", AsyncMock(return_value=(False, "Unreachable: simulated"))):
+        new_name = await wiz._edit_ilo_server(cfg, "srv1", dest, statuses, existing)
+
+    # discarded -- neither the section rename nor the existing/statuses bookkeeping happened
+    assert new_name == "srv1"
+    assert cfg.has_section("srv1")
+    assert existing == {"srv1"}
+    assert statuses == {"srv1": "Reachable"}
 
 
 # ---------------------------------------------------------------------------
@@ -411,7 +481,7 @@ async def test_run_setup_wizard_edit_then_delete(tmp_path):
 
     # edit srv1's host, then delete it, then done
     prompt_answers = iter([
-        "2", "1", "10.0.0.6", "Administrator",  # menu:edit -- select #1, new host, same username
+        "2", "1", "srv1", "10.0.0.6", "Administrator",  # menu:edit -- select #1, keep name, new host, same username
         "3", "1",                                # menu:delete -- select #1
         "2",                                     # menu:done (0 entries now, Add(1)/Done(2))
     ])
@@ -468,12 +538,28 @@ async def test_test_ilo_reports_timeout():
 async def test_test_ilo_reports_auth_failed():
     with patch(
         "proliant.ilo.client.ilo_session",
-        side_effect=RuntimeError("POST /redfish/v1/... failed -- HTTP 401: check username/password"),
+        side_effect=RuntimeError("POST /redfish/v1/SessionService/Sessions failed — HTTP 401: check username/password"),
     ):
         ok, message = await wiz._test_ilo("10.0.0.5", "Administrator", "wrongpass")
 
     assert ok is False
-    assert message.startswith("Auth failed")
+    assert message == "Auth failed: check username/password"
+    # the raw method/URI/HTTP-status detail must not leak into the user-facing message
+    assert "POST" not in message
+    assert "HTTP" not in message
+
+
+@pytest.mark.asyncio
+async def test_test_ilo_reports_auth_failed_forbidden():
+    with patch(
+        "proliant.ilo.client.ilo_session",
+        side_effect=RuntimeError("POST /redfish/v1/... failed — HTTP 403: account lacks permission for this operation"),
+    ):
+        ok, message = await wiz._test_ilo("10.0.0.5", "Administrator", "pass")
+
+    assert ok is False
+    assert message == "Auth failed: account lacks permission for this operation"
+    assert "HTTP" not in message
 
 
 @pytest.mark.asyncio
@@ -487,7 +573,8 @@ async def test_test_oneview_reports_auth_failed():
         ok, message = await wiz._test_oneview("10.0.0.100", "Administrator", "wrongpass")
 
     assert ok is False
-    assert message.startswith("Auth failed")
+    assert message == "Auth failed: check username/password"
+    assert "HTTP" not in message
 
 
 @pytest.mark.asyncio
@@ -628,7 +715,7 @@ async def test_edit_ilo_server_updates_status_when_statuses_dict_provided(tmp_pa
     cfg.set("srv1", "host", "10.0.0.5")
     statuses = {"srv1": "Reachable"}
 
-    prompt_answers = iter(["10.0.0.9", "Administrator"])
+    prompt_answers = iter(["srv1", "10.0.0.9", "Administrator"])
     with patch("rich.prompt.Prompt.ask", side_effect=lambda *a, **kw: next(prompt_answers)), \
          patch("rich.prompt.Confirm.ask", return_value=True), \
          patch.object(wiz, "prompt_password_async", AsyncMock(return_value="")), \

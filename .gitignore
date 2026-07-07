@@ -4,6 +4,8 @@ __pycache__/
 dist/
 build/
 .eggs/
+# MkDocs build output (built by .github/workflows/docs.yml, not committed)
+/site/
 .pytest_cache/
 .coverage
 htmlcov/

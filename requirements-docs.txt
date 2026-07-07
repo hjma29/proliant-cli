@@ -1,0 +1,4 @@
+# Pinned build dependency for the GitHub Pages docs site (see
+# .github/workflows/docs.yml). Bump this deliberately when you want to pick
+# up new Material for MkDocs features/fixes.
+mkdocs-material>=9.6,<10

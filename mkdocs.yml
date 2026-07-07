@@ -1,0 +1,67 @@
+site_name: proliant-cli
+site_description: >-
+  HPE ProLiant CLI — iLO Redfish, Compute Ops Management, and Synergy OneView
+  from your terminal.
+site_url: https://hjma29.github.io/proliant-cli/
+repo_name: hjma29/proliant-cli
+repo_url: https://github.com/hjma29/proliant-cli
+edit_uri: edit/main/docs/
+docs_dir: docs
+
+nav:
+  - Getting Started: index.md
+  - iLO: ilo.md
+  - COM: com.md
+  - OneView: oneview.md
+  - Additional Setup: additional-setup.md
+
+theme:
+  name: material
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.top
+    - navigation.footer
+    - navigation.indexes
+    - toc.follow
+    - content.code.copy
+    - content.action.edit
+    - search.suggest
+    - search.highlight
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/hjma29/proliant-cli

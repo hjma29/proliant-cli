@@ -36,6 +36,9 @@ Usage::
     proliant com workspaces list                All workspaces (active one marked with *)
     proliant com workspaces list --raw          Unprocessed API response
     proliant com workspaces use <name-or-id>    Switch active workspace
+    proliant com regions list                   Provisioned COM regions for the active workspace (* = active)
+    proliant com regions list --all             Also show unprovisioned region slots
+    proliant com regions use <region>           Switch active COM region (e.g. us-west, eu-central)
     proliant com devices add --serial-number SN Add a compute device
     proliant com reports memory                 Fleet memory report
     proliant com reports gpu                    Fleet GPU report
@@ -64,6 +67,7 @@ from proliant.com.auth import COMSession, CredentialsError, AuthError
 from proliant.com.client import COMClient
 from proliant.com import devices as _devices
 from proliant.com import workspaces as _workspaces
+from proliant.com import regions as _regions
 
 
 # Masked-password reader is shared with 'proliant setup' — implementation
@@ -87,6 +91,7 @@ from proliant.com.printers import (
     parse_fields,
     print_devices_table,
     print_workspaces_table,
+    print_regions_table,
     print_bundles_table,
 )
 
@@ -102,6 +107,29 @@ def _workspace_names_completer(prefix, **kwargs):
         data = load_token() or {}
         names = [w.get("company_name", "") for w in data.get("workspaces", [])]
         return [n for n in names if n.startswith(prefix)]
+    except Exception:  # intentional: completion must never print to stdout
+        return []
+
+
+def _region_names_completer(prefix, **kwargs):
+    """Return provisioned COM region codes for tab completion.
+
+    Cached per-process invocation (tab completion re-spawns the whole CLI on
+    every keystroke) via cached_names(), same pattern as
+    _server_targets_completer()/_model_names_completer().
+    """
+    try:
+        session = COMSession.load()
+
+        def _fetch_codes() -> list[str]:
+            async def _fetch() -> list[str]:
+                region_list = await _regions.fetch_regions(session)
+                return [r.code for r in region_list]
+
+            return asyncio.run(_fetch())
+
+        codes = cached_names(f"com-regions-{session._workspace_id}", _fetch_codes)
+        return [c for c in codes if c.startswith(prefix)]
     except Exception:  # intentional: completion must never print to stdout
         return []
 
@@ -189,7 +217,10 @@ async def _cmd_login(args: argparse.Namespace) -> None:
         get_console().print("[red]Email is required.[/red]")
         sys.exit(1)
 
-    region = getattr(args, "region", None) or "us-west"
+    # None here (no explicit --region flag) means "auto-detect": okta_verify_login/
+    # password_login will pick the real provisioned region for the workspace
+    # once it's known, instead of blindly defaulting to 'us-west'.
+    region = getattr(args, "region", None)
 
     # Non-HPE accounts (gmail etc.) use username + password.
     # HPE accounts use Okta Verify push.
@@ -447,6 +478,23 @@ async def _cmd_show_workspaces(args: argparse.Namespace) -> None:
     print_workspaces_table(workspace_list, raw=getattr(args, "raw", False))
 
 
+async def _cmd_show_regions(args: argparse.Namespace) -> None:
+    session = await _ensure_session(args)
+    show_unprovisioned = getattr(args, "all", False)
+
+    with get_console().status("[bold cyan]Fetching COM regions from GreenLake..."):
+        try:
+            region_list = await _regions.fetch_regions(session, show_unprovisioned=show_unprovisioned)
+        except (AuthError, ValueError) as e:
+            get_console().print(f"[red]Error:[/red] {e}")
+            sys.exit(1)
+        except Exception as e:
+            get_console().print(f"[red]Error:[/red] {e}")
+            sys.exit(1)
+
+    print_regions_table(region_list, raw=getattr(args, "raw", False))
+
+
 async def _cmd_show_bundles(args: argparse.Namespace) -> None:
     session = await _ensure_session(args)
     active_only = not getattr(args, "all", False)
@@ -478,6 +526,21 @@ async def _cmd_use_workspace(args: argparse.Namespace) -> None:
         with get_console().status(f"[bold cyan]Switching to workspace '{name_or_id}'..."):
             resolved_name = await switch_workspace(name_or_id)
         get_console().print(f"[bold green]✓ Switched to workspace:[/bold green] {resolved_name}")
+    except (CredentialsError, ValueError) as e:
+        get_console().print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+    except Exception as e:
+        get_console().print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+
+
+async def _cmd_use_region(args: argparse.Namespace) -> None:
+    from proliant.com.login import switch_region
+    region_code = args.region_name
+    try:
+        with get_console().status(f"[bold cyan]Switching to region '{region_code}'..."):
+            resolved_region = await switch_region(region_code)
+        get_console().print(f"[bold green]✓ Switched to COM region:[/bold green] {resolved_region}")
     except (CredentialsError, ValueError) as e:
         get_console().print(f"[red]Error:[/red] {e}")
         sys.exit(1)
@@ -592,6 +655,8 @@ examples:
   proliant com bundles list --gen 12
   proliant com workspaces list
   proliant com workspaces use MyWorkspace
+  proliant com regions list
+  proliant com regions use eu-central
   proliant com reports memory
   proliant com reports gpu
 """,
@@ -610,7 +675,7 @@ examples:
     client_secret_arg.completer = suppress_file_completion()
     parser.add_argument("--region",        metavar="REGION", default=None,
                         choices=["us-west", "eu-central", "ap-northeast"],
-                        help="GreenLake region (default: us-west)")
+                        help="COM region for this command only (default: active region for the current workspace — see 'proliant com regions list')")
 
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND",
                                        parser_class=_SuggestingArgumentParser)
@@ -647,7 +712,7 @@ examples:
     login_p.add_argument(
         "--region", metavar="REGION",
         choices=["us-west", "eu-central", "ap-northeast"],
-        help="GreenLake region (default: us-west)",
+        help="COM region to use (default: auto-detect the workspace's provisioned region)",
     )
 
     # ── logout ────────────────────────────────────────────────────────────
@@ -778,6 +843,40 @@ examples:
         help="Workspace name or platform_customer_id",
     ).completer = _workspace_names_completer  # type: ignore[attr-defined]
 
+    # ── regions ───────────────────────────────────────────────────────────
+    # A workspace can have Compute Ops Management provisioned independently
+    # in more than one region (e.g. 'us-west' AND 'eu-central'), each an
+    # independent instance with its own device inventory -- mirrors the
+    # region switcher in the GreenLake GUI. Structured identically to
+    # workspaces/workspace above.
+    regions_p = subparsers.add_parser("regions", help="List or switch COM regions")
+    regions_sub = regions_p.add_subparsers(dest="what", metavar="ACTION",
+                                           parser_class=_SuggestingArgumentParser)
+    regions_sub.required = True
+    rg_list_p = regions_sub.add_parser("list", help="List provisioned COM regions (* = active)")
+    rg_list_p.add_argument("--all", action="store_true",
+                           help="Also show unprovisioned/available region slots")
+    rg_list_p.add_argument("--raw", action="store_true", help="Dump unprocessed API response (bypasses proliant field parsing)")
+    rg_use_p = regions_sub.add_parser("use", help="Switch active COM region")
+    rg_use_p.add_argument(
+        "region_name", metavar="REGION",
+        help="Region code, e.g. us-west, eu-central",
+    ).completer = _region_names_completer  # type: ignore[attr-defined]
+
+    # ── region (singular) ────────────────────────────────────────────────
+    # Backward-compatible alias for 'regions use', mirrors workspace/workspaces.
+    region_p = subparsers.add_parser(
+        "region", help="Alias for 'regions use' — switch active COM region"
+    )
+    region_sub = region_p.add_subparsers(dest="what", metavar="ACTION",
+                                         parser_class=_SuggestingArgumentParser)
+    region_sub.required = True
+    use_rg_p = region_sub.add_parser("use", help="Switch active COM region")
+    use_rg_p.add_argument(
+        "region_name", metavar="REGION",
+        help="Region code, e.g. us-west, eu-central",
+    ).completer = _region_names_completer  # type: ignore[attr-defined]
+
     # ── bundles ───────────────────────────────────────────────────────────
     bundles_p = subparsers.add_parser("bundles", help="List SPP firmware bundles")
     bundles_sub = bundles_p.add_subparsers(dest="what", metavar="ACTION",
@@ -864,7 +963,7 @@ def main(argv: Optional[list[str]] = None) -> None:
                             console.print("\n[yellow]Login cancelled.[/yellow]")
                             sys.exit(1)
                         try:
-                            run_sync(password_login(email=email, password=passwd, region="us-west"))
+                            run_sync(password_login(email=email, password=passwd, region=None))
                             break  # success
                         except Exception as _pe:
                             msg = str(_pe)
@@ -877,7 +976,7 @@ def main(argv: Optional[list[str]] = None) -> None:
                             else:
                                 raise
                 else:
-                    run_sync(okta_verify_login(email=email, region="us-west"))
+                    run_sync(okta_verify_login(email=email, region=None))
                 console.print("\n[green]✓ Logged in.[/green] Continuing...\n")
             except (KeyboardInterrupt, EOFError):
                 console.print("\n[yellow]Login cancelled.[/yellow]")
@@ -908,6 +1007,14 @@ async def _async_main(args: argparse.Namespace) -> None:
     elif args.command == "workspace":
         if args.what == "use":
             await _cmd_use_workspace(args)
+    elif args.command == "regions":
+        if args.what == "list":
+            await _cmd_show_regions(args)
+        elif args.what == "use":
+            await _cmd_use_region(args)
+    elif args.command == "region":
+        if args.what == "use":
+            await _cmd_use_region(args)
     elif args.command == "bundles":
         if args.what == "list":
             await _cmd_show_bundles(args)

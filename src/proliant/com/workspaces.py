@@ -33,21 +33,33 @@ class Workspace:
     raw: dict
 
     @classmethod
-    def from_api(cls, ws: dict, active_id: str, region: str) -> "Workspace":
+    def from_api(cls, ws: dict, active_id: str, region: str,
+                 workspace_regions: Optional[dict] = None) -> "Workspace":
         addr = ws.get("address", {})
         city    = addr.get("city", "")
         state   = addr.get("state_or_region", "")
         country = addr.get("country_code", "")
         address = ", ".join(p for p in [city, state, country] if p)
         ws_id = ws.get("platform_customer_id", "")
+        is_active = (ws_id == active_id)
+        # A workspace can have COM provisioned in multiple regions -- only
+        # the currently active one has a known "current" region (session
+        # .region). For any other workspace, show whichever region was last
+        # used there (the sticky preference persisted by switch_workspace()/
+        # regions use), or '' (rendered as "—") if we've never switched into
+        # it yet -- never assume it shares the active workspace's region.
+        if is_active:
+            ws_region = region
+        else:
+            ws_region = (workspace_regions or {}).get(ws_id, "")
         return cls(
             id=ws_id,
             name=ws.get("company_name", ""),
-            region=region,
+            region=ws_region,
             status=ws.get("account_status", "ACTIVE"),
             address=address,
             description=ws.get("description", ""),
-            active=(ws_id == active_id),
+            active=is_active,
             raw=ws,
         )
 
@@ -89,9 +101,11 @@ async def fetch_workspaces(session: COMSession, refresh: bool = True) -> list[Wo
         except Exception:
             ws_list = cached_ws  # best-effort -- fall back to the cached list
 
+    workspace_regions = (data or {}).get("workspace_regions", {}) or {}
+
     if ws_list:
         return [
-            Workspace.from_api(ws, session._workspace_id, session.region)
+            Workspace.from_api(ws, session._workspace_id, session.region, workspace_regions)
             for ws in ws_list
         ]
 

@@ -636,6 +636,79 @@ async def _fetch_list_accounts(access_token: str, ccs_session: str) -> list:
         return []
 
 
+async def fetch_com_regions(access_token: str, ccs_session: str) -> list:
+    """Fetch Compute Ops Management region-provisioning info for the
+    currently loaded workspace account context (aquila-user-api).
+
+    A single GreenLake workspace can have COM provisioned independently in
+    more than one region (e.g. 'us-west' AND 'eu-central'), each an
+    independent service instance with its own device/server inventory --
+    this is the same data backing the region switcher in the GreenLake GUI
+    and Lionel Jullien's `Get-HPEGLService -ShowProvisioned` cmdlet.
+
+    GET {USER_API_BASE}/ui-doorway/ui/v1/applications/provisions
+
+    Returns the raw list of provision entries whose name is
+    'Compute Ops Management' (each has 'region', 'provision_status'
+    ('PROVISIONED' or '' for available-but-unprovisioned),
+    'application_instance_id', 'location', ...). Best-effort: requires a
+    valid ccs-session cookie (returns [] without one); any failure returns
+    [] rather than raising, matching _fetch_list_accounts()'s convention.
+    """
+    if not ccs_session:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(
+                f"{USER_API_BASE}/ui-doorway/ui/v1/applications/provisions",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Accept": "application/json",
+                },
+                cookies={"ccs-session": ccs_session},
+            )
+            if r.status_code != 200:
+                return []
+            provisions = r.json().get("provisions", []) or []
+    except Exception:
+        return []
+    return [p for p in provisions if p.get("name") == "Compute Ops Management"]
+
+
+async def _resolve_login_region(access_token: str, ccs_session: str,
+                                 fallback: str = "us-west") -> str:
+    """Pick the COM region to activate right after landing on a workspace.
+
+    Only one PROVISIONED region -> use it silently. Multiple provisioned
+    regions -> default to 'us-west' if present, else the first
+    alphabetically, and print a one-line hint pointing at
+    'proliant com regions use' (mirrors the "silently default + hint"
+    behavior already used for single-workspace auto-login). None
+    provisioned yet (e.g. a brand new workspace) -> keep the fallback.
+    Never raises -- best-effort, same spirit as fetch_com_regions().
+    """
+    try:
+        provisions = await fetch_com_regions(access_token, ccs_session)
+    except Exception:
+        return fallback
+
+    codes = sorted({
+        p.get("region", "") for p in provisions
+        if p.get("provision_status") == "PROVISIONED" and p.get("region")
+    })
+    if not codes:
+        return fallback
+    if len(codes) == 1:
+        return codes[0]
+
+    chosen = "us-west" if "us-west" in codes else codes[0]
+    console.print(
+        f"[dim]Multiple COM regions available ({', '.join(codes)}) — using "
+        f"'{chosen}'. Run 'proliant com regions use <region>' to switch.[/dim]"
+    )
+    return chosen
+
+
 def _merge_workspaces(primary: list, extra: list) -> list:
     """Merge two workspace lists, deduped by platform_customer_id.
     Entries in `primary` win on conflict; unique `extra` entries are appended."""
@@ -838,6 +911,20 @@ def save_token(token: dict, region: str = "us-west",
                glp_credential_name: str = "") -> None:
     """Persist the user OAuth token to ~/.config/proliant-cli/com/token.json."""
     TOKEN_CACHE.parent.mkdir(parents=True, exist_ok=True)
+
+    # save_token() otherwise fully replaces the token file -- preserve any
+    # per-workspace region preferences remembered from a previous session
+    # (see 'workspace_regions' / switch_region()/switch_workspace()) instead
+    # of wiping them out on every fresh 'proliant com login'.
+    workspace_regions: dict = {}
+    try:
+        if TOKEN_CACHE.exists():
+            workspace_regions = json.loads(TOKEN_CACHE.read_text()).get("workspace_regions", {}) or {}
+    except Exception:
+        workspace_regions = {}
+    if workspace_id and region:
+        workspace_regions[workspace_id] = region
+
     payload = {
         "access_token":        token.get("access_token"),
         "refresh_token":       token.get("refresh_token"),
@@ -849,6 +936,7 @@ def save_token(token: dict, region: str = "us-west",
         "workspace_name":      workspace_name,
         "ccs_session":         ccs_session,
         "workspaces":          workspaces or [],
+        "workspace_regions":   workspace_regions,
         "glp_client_id":       glp_client_id,
         "glp_client_secret":   glp_client_secret,
         "glp_credential_name": glp_credential_name,
@@ -1336,9 +1424,101 @@ async def switch_workspace(name_or_id: str) -> str:
     except Exception:
         pass  # GLP credential creation is best-effort, same as at login
 
+    # Resolve the active COM region for the NEW workspace -- a workspace can
+    # have COM provisioned independently in multiple regions (e.g. 'us-west'
+    # AND 'eu-central'), each an independent instance with its own device
+    # inventory (mirrors the region switcher in the GreenLake GUI). Restore
+    # whichever region was last used in this workspace ("sticky" preference,
+    # see workspace_regions); the first time here, auto-detect and silently
+    # pick one -- 'us-west' if provisioned, else the only/first provisioned
+    # region -- printing a hint only when the choice was ambiguous (2+
+    # options). If nothing is provisioned yet, leave 'region' unchanged.
+    workspace_regions = data.get("workspace_regions") or {}
+    try:
+        provisions = await fetch_com_regions(access_token, ccs_session)
+    except Exception:
+        provisions = []
+    provisioned_codes = sorted({
+        p.get("region", "") for p in provisions
+        if p.get("provision_status") == "PROVISIONED" and p.get("region")
+    })
+
+    sticky = workspace_regions.get(new_ws_id)
+    chosen_region: Optional[str] = None
+    if sticky and sticky in provisioned_codes:
+        chosen_region = sticky
+    elif len(provisioned_codes) == 1:
+        chosen_region = provisioned_codes[0]
+    elif len(provisioned_codes) > 1:
+        chosen_region = "us-west" if "us-west" in provisioned_codes else provisioned_codes[0]
+        console.print(
+            f"[dim]Multiple COM regions available ({', '.join(provisioned_codes)}) — "
+            f"using '{chosen_region}'. Run 'proliant com regions use <region>' to switch.[/dim]"
+        )
+
+    if chosen_region:
+        workspace_regions[new_ws_id] = chosen_region
+        data["workspace_regions"] = workspace_regions
+        data["region"] = chosen_region
+
     TOKEN_CACHE.write_text(json.dumps(data, indent=2))
     TOKEN_CACHE.chmod(0o600)
     return new_ws_name  # return resolved name for display
+
+
+async def switch_region(region_code: str) -> str:
+    """Switch the active COM region within the currently active workspace.
+
+    Unlike switch_workspace(), this needs no re-authentication and does NOT
+    regenerate the GLP API credential -- the credential is scoped to the
+    workspace, not the region (only session.region/com_url() changes, i.e.
+    which regional compute-ops-mgmt host subsequent API calls hit).
+
+    Validates region_code against the live provisioned-regions list (not
+    just the static REGION_MAP) so 'regions use' can never switch to a
+    region that has no COM instance in this workspace. Raises ValueError
+    with the available choices if the region isn't provisioned.
+    """
+    data = load_token()
+    if not data:
+        raise CredentialsError("Not logged in. Run 'proliant com login' first.")
+    if not data.get("ccs_session"):
+        raise CredentialsError(
+            "Switching COM region requires a user login session. "
+            "Run 'proliant com login' (not --api-client) first."
+        )
+
+    data = await refresh_token_if_needed() or data
+    access_token = data.get("access_token", "")
+    ccs_session  = data.get("ccs_session", "")
+    workspace_id = data.get("workspace_id", "")
+
+    provisions = await fetch_com_regions(access_token, ccs_session)
+    provisioned_codes = sorted({
+        p.get("region", "") for p in provisions
+        if p.get("provision_status") == "PROVISIONED" and p.get("region")
+    })
+
+    target = next((c for c in provisioned_codes if c.lower() == region_code.lower()), None)
+    if not target:
+        import difflib
+        close = difflib.get_close_matches(region_code, provisioned_codes, n=1, cutoff=0.6)
+        suggestion = f" Did you mean '{close[0]}'?" if close else ""
+        raise ValueError(
+            f"COM region '{region_code}' is not provisioned in this workspace.{suggestion}\n"
+            f"Available regions: {', '.join(provisioned_codes) or '(none)'}\n"
+            f"Run 'proliant com regions list' to see all provisioned regions."
+        )
+
+    data["region"] = target
+    workspace_regions = data.get("workspace_regions") or {}
+    if workspace_id:
+        workspace_regions[workspace_id] = target
+    data["workspace_regions"] = workspace_regions
+
+    TOKEN_CACHE.write_text(json.dumps(data, indent=2))
+    TOKEN_CACHE.chmod(0o600)
+    return target
 
 
 # ---------------------------------------------------------------------------
@@ -1349,7 +1529,7 @@ class AuthFlowError(Exception):
     """Raised when the Okta IDX auth flow fails."""
 
 
-async def okta_verify_login(email: str, region: str = "us-west") -> None:
+async def okta_verify_login(email: str, region: Optional[str] = None) -> None:
     """
     Full Okta Verify push login for HPE GreenLake.
 
@@ -1489,7 +1669,18 @@ async def okta_verify_login(email: str, region: str = "us-west") -> None:
                         pass  # GLP credential creation is best-effort
 
                 # ── Save ──────────────────────────────────────────────────────
-                save_token(token, region, workspace_id=workspace_id,
+                # A --region flag explicitly passed by the caller always wins;
+                # otherwise auto-detect the real provisioned region(s) for
+                # this workspace instead of blindly defaulting to 'us-west'
+                # (which silently returned empty results for workspaces that
+                # only have e.g. 'eu-central' provisioned).
+                resolved_region = region
+                if not resolved_region:
+                    if ccs_session and workspace_id:
+                        resolved_region = await _resolve_login_region(access_token, ccs_session)
+                    else:
+                        resolved_region = "us-west"
+                save_token(token, resolved_region, workspace_id=workspace_id,
                            workspace_name=workspace_name, ccs_session=ccs_session,
                            workspaces=ws_list,
                            glp_client_id=glp_client_id,
@@ -1516,7 +1707,7 @@ async def okta_verify_login(email: str, region: str = "us-west") -> None:
     )
 
 
-async def password_login(email: str, password: str, region: str = "us-west") -> None:
+async def password_login(email: str, password: str, region: Optional[str] = None) -> None:
     """
     Username + password login for external (non-HPE-SSO) accounts, e.g. gmail.com.
 
@@ -1809,7 +2000,16 @@ async def password_login(email: str, password: str, region: str = "us-west") -> 
                         pass  # GLP credential creation is best-effort
 
                 # ── Save ──────────────────────────────────────────────────────
-                save_token(token, region, workspace_id=workspace_id,
+                # A --region flag explicitly passed by the caller always wins;
+                # otherwise auto-detect the real provisioned region(s) for
+                # this workspace instead of blindly defaulting to 'us-west'.
+                resolved_region = region
+                if not resolved_region:
+                    if ccs_session and workspace_id:
+                        resolved_region = await _resolve_login_region(access_token, ccs_session)
+                    else:
+                        resolved_region = "us-west"
+                save_token(token, resolved_region, workspace_id=workspace_id,
                            workspace_name=workspace_name, ccs_session=ccs_session,
                            workspaces=ws_list,
                            glp_client_id=glp_client_id,

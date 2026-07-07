@@ -4,6 +4,19 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ---
 
+## v1.0.20 — 2026-07-08
+
+### New Features
+- `proliant com regions list`: list the Compute Ops Management regions provisioned for the active workspace (e.g. `us-west`, `eu-central`) — mirrors the region switcher in the GreenLake console, with the active region marked. Add `--all` to also show unprovisioned/available regions.
+- `proliant com regions use <region>` (alias `proliant com region use <region>`): switch the active COM region for the current workspace. The choice is remembered per-workspace, so switching workspaces later restores whichever region you last used there.
+- `proliant com login`: fresh logins now auto-detect which COM region(s) are actually provisioned for the workspace instead of always assuming `us-west`. If more than one region is provisioned and you haven't picked one before, it prefers `us-west` when available and prints a hint showing how to switch (`proliant com regions use <region>`).
+
+### Bug Fixes
+- The global `--region` flag was silently ignored for the normal login-session (user-token/GLP) path used by `com devices/servers/bundles/reports` — it only worked for the rare explicit client-credentials flow. The flag now correctly overrides the active region for that single command.
+- `proliant com workspaces list`: the Region column always showed the currently active session's region for every workspace row, even ones you weren't logged into — implying they all shared one region. It's now labeled "COM Region" and shows each workspace's own last-known/remembered region (or `—` if unknown).
+
+---
+
 ## v1.0.19 — 2026-07-07
 
 ### New Features

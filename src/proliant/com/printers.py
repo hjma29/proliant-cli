@@ -267,18 +267,24 @@ def print_workspaces_table(workspace_list: list, raw: bool = False) -> None:
     table.add_column("",           style="bold green", no_wrap=True)  # active marker
     table.add_column("Name",       style="bold cyan",  no_wrap=True)
     table.add_column("ID",         style="dim")
-    table.add_column("Region",     style="green")
+    table.add_column("COM Region", style="green")
     table.add_column("Status",     style="yellow")
     table.add_column("Location",   style="white")
     table.add_column("Description", style="dim")
 
     for w in workspace_list:
         status_color = "green" if w.status == "ACTIVE" else "yellow"
+        # A workspace can have COM provisioned in more than one region --
+        # this column shows the *sticky* region remembered for this
+        # workspace (see 'proliant com regions'), not necessarily the only
+        # one available. "—" means we haven't switched into this workspace
+        # yet, so no region preference has been recorded for it.
+        region_display = _REGION_MAP.get(w.region, w.region) if w.region else "—"
         table.add_row(
             "* " if w.active else "  ",
             w.name,
             w.id,
-            w.region,
+            region_display,
             f"[{status_color}]{w.status}[/{status_color}]",
             w.address,
             w.description or "—",
@@ -286,6 +292,52 @@ def print_workspaces_table(workspace_list: list, raw: bool = False) -> None:
 
     get_console().print(table)
     get_console().print("[dim]  * = active workspace[/dim]")
+    get_console().print(
+        "[dim]  COM Region = last-used region for that workspace; run "
+        "'proliant com regions list' after switching to see all provisioned "
+        "regions.[/dim]"
+    )
+
+
+def print_regions_table(region_list: list, raw: bool = False) -> None:
+    if raw or get_output_mode() == OutputMode.JSON:
+        print_json([r.raw for r in region_list])
+        return
+
+    if not region_list:
+        get_console().print(
+            "[yellow]No COM regions provisioned in this workspace.[/yellow] "
+            "[dim]Provision Compute Ops Management in a region from the "
+            "GreenLake GUI first.[/dim]"
+        )
+        return
+
+    table = Table(
+        title=f"Compute Ops Management Regions ({len(region_list)} total)",
+        box=box.ROUNDED,
+        show_lines=False,
+    )
+    table.add_column("",           style="bold green", no_wrap=True)  # active marker
+    table.add_column("Region",     style="bold cyan",  no_wrap=True)
+    table.add_column("Name",       style="green")
+    table.add_column("Location",   style="white")
+    table.add_column("Status",     style="yellow")
+    table.add_column("Instance ID", style="dim")
+
+    for r in region_list:
+        status = "PROVISIONED" if r.provisioned else "available"
+        status_color = "green" if r.provisioned else "dim"
+        table.add_row(
+            "* " if r.active else "  ",
+            r.code,
+            _REGION_MAP.get(r.code, r.code),
+            r.location,
+            f"[{status_color}]{status}[/{status_color}]",
+            r.instance_id,
+        )
+
+    get_console().print(table)
+    get_console().print("[dim]  * = active region[/dim]")
 
 
 def print_bundles_table(bundle_list: list, raw: bool = False) -> None:

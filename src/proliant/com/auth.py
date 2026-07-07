@@ -120,12 +120,18 @@ class COMSession:
                    region=data.get("region", "us-west"))
 
     @classmethod
-    def from_user_token(cls) -> "COMSession":
+    def from_user_token(cls, region_override: Optional[str] = None) -> "COMSession":
         """Load cached user OAuth token from a previous 'proliant com login'.
 
         Loads the token from disk (even if expired). Silent refresh happens
         automatically in ensure_token() when the first API call is made,
         just like gcloud/az.
+
+        region_override, when given (e.g. from a --region CLI flag), wins
+        over the cached 'region' field in token.json for this session only
+        -- it does NOT persist. Use 'proliant com regions use <region>' to
+        change the *sticky* default region instead.
+
         Raises CredentialsError if no token file exists or no refresh possible.
         """
         from proliant.com.login import load_token  # avoid circular import
@@ -144,13 +150,14 @@ class COMSession:
 
         glp_cid = data.get("glp_client_id", "")
         glp_sec = data.get("glp_client_secret", "")
+        region = region_override or data.get("region", "us-west")
 
         # Always prefer GLP client-credentials token when available.
         # The regional compute-ops-mgmt endpoint requires a GLP token for routing;
         # the Okta user token does NOT carry workspace routing context.
         if glp_cid and glp_sec:
             sess = cls(client_id=glp_cid, client_secret=glp_sec,
-                       region=data.get("region", "us-west"))
+                       region=region)
             sess._glp_client_id = glp_cid
             sess._glp_client_secret = glp_sec
             sess._workspace_id = data.get("workspace_id", "")
@@ -166,7 +173,7 @@ class COMSession:
             return sess
 
         # No GLP credentials — use Okta user token (limited: no COM API access)
-        sess = cls(client_id="", client_secret="", region=data.get("region", "us-west"))
+        sess = cls(client_id="", client_secret="", region=region)
         sess._access_token = data.get("access_token", "")
         remaining = data.get("expires_at", time.time()) - time.time()
         sess._token_expiry = time.monotonic() + max(remaining, 0)
@@ -199,6 +206,10 @@ class COMSession:
              region: Optional[str] = None) -> "COMSession":
         """Smart loader: explicit args > env vars > credentials file.
 
+        region, when given (e.g. a --region CLI flag), overrides the cached
+        active region from token.json for this session only -- it does not
+        change the persisted default (see 'proliant com regions use').
+
         Raises CredentialsError if nothing is found — callers should catch
         this and trigger the credentials wizard (proliant com login).
         """
@@ -213,7 +224,7 @@ class COMSession:
             return cls.from_file()
         except CredentialsError:
             pass
-        return cls.from_user_token()
+        return cls.from_user_token(region_override=region)
 
 
     # ── URL helpers ────────────────────────────────────────────────────────

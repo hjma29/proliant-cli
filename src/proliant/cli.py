@@ -29,7 +29,7 @@ namespaces:
   setting      View and manage proliant configuration
 
 commands:
-  setup                Guided step-by-step setup of inventory.ini (iLO/OneView)
+  setup                Guided menu to view/add/edit/delete inventory.ini entries (iLO/OneView)
   update [-y|--yes]    Download and install the latest proliant release
                         (-y/--yes skips the confirmation prompt)
 
@@ -51,7 +51,7 @@ examples:
   proliant oneview servers list                    List all OneView-managed servers
   proliant oneview firmware list                   Fleet firmware inventory via OneView
   proliant setting list inventory                  Show iLO hosts and OneView in inventory.ini
-  proliant setup                                    Guided setup of your iLO/OneView inventory
+  proliant setup                                    Guided menu to manage your iLO/OneView inventory
   proliant update                                  Upgrade proliant to the latest release
 """
 
@@ -405,7 +405,7 @@ _proliant__ns() {
     'com:HPE GreenLake / Compute Ops Management'
     'oneview:HPE OneView fleet management'
     'setting:View and manage proliant configuration'
-    'setup:Guided step-by-step setup of inventory.ini'
+    'setup:Guided menu to manage inventory.ini (view/add/edit/delete)'
     'update:Upgrade proliant to the latest release'
   )
   _describe 'namespace' ns
@@ -785,9 +785,10 @@ Download and install the latest proliant release.
 _SETUP_USAGE = """\
 usage: proliant setup
 
-Guided, step-by-step setup of inventory.ini -- add your iLO servers (and,
-optionally, a OneView appliance), testing each connection live before it
-is saved. Safe to run again any time to add more servers.\
+Guided menu for managing inventory.ini -- view, add, edit, or delete iLO
+servers (and, optionally, a OneView appliance), testing each connection
+live before it is saved. Safe to run any time to add, change, or remove
+entries.\
 """
 
 
@@ -1177,7 +1178,7 @@ def main(argv: list[str] | None = None) -> None:
         sub.add_parser("spp",     help="HPE Service Pack for ProLiant analysis")
         sub.add_parser("oneview", help="HPE OneView fleet management")
         sub.add_parser("setting", help="View and manage proliant configuration")
-        sub.add_parser("setup",   help="Guided step-by-step setup of inventory.ini")
+        sub.add_parser("setup",   help="Guided menu to view/add/edit/delete inventory.ini entries")
         sub.add_parser("update",              help="Upgrade proliant to the latest release")
         argcomplete.autocomplete(parser)
         return  # autocomplete() exits; reaching here means no completion needed

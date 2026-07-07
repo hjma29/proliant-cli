@@ -47,10 +47,10 @@ Use `--help` at any level (`proliant ilo --help`, `proliant ilo firmware --help`
 
 ### Getting started
 
-Run `proliant setup` once to add your iLO servers (and, optionally, a OneView
-appliance) to `inventory.ini` — a guided, step-by-step wizard that tests each
-connection live before saving it. Safe to run again any time to add more
-servers.
+Run `proliant setup` to manage your `inventory.ini` — a guided menu to view,
+add, edit, or delete iLO servers (and, optionally, a OneView appliance).
+Each connection is tested live before it's saved. Safe to run any time to
+add, change, or remove entries.
 
 ```bash
 proliant setup

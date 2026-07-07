@@ -1,14 +1,13 @@
 """
 proliant.setup.wizard
 ~~~~~~~~~~~~~~~~~~~~~~
-Guided, step-by-step first-run setup for inventory.ini.
+Guided, menu-driven setup for inventory.ini.
 
-Walks the user through adding one or more iLO servers (and, optionally, a
-OneView appliance), live-testing each connection before it is saved.
-Entries are written to inventory.ini immediately after each one is
-confirmed, so an interrupted run (Ctrl+C, closed terminal) never loses
-work already done. Safe to re-run any time -- merges into an existing file
-instead of overwriting it.
+Shows current entries and offers add / edit / delete actions, live-testing
+each iLO/OneView connection before it is saved. Entries are written to
+inventory.ini immediately after each confirmed change, so an interrupted
+run (Ctrl+C, closed terminal) never loses work already done. Safe to
+re-run any time -- merges into an existing file instead of overwriting it.
 """
 
 from __future__ import annotations
@@ -18,6 +17,7 @@ from pathlib import Path
 
 from rich.console import Console
 from rich.prompt import Confirm, Prompt
+from rich.table import Table
 
 from proliant.common import config_dir
 from proliant.common.prompts import prompt_password_async
@@ -56,6 +56,52 @@ def _save_ini(cfg: configparser.ConfigParser, dest: Path) -> None:
 
 def _existing_names(cfg: configparser.ConfigParser) -> set[str]:
     return {s.lower() for s in cfg.sections() if s.lower() != "defaults"}
+
+
+def _entries(cfg: configparser.ConfigParser) -> list[str]:
+    """Section names in file order, excluding [defaults]."""
+    return [s for s in cfg.sections() if s.lower() != "defaults"]
+
+
+def _entry_type(cfg: configparser.ConfigParser, name: str) -> str:
+    return "oneview" if cfg.get(name, "type", fallback="").strip().lower() == "oneview" else "ilo"
+
+
+def _effective_username(cfg: configparser.ConfigParser, name: str) -> str:
+    default_user = cfg.get("defaults", "username", fallback="Administrator")
+    return cfg.get(name, "username", fallback=default_user)
+
+
+def _print_entries(cfg: configparser.ConfigParser, entries: list[str]) -> None:
+    if not entries:
+        console.print("  (no entries yet)")
+        return
+    table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2, 0, 0))
+    table.add_column("#", justify="right")
+    table.add_column("Name")
+    table.add_column("Type")
+    table.add_column("Host")
+    table.add_column("Username")
+    for i, name in enumerate(entries, start=1):
+        host = cfg.get(name, "host", fallback="")
+        table.add_row(str(i), name, _entry_type(cfg, name), host, _effective_username(cfg, name))
+    console.print(table)
+
+
+def _select_entry(entries: list[str], verb: str) -> str | None:
+    """Prompt for an entry by number. Returns the section name, or None if cancelled."""
+    raw = Prompt.ask(f"  Which entry do you want to {verb}? (number, blank to cancel)", default="").strip()
+    if not raw:
+        return None
+    try:
+        idx = int(raw)
+    except ValueError:
+        console.print("  [red]Not a valid number -- cancelled.[/red]")
+        return None
+    if not (1 <= idx <= len(entries)):
+        console.print("  [red]Out of range -- cancelled.[/red]")
+        return None
+    return entries[idx - 1]
 
 
 async def _test_ilo(host: str, username: str, password: str) -> tuple[bool, str]:
@@ -183,45 +229,147 @@ async def _add_oneview(
     return True
 
 
-async def run_setup_wizard(dest: Path | None = None) -> None:
-    """Interactive, step-by-step onboarding for inventory.ini.
+async def _edit_ilo_server(cfg: configparser.ConfigParser, name: str, dest: Path) -> None:
+    """Edit an existing iLO server entry in place."""
+    console.print(f"\n[bold cyan]Edit iLO server '{name}'[/bold cyan]")
+    current_host = cfg.get(name, "host", fallback="")
+    default_user = cfg.get("defaults", "username", fallback="Administrator")
+    default_pass = cfg.get("defaults", "password", fallback="")
+    current_user = cfg.get(name, "username", fallback=default_user)
+    current_pass = cfg.get(name, "password", fallback=default_pass)
 
-    Adds one or more iLO servers -- and, optionally, a OneView appliance --
-    live-testing each connection before it is saved. Merges into an
+    host = Prompt.ask("  iLO IP / hostname", default=current_host).strip() or current_host
+    username = Prompt.ask("  Username", default=current_user).strip() or current_user
+    password = await prompt_password_async("  Password (leave blank to keep unchanged): ")
+    test_password = password or current_pass
+
+    console.print(f"  Testing connection to {host}...")
+    ok, message = await _test_ilo(host, username, test_password)
+    console.print(f"  [green]OK - {message}[/green]" if ok else f"  [red]FAILED - {message}[/red]")
+    if not ok and not Confirm.ask("  Save changes anyway?", default=False):
+        console.print("  Discarded -- entry unchanged.")
+        return
+
+    cfg.set(name, "host", host)
+    if username != default_user:
+        cfg.set(name, "username", username)
+    elif cfg.has_option(name, "username"):
+        cfg.remove_option(name, "username")
+    if password:
+        if password != default_pass:
+            cfg.set(name, "password", password)
+        elif cfg.has_option(name, "password"):
+            cfg.remove_option(name, "password")
+    _save_ini(cfg, dest)
+    console.print(f"  [green]Saved changes to {dest}[/green]")
+
+
+async def _edit_oneview(cfg: configparser.ConfigParser, name: str, dest: Path) -> None:
+    """Edit an existing OneView appliance entry in place."""
+    console.print(f"\n[bold cyan]Edit OneView appliance '{name}'[/bold cyan]")
+    current_host = cfg.get(name, "host", fallback="")
+    current_user = cfg.get(name, "username", fallback="Administrator")
+    current_pass = cfg.get(name, "password", fallback="")
+
+    host = Prompt.ask("  OneView appliance IP / hostname", default=current_host).strip() or current_host
+    username = Prompt.ask("  Username", default=current_user).strip() or current_user
+    password = await prompt_password_async("  Password (leave blank to keep unchanged): ")
+    test_password = password or current_pass
+
+    console.print(f"  Testing connection to {host}...")
+    ok, message = await _test_oneview(host, username, test_password)
+    console.print(f"  [green]OK - {message}[/green]" if ok else f"  [red]FAILED - {message}[/red]")
+    if not ok and not Confirm.ask("  Save changes anyway?", default=False):
+        console.print("  Discarded -- entry unchanged.")
+        return
+
+    cfg.set(name, "host", host)
+    cfg.set(name, "username", username)
+    if password:
+        cfg.set(name, "password", password)
+    cfg.set(name, "type", "oneview")
+    _save_ini(cfg, dest)
+    console.print(f"  [green]Saved changes to {dest}[/green]")
+
+
+async def _edit_entry(cfg: configparser.ConfigParser, entries: list[str], dest: Path) -> None:
+    name = _select_entry(entries, "edit")
+    if name is None:
+        console.print("  Cancelled.")
+        return
+    if _entry_type(cfg, name) == "oneview":
+        await _edit_oneview(cfg, name, dest)
+    else:
+        await _edit_ilo_server(cfg, name, dest)
+
+
+async def _delete_entry(
+    cfg: configparser.ConfigParser, entries: list[str], existing: set[str], dest: Path
+) -> None:
+    name = _select_entry(entries, "delete")
+    if name is None:
+        console.print("  Cancelled.")
+        return
+    if not Confirm.ask(f"  Delete '{name}'? This cannot be undone.", default=False):
+        console.print("  Cancelled.")
+        return
+    cfg.remove_section(name)
+    existing.discard(name.lower())
+    _save_ini(cfg, dest)
+    console.print(f"  [green]Deleted '{name}' from {dest}[/green]")
+
+
+async def run_setup_wizard(dest: Path | None = None) -> None:
+    """Interactive menu for managing inventory.ini: view, add, edit, delete.
+
+    Live-tests iLO/OneView connections before saving. Merges into an
     existing inventory.ini rather than overwriting it, so this is safe to
-    run again any time to add more servers.
+    run any time to add, change, or remove servers.
     """
     dest = dest or _default_dest()
     cfg = _load_ini(dest)
     existing = _existing_names(cfg)
 
-    console.print("\n[bold]proliant setup[/bold] -- let's add your servers to inventory.ini\n")
+    console.print("\n[bold]proliant setup[/bold] -- manage your servers in inventory.ini\n")
     if dest.exists():
         plural = "y" if len(existing) == 1 else "ies"
         console.print(f"Found existing config: [bold]{dest}[/bold] ({len(existing)} entr{plural})")
     else:
         console.print(f"This will create: [bold]{dest}[/bold]")
 
-    added_any = False
     try:
         while True:
-            if await _add_ilo_server(cfg, existing, dest):
-                added_any = True
-            if not Confirm.ask("\nAdd another iLO server?", default=False):
+            entries = _entries(cfg)
+            console.print()
+            _print_entries(cfg, entries)
+            choices = ["add", "edit", "delete", "done"] if entries else ["add", "done"]
+            action = Prompt.ask(
+                "\nWhat would you like to do?",
+                choices=choices,
+                default="done" if entries else "add",
+            )
+            if action == "done":
                 break
-
-        if Confirm.ask("\nAdd a OneView appliance too?", default=False):
-            if await _add_oneview(cfg, existing, dest):
-                added_any = True
+            if action == "add":
+                kind = Prompt.ask("  Add a(n)", choices=["ilo", "oneview"], default="ilo")
+                if kind == "ilo":
+                    await _add_ilo_server(cfg, existing, dest)
+                else:
+                    await _add_oneview(cfg, existing, dest)
+            elif action == "edit":
+                await _edit_entry(cfg, entries, dest)
+            elif action == "delete":
+                await _delete_entry(cfg, entries, existing, dest)
     except (KeyboardInterrupt, EOFError):
         console.print("\n\n[yellow]Setup interrupted.[/yellow]")
-        if added_any:
+        if _entries(cfg):
             console.print(f"  Entries saved so far are kept in: [bold]{dest}[/bold]")
         return
 
+    final_entries = _entries(cfg)
     console.print("\n[bold green]Setup complete![/bold green]")
-    if added_any or existing:
+    if final_entries:
         console.print(f"  Config: [bold]{dest}[/bold]")
         console.print("  Try: [bold]proliant ilo list firmwares[/bold]\n")
     else:
-        console.print("  No servers were added. Run [bold]proliant setup[/bold] again any time.\n")
+        console.print("  No servers configured. Run [bold]proliant setup[/bold] again any time.\n")

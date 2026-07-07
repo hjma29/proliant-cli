@@ -627,7 +627,7 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "init",
         help="Guided setup of inventory.ini (alias for 'proliant setup')",
-        description="Guided step-by-step setup of inventory.ini. Alias for 'proliant setup'.",
+        description="Guided menu to view/add/edit/delete inventory.ini entries. Alias for 'proliant setup'.",
     ).set_defaults(command="init")
 
     return parser

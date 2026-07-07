@@ -49,8 +49,9 @@ Use `--help` at any level (`proliant ilo --help`, `proliant ilo firmware --help`
 
 Run `proliant setup` to manage your `inventory.ini` — a guided menu to view,
 add, edit, or delete iLO servers (and, optionally, a OneView appliance).
-Each connection is tested live before it's saved. Safe to run any time to
-add, change, or remove entries.
+The entries table shows a live Status column (Reachable / Timeout /
+Unreachable / Auth failed), checked in parallel on start and refreshed after
+any change. Safe to run any time to add, change, or remove entries.
 
 ```bash
 proliant setup

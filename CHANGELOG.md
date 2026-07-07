@@ -10,6 +10,7 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 - `proliant setup`: new guided menu for managing your iLO servers and OneView appliance in `inventory.ini` — view, add, edit, or delete entries, with each connection live-tested before it's saved. Merges into any existing config instead of overwriting it. `proliant ilo init` still works as a shortcut to the same wizard.
 
 ### Enhancements
+- `proliant setup`: the entries table now has a live "Status" column (Reachable / Timeout / Unreachable / Auth failed) instead of guessing from config alone. All entries are tested in parallel when the wizard starts (so total wait time doesn't scale with the number of servers), and re-tested automatically right after you add, edit, or delete an entry.
 - Windows installer: the "Finished" page now has a checked-by-default "Launch a new terminal" option, so you can jump straight into using `proliant` instead of having to go find/open a shell yourself. Prefers Windows Terminal, falling back to PowerShell if Windows Terminal isn't installed.
 
 ### Bug Fixes

@@ -12,9 +12,11 @@ re-run any time -- merges into an existing file instead of overwriting it.
 
 from __future__ import annotations
 
+import asyncio
 import configparser
 from pathlib import Path
 
+import httpx
 from rich.console import Console
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
@@ -33,6 +35,16 @@ _INI_HEADER = (
     "# add 'type = oneview' to a section to store a OneView appliance instead\n"
     "# of an iLO host -- 'proliant ilo' commands skip those automatically.\n"
 )
+
+# Short labels shown in the Status column, and the rich style used for each.
+_STATUS_STYLES = {
+    "Reachable": "green",
+    "Timeout": "yellow",
+    "Auth failed": "yellow",
+    "Unreachable": "red",
+    "No host": "red",
+    "Error": "red",
+}
 
 
 def _default_dest() -> Path:
@@ -72,7 +84,11 @@ def _effective_username(cfg: configparser.ConfigParser, name: str) -> str:
     return cfg.get(name, "username", fallback=default_user)
 
 
-def _print_entries(cfg: configparser.ConfigParser, entries: list[str]) -> None:
+def _print_entries(
+    cfg: configparser.ConfigParser,
+    entries: list[str],
+    statuses: dict[str, str] | None = None,
+) -> None:
     if not entries:
         console.print("  (no entries yet)")
         return
@@ -82,9 +98,19 @@ def _print_entries(cfg: configparser.ConfigParser, entries: list[str]) -> None:
     table.add_column("Type")
     table.add_column("Host")
     table.add_column("Username")
+    table.add_column("Status")
     for i, name in enumerate(entries, start=1):
         host = cfg.get(name, "host", fallback="")
-        table.add_row(str(i), name, _entry_type(cfg, name), host, _effective_username(cfg, name))
+        status = (statuses or {}).get(name, "?")
+        style = _STATUS_STYLES.get(status, "dim")
+        table.add_row(
+            str(i),
+            name,
+            _entry_type(cfg, name),
+            host,
+            _effective_username(cfg, name),
+            f"[{style}]{status}[/{style}]",
+        )
     console.print(table)
 
 
@@ -130,8 +156,12 @@ def _prompt_menu(options: list[tuple[str, str]], prompt: str = "  Select", defau
 
 
 async def _test_ilo(host: str, username: str, password: str) -> tuple[bool, str]:
-    """Try to log into an iLO host. Returns (ok, message)."""
-    from proliant.ilo.client import ServerDownOrUnreachableError, ilo_session
+    """Try to log into an iLO host. Returns (ok, message).
+
+    ``message`` is prefixed with "Timeout"/"Unreachable"/"Auth failed" when
+    classifiable, so callers (see ``_status_label``) can show a short status.
+    """
+    from proliant.ilo.client import ilo_session
 
     host_dict = {
         "name": host,
@@ -143,16 +173,25 @@ async def _test_ilo(host: str, username: str, password: str) -> tuple[bool, str]
         async with ilo_session(host_dict, show_hint=True):
             pass
         return True, "Connected successfully."
-    except ServerDownOrUnreachableError as exc:
+    except httpx.TimeoutException as exc:
+        return False, f"Timeout: {exc}"
+    except httpx.TransportError as exc:
         return False, f"Unreachable: {exc}"
     except RuntimeError as exc:
-        return False, str(exc)
+        message = str(exc)
+        if "HTTP 401" in message or "HTTP 403" in message:
+            return False, f"Auth failed: {message}"
+        return False, message
     except Exception as exc:  # noqa: BLE001 -- never let a test crash the wizard
         return False, f"{type(exc).__name__}: {exc}"
 
 
 async def _test_oneview(host: str, username: str, password: str) -> tuple[bool, str]:
-    """Try to log into a OneView appliance. Returns (ok, message)."""
+    """Try to log into a OneView appliance. Returns (ok, message).
+
+    ``message`` is prefixed with "Timeout"/"Unreachable"/"Auth failed" when
+    classifiable, so callers (see ``_status_label``) can show a short status.
+    """
     from proliant.oneview.client import OneViewClient, OneViewError
 
     try:
@@ -160,9 +199,52 @@ async def _test_oneview(host: str, username: str, password: str) -> tuple[bool, 
             pass
         return True, "Connected successfully."
     except OneViewError as exc:
-        return False, str(exc)
+        message = str(exc)
+        if "HTTP 401" in message or "HTTP 403" in message:
+            return False, f"Auth failed: {message}"
+        # OneViewError always wraps the underlying httpx exception via
+        # 'raise ... from exc' -- inspect it to tell timeout from unreachable.
+        cause = exc.__cause__
+        if isinstance(cause, httpx.TimeoutException):
+            return False, f"Timeout: {message}"
+        if isinstance(cause, httpx.TransportError):
+            return False, f"Unreachable: {message}"
+        return False, message
     except Exception as exc:  # noqa: BLE001 -- never let a test crash the wizard
         return False, f"{type(exc).__name__}: {exc}"
+
+
+def _status_label(ok: bool, message: str) -> str:
+    """Classify a (ok, message) test result into a short Status-column label."""
+    if ok:
+        return "Reachable"
+    for label in ("Timeout", "Unreachable", "Auth failed"):
+        if message.startswith(label):
+            return label
+    return "Error"
+
+
+async def _check_entry_status(cfg: configparser.ConfigParser, name: str) -> str:
+    """Live-test one entry's connection right now. Returns a short status label."""
+    host = cfg.get(name, "host", fallback="")
+    if not host:
+        return "No host"
+    username = _effective_username(cfg, name)
+    default_pass = cfg.get("defaults", "password", fallback="")
+    password = cfg.get(name, "password", fallback=default_pass)
+    if _entry_type(cfg, name) == "oneview":
+        ok, message = await _test_oneview(host, username, password)
+    else:
+        ok, message = await _test_ilo(host, username, password)
+    return _status_label(ok, message)
+
+
+async def _check_all_statuses(cfg: configparser.ConfigParser, entries: list[str]) -> dict[str, str]:
+    """Live-test every entry's connection concurrently, to minimize total wait time."""
+    if not entries:
+        return {}
+    results = await asyncio.gather(*(_check_entry_status(cfg, name) for name in entries))
+    return dict(zip(entries, results))
 
 
 def _prompt_name(existing: set[str], label: str, default: str | None = None) -> str:
@@ -181,7 +263,10 @@ def _prompt_name(existing: set[str], label: str, default: str | None = None) -> 
 
 
 async def _add_ilo_server(
-    cfg: configparser.ConfigParser, existing: set[str], dest: Path
+    cfg: configparser.ConfigParser,
+    existing: set[str],
+    dest: Path,
+    statuses: dict[str, str] | None = None,
 ) -> bool:
     """Prompt for one iLO server, test it, and save. Returns True if added."""
     console.print("\n[bold cyan]Add an iLO server[/bold cyan]")
@@ -216,12 +301,17 @@ async def _add_ilo_server(
         cfg.set(name, "password", password)
     _save_ini(cfg, dest)
     existing.add(name.lower())
+    if statuses is not None:
+        statuses[name] = _status_label(ok, message)
     console.print(f"  [green]Saved to {dest}[/green]")
     return True
 
 
 async def _add_oneview(
-    cfg: configparser.ConfigParser, existing: set[str], dest: Path
+    cfg: configparser.ConfigParser,
+    existing: set[str],
+    dest: Path,
+    statuses: dict[str, str] | None = None,
 ) -> bool:
     """Prompt for a OneView appliance, test it, and save. Returns True if added."""
     console.print("\n[bold cyan]Add a OneView appliance[/bold cyan]")
@@ -250,11 +340,18 @@ async def _add_oneview(
     cfg.set(name, "type", "oneview")
     _save_ini(cfg, dest)
     existing.add(name.lower())
+    if statuses is not None:
+        statuses[name] = _status_label(ok, message)
     console.print(f"  [green]Saved to {dest}[/green]")
     return True
 
 
-async def _edit_ilo_server(cfg: configparser.ConfigParser, name: str, dest: Path) -> None:
+async def _edit_ilo_server(
+    cfg: configparser.ConfigParser,
+    name: str,
+    dest: Path,
+    statuses: dict[str, str] | None = None,
+) -> None:
     """Edit an existing iLO server entry in place."""
     console.print(f"\n[bold cyan]Edit iLO server '{name}'[/bold cyan]")
     current_host = cfg.get(name, "host", fallback="")
@@ -286,10 +383,17 @@ async def _edit_ilo_server(cfg: configparser.ConfigParser, name: str, dest: Path
         elif cfg.has_option(name, "password"):
             cfg.remove_option(name, "password")
     _save_ini(cfg, dest)
+    if statuses is not None:
+        statuses[name] = _status_label(ok, message)
     console.print(f"  [green]Saved changes to {dest}[/green]")
 
 
-async def _edit_oneview(cfg: configparser.ConfigParser, name: str, dest: Path) -> None:
+async def _edit_oneview(
+    cfg: configparser.ConfigParser,
+    name: str,
+    dest: Path,
+    statuses: dict[str, str] | None = None,
+) -> None:
     """Edit an existing OneView appliance entry in place."""
     console.print(f"\n[bold cyan]Edit OneView appliance '{name}'[/bold cyan]")
     current_host = cfg.get(name, "host", fallback="")
@@ -314,22 +418,33 @@ async def _edit_oneview(cfg: configparser.ConfigParser, name: str, dest: Path) -
         cfg.set(name, "password", password)
     cfg.set(name, "type", "oneview")
     _save_ini(cfg, dest)
+    if statuses is not None:
+        statuses[name] = _status_label(ok, message)
     console.print(f"  [green]Saved changes to {dest}[/green]")
 
 
-async def _edit_entry(cfg: configparser.ConfigParser, entries: list[str], dest: Path) -> None:
+async def _edit_entry(
+    cfg: configparser.ConfigParser,
+    entries: list[str],
+    dest: Path,
+    statuses: dict[str, str] | None = None,
+) -> None:
     name = _select_entry(entries, "edit")
     if name is None:
         console.print("  Cancelled.")
         return
     if _entry_type(cfg, name) == "oneview":
-        await _edit_oneview(cfg, name, dest)
+        await _edit_oneview(cfg, name, dest, statuses)
     else:
-        await _edit_ilo_server(cfg, name, dest)
+        await _edit_ilo_server(cfg, name, dest, statuses)
 
 
 async def _delete_entry(
-    cfg: configparser.ConfigParser, entries: list[str], existing: set[str], dest: Path
+    cfg: configparser.ConfigParser,
+    entries: list[str],
+    existing: set[str],
+    dest: Path,
+    statuses: dict[str, str] | None = None,
 ) -> None:
     name = _select_entry(entries, "delete")
     if name is None:
@@ -341,6 +456,8 @@ async def _delete_entry(
     cfg.remove_section(name)
     existing.discard(name.lower())
     _save_ini(cfg, dest)
+    if statuses is not None:
+        statuses.pop(name, None)
     console.print(f"  [green]Deleted '{name}' from {dest}[/green]")
 
 
@@ -362,11 +479,18 @@ async def run_setup_wizard(dest: Path | None = None) -> None:
     else:
         console.print(f"This will create: [bold]{dest}[/bold]")
 
+    entries = _entries(cfg)
+    if entries:
+        console.print("\nTesting connections...")
+        statuses = await _check_all_statuses(cfg, entries)
+    else:
+        statuses: dict[str, str] = {}
+
     try:
         while True:
             entries = _entries(cfg)
             console.print()
-            _print_entries(cfg, entries)
+            _print_entries(cfg, entries, statuses)
             if entries:
                 options = [
                     ("add", "Add a new entry"),
@@ -389,13 +513,13 @@ async def run_setup_wizard(dest: Path | None = None) -> None:
                     default="ilo",
                 )
                 if kind == "ilo":
-                    await _add_ilo_server(cfg, existing, dest)
+                    await _add_ilo_server(cfg, existing, dest, statuses)
                 else:
-                    await _add_oneview(cfg, existing, dest)
+                    await _add_oneview(cfg, existing, dest, statuses)
             elif action == "edit":
-                await _edit_entry(cfg, entries, dest)
+                await _edit_entry(cfg, entries, dest, statuses)
             elif action == "delete":
-                await _delete_entry(cfg, entries, existing, dest)
+                await _delete_entry(cfg, entries, existing, dest, statuses)
     except (KeyboardInterrupt, EOFError):
         console.print("\n\n[yellow]Setup interrupted.[/yellow]")
         if _entries(cfg):

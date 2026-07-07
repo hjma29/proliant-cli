@@ -451,3 +451,270 @@ async def test_test_oneview_reports_oneview_error():
 
     assert ok is False
     assert "login failed" in message
+
+
+@pytest.mark.asyncio
+async def test_test_ilo_reports_timeout():
+    import httpx
+
+    with patch("proliant.ilo.client.ilo_session", side_effect=httpx.ConnectTimeout("timed out")):
+        ok, message = await wiz._test_ilo("10.0.0.5", "Administrator", "pass")
+
+    assert ok is False
+    assert message.startswith("Timeout")
+
+
+@pytest.mark.asyncio
+async def test_test_ilo_reports_auth_failed():
+    with patch(
+        "proliant.ilo.client.ilo_session",
+        side_effect=RuntimeError("POST /redfish/v1/... failed -- HTTP 401: check username/password"),
+    ):
+        ok, message = await wiz._test_ilo("10.0.0.5", "Administrator", "wrongpass")
+
+    assert ok is False
+    assert message.startswith("Auth failed")
+
+
+@pytest.mark.asyncio
+async def test_test_oneview_reports_auth_failed():
+    from proliant.oneview.client import OneViewError
+
+    with patch(
+        "proliant.oneview.client.OneViewClient",
+        side_effect=OneViewError("OneView login failed (HTTP 401): invalid credentials"),
+    ):
+        ok, message = await wiz._test_oneview("10.0.0.100", "Administrator", "wrongpass")
+
+    assert ok is False
+    assert message.startswith("Auth failed")
+
+
+@pytest.mark.asyncio
+async def test_test_oneview_reports_timeout_via_chained_cause():
+    import httpx
+
+    from proliant.oneview.client import OneViewError
+
+    # side_effect with a bare exception instance never goes through 'raise ... from',
+    # so __cause__ would be None -- construct it via a real raise to populate __cause__.
+    try:
+        try:
+            raise httpx.ConnectTimeout("timed out")
+        except httpx.ConnectTimeout as exc:
+            raise OneViewError("Cannot reach OneView appliance at https://10.0.0.100: timed out") from exc
+    except OneViewError as chained:
+        wrapped = chained
+
+    with patch("proliant.oneview.client.OneViewClient", side_effect=wrapped):
+        ok, message = await wiz._test_oneview("10.0.0.100", "Administrator", "pass")
+
+    assert ok is False
+    assert message.startswith("Timeout")
+
+
+# ---------------------------------------------------------------------------
+# _status_label
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "ok, message, expected",
+    [
+        (True, "Connected successfully.", "Reachable"),
+        (False, "Timeout: timed out", "Timeout"),
+        (False, "Unreachable: connection refused", "Unreachable"),
+        (False, "Auth failed: HTTP 401", "Auth failed"),
+        (False, "some unclassified error", "Error"),
+    ],
+)
+def test_status_label_classifies_known_prefixes(ok, message, expected):
+    assert wiz._status_label(ok, message) == expected
+
+
+# ---------------------------------------------------------------------------
+# _check_entry_status / _check_all_statuses
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_check_entry_status_no_host_returns_no_host():
+    cfg = configparser.ConfigParser(interpolation=None)
+    cfg.add_section("srv1")
+
+    status = await wiz._check_entry_status(cfg, "srv1")
+
+    assert status == "No host"
+
+
+@pytest.mark.asyncio
+async def test_check_entry_status_dispatches_to_test_ilo():
+    cfg = configparser.ConfigParser(interpolation=None)
+    cfg.add_section("srv1")
+    cfg.set("srv1", "host", "10.0.0.5")
+
+    with patch.object(wiz, "_test_ilo", AsyncMock(return_value=(True, "Connected successfully."))) as fake:
+        status = await wiz._check_entry_status(cfg, "srv1")
+
+    fake.assert_awaited_once()
+    assert status == "Reachable"
+
+
+@pytest.mark.asyncio
+async def test_check_entry_status_dispatches_to_test_oneview():
+    cfg = configparser.ConfigParser(interpolation=None)
+    cfg.add_section("oneview")
+    cfg.set("oneview", "host", "10.0.0.100")
+    cfg.set("oneview", "type", "oneview")
+
+    with patch.object(wiz, "_test_oneview", AsyncMock(return_value=(False, "Unreachable: boom"))) as fake:
+        status = await wiz._check_entry_status(cfg, "oneview")
+
+    fake.assert_awaited_once()
+    assert status == "Unreachable"
+
+
+@pytest.mark.asyncio
+async def test_check_all_statuses_runs_concurrently_for_every_entry():
+    cfg = configparser.ConfigParser(interpolation=None)
+    cfg.add_section("srv1")
+    cfg.set("srv1", "host", "10.0.0.5")
+    cfg.add_section("srv2")
+    cfg.set("srv2", "host", "10.0.0.6")
+
+    async def fake_test_ilo(host, username, password):
+        if host == "10.0.0.5":
+            return True, "Connected successfully."
+        return False, "Timeout: timed out"
+
+    with patch.object(wiz, "_test_ilo", AsyncMock(side_effect=fake_test_ilo)):
+        statuses = await wiz._check_all_statuses(cfg, ["srv1", "srv2"])
+
+    assert statuses == {"srv1": "Reachable", "srv2": "Timeout"}
+
+
+@pytest.mark.asyncio
+async def test_check_all_statuses_empty_entries_returns_empty_dict():
+    cfg = configparser.ConfigParser(interpolation=None)
+
+    statuses = await wiz._check_all_statuses(cfg, [])
+
+    assert statuses == {}
+
+
+# ---------------------------------------------------------------------------
+# statuses dict threading through add/edit/delete
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_add_ilo_server_records_status_when_statuses_dict_provided(tmp_path):
+    dest = tmp_path / "inventory.ini"
+    cfg = configparser.ConfigParser(interpolation=None)
+    existing: set[str] = set()
+    statuses: dict[str, str] = {}
+
+    prompt_answers = iter(["srv1", "10.0.0.5", "Administrator"])
+    with patch("rich.prompt.Prompt.ask", side_effect=lambda *a, **kw: next(prompt_answers)), \
+         patch.object(wiz, "prompt_password_async", AsyncMock(return_value="hunter2")), \
+         patch.object(wiz, "_test_ilo", AsyncMock(return_value=(True, "Connected successfully."))):
+        await wiz._add_ilo_server(cfg, existing, dest, statuses)
+
+    assert statuses == {"srv1": "Reachable"}
+
+
+@pytest.mark.asyncio
+async def test_edit_ilo_server_updates_status_when_statuses_dict_provided(tmp_path):
+    dest = tmp_path / "inventory.ini"
+    cfg = configparser.ConfigParser(interpolation=None)
+    cfg.add_section("srv1")
+    cfg.set("srv1", "host", "10.0.0.5")
+    statuses = {"srv1": "Reachable"}
+
+    prompt_answers = iter(["10.0.0.9", "Administrator"])
+    with patch("rich.prompt.Prompt.ask", side_effect=lambda *a, **kw: next(prompt_answers)), \
+         patch("rich.prompt.Confirm.ask", return_value=True), \
+         patch.object(wiz, "prompt_password_async", AsyncMock(return_value="")), \
+         patch.object(wiz, "_test_ilo", AsyncMock(return_value=(False, "Timeout: timed out"))):
+        await wiz._edit_ilo_server(cfg, "srv1", dest, statuses)
+
+    assert statuses == {"srv1": "Timeout"}
+
+
+@pytest.mark.asyncio
+async def test_delete_entry_removes_status_when_statuses_dict_provided(tmp_path):
+    dest = tmp_path / "inventory.ini"
+    cfg = configparser.ConfigParser(interpolation=None)
+    cfg.add_section("srv1")
+    cfg.set("srv1", "host", "10.0.0.5")
+    existing = {"srv1"}
+    statuses = {"srv1": "Reachable"}
+
+    with patch("rich.prompt.Prompt.ask", return_value="1"), \
+         patch("rich.prompt.Confirm.ask", return_value=True):
+        await wiz._delete_entry(cfg, ["srv1"], existing, dest, statuses)
+
+    assert "srv1" not in statuses
+
+
+# ---------------------------------------------------------------------------
+# _print_entries with statuses
+# ---------------------------------------------------------------------------
+
+def test_print_entries_renders_status_column(capsys):
+    cfg = configparser.ConfigParser(interpolation=None)
+    cfg.add_section("srv1")
+    cfg.set("srv1", "host", "10.0.0.5")
+    cfg.add_section("srv2")
+    cfg.set("srv2", "host", "10.0.0.6")
+
+    wiz._print_entries(cfg, ["srv1", "srv2"], {"srv1": "Reachable", "srv2": "Timeout"})
+
+    out = capsys.readouterr().out
+    assert "Reachable" in out
+    assert "Timeout" in out
+
+
+def test_print_entries_shows_placeholder_when_no_statuses_known(capsys):
+    cfg = configparser.ConfigParser(interpolation=None)
+    cfg.add_section("srv1")
+    cfg.set("srv1", "host", "10.0.0.5")
+
+    wiz._print_entries(cfg, ["srv1"])
+
+    out = capsys.readouterr().out
+    assert "?" in out
+
+
+# ---------------------------------------------------------------------------
+# run_setup_wizard -- initial parallel status check
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_run_setup_wizard_checks_statuses_at_start_for_existing_entries(tmp_path):
+    dest = tmp_path / "inventory.ini"
+    dest.write_text("[srv1]\nhost = 10.0.0.5\nusername = Administrator\n")
+
+    prompt_answers = iter(["4"])  # menu:done immediately (1 entry -> Done is #4)
+
+    with patch("rich.prompt.Prompt.ask", side_effect=lambda *a, **kw: next(prompt_answers)), \
+         patch.object(wiz, "_test_ilo", AsyncMock(return_value=(True, "Connected successfully."))) as fake_test, \
+         patch.object(wiz, "_print_entries") as fake_print:
+        await wiz.run_setup_wizard(dest=dest)
+
+    # the pre-loop parallel check ran exactly once for the one existing entry
+    fake_test.assert_awaited_once()
+    # and the resulting status was threaded into the table render
+    _, args, _ = fake_print.mock_calls[0]
+    rendered_statuses = args[2]
+    assert rendered_statuses == {"srv1": "Reachable"}
+
+
+@pytest.mark.asyncio
+async def test_run_setup_wizard_skips_status_check_when_no_entries(tmp_path):
+    dest = tmp_path / "inventory.ini"
+
+    prompt_answers = iter(["2"])  # menu:done immediately (0 entries -> Add(1)/Done(2))
+
+    with patch("rich.prompt.Prompt.ask", side_effect=lambda *a, **kw: next(prompt_answers)), \
+         patch.object(wiz, "_test_ilo", AsyncMock(return_value=(True, "Connected successfully."))) as fake_test:
+        await wiz.run_setup_wizard(dest=dest)
+
+    fake_test.assert_not_awaited()

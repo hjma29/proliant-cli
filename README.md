@@ -108,9 +108,9 @@ Requires an `inventory.ini` with a `[oneview]` (or `type = oneview`) section —
 proliant oneview servers list
 proliant oneview servers firmware list
 proliant oneview servers firmware list --server "Enclosure-01, bay 1"
-proliant oneview firmware bundles list
-proliant oneview firmware repository list
-proliant oneview firmware compliance list
+proliant oneview firmware bundles
+proliant oneview firmware repository
+proliant oneview firmware compliance
 proliant oneview networks list
 proliant oneview networks describe <name>
 proliant oneview networksets list
@@ -148,6 +148,14 @@ Unused baselines that only exist in an **external** firmware repository (added u
 Firmware Bundles > External Repositories) are listed separately as informational — OneView
 never allows deleting these via the API, and their reported size isn't appliance disk, so
 they're excluded from the reclaimable total.
+
+`proliant oneview firmware compliance` checks every firmware-managed server profile
+against each registered baseline that's newer than what's currently assigned anywhere
+(the same "candidate" bundles `upgrade cleanup` retains as upgrade targets), using
+OneView's real per-component compliance check. Each row shows whether an update is
+required and how many components need it. The GUI's Update Category
+(Recommended/Optional) and Estimated Update Time columns are computed by an internal
+component-diff engine and aren't exposed via the REST API, so they aren't shown here.
 
 ### SPP (Service Pack for ProLiant)
 

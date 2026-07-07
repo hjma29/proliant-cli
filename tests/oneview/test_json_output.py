@@ -116,19 +116,19 @@ class TestOneviewParserJson:
     def test_parser_firmware_bundles_list_parses(self):
         from proliant.oneview.cli import _build_parser, _cmd_firmware_bundles_list
         parser = _build_parser()
-        args = parser.parse_args(["firmware", "bundles", "list"])
+        args = parser.parse_args(["firmware", "bundles"])
         assert args.func is _cmd_firmware_bundles_list
 
     def test_parser_firmware_repository_list_parses(self):
         from proliant.oneview.cli import _build_parser, _cmd_firmware_repository_list
         parser = _build_parser()
-        args = parser.parse_args(["firmware", "repository", "list"])
+        args = parser.parse_args(["firmware", "repository"])
         assert args.func is _cmd_firmware_repository_list
 
     def test_parser_firmware_compliance_list_parses(self):
         from proliant.oneview.cli import _build_parser, _cmd_firmware_compliance_list
         parser = _build_parser()
-        args = parser.parse_args(["firmware", "compliance", "list"])
+        args = parser.parse_args(["firmware", "compliance"])
         assert args.func is _cmd_firmware_compliance_list
 
 
@@ -189,8 +189,8 @@ FAKE_REPOSITORIES = [
 
 FAKE_COMPLIANCE = [
     {"hardware": "Enclosure-01, bay 1", "model": "Synergy 480 Gen10", "logical_resource": "aci-FM-host1",
-     "bundle_name": "SPP 2023.05", "bundle_version": "SY-2023.05.01", "managed": True,
-     "consistency_state": "Consistent"},
+     "bundle_name": "SPP 2023.05", "bundle_version": "SY-2023.05.01",
+     "update_required": True, "components_needing_update": 3, "components_total": 56},
 ]
 
 
@@ -201,7 +201,7 @@ class TestOneviewJsonFirmwareBundles:
         with patch("proliant.oneview.cli._load_client", return_value=_make_mock_client()), \
              patch("proliant.oneview.firmware.list_bundles",
                    new_callable=AsyncMock, return_value=FAKE_BUNDLES):
-            cli.main(["--json", "firmware", "bundles", "list"])
+            cli.main(["--json", "firmware", "bundles"])
 
         captured = capsys.readouterr()
         result = json.loads(captured.out)
@@ -215,7 +215,7 @@ class TestOneviewJsonFirmwareRepository:
         with patch("proliant.oneview.cli._load_client", return_value=_make_mock_client()), \
              patch("proliant.oneview.firmware.list_repositories",
                    new_callable=AsyncMock, return_value=FAKE_REPOSITORIES):
-            cli.main(["--json", "firmware", "repository", "list"])
+            cli.main(["--json", "firmware", "repository"])
 
         captured = capsys.readouterr()
         result = json.loads(captured.out)
@@ -229,7 +229,7 @@ class TestOneviewJsonFirmwareCompliance:
         with patch("proliant.oneview.cli._load_client", return_value=_make_mock_client()), \
              patch("proliant.oneview.firmware.list_compliance",
                    new_callable=AsyncMock, return_value=FAKE_COMPLIANCE):
-            cli.main(["--json", "firmware", "compliance", "list"])
+            cli.main(["--json", "firmware", "compliance"])
 
         captured = capsys.readouterr()
         result = json.loads(captured.out)
@@ -241,11 +241,11 @@ class TestOneviewJsonFirmwareCompliance:
         with patch("proliant.oneview.cli._load_client", return_value=_make_mock_client()), \
              patch("proliant.oneview.firmware.list_compliance",
                    new_callable=AsyncMock, return_value=FAKE_COMPLIANCE):
-            cli.main(["firmware", "compliance", "list"])
+            cli.main(["firmware", "compliance"])
 
         captured = capsys.readouterr()
         assert "aci-FM-host1" in captured.out
-        assert "Consistent" in captured.out
+        assert "3/56" in captured.out
 
 
 class TestOneviewMacDescribe:

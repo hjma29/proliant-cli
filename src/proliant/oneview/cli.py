@@ -4,9 +4,9 @@ proliant.oneview.cli — OneView subcommands.
 Usage:
     proliant oneview servers list [--fields ...]
     proliant oneview servers firmware list [--server NAME]
-    proliant oneview firmware bundles list
-    proliant oneview firmware repository list
-    proliant oneview firmware compliance list
+    proliant oneview firmware bundles
+    proliant oneview firmware repository
+    proliant oneview firmware compliance
 """
 
 # PYTHON_ARGCOMPLETE_OK
@@ -1870,19 +1870,11 @@ async def _cmd_firmware_repository_list(args: argparse.Namespace) -> None:
     await _async_firmware_repository_list()
 
 
-_COMPLIANCE_STYLE = {
-    "Consistent": "[green]Consistent[/green]",
-    "Inconsistent": "[red]Inconsistent[/red]",
-    "Unknown": "[dim]Unknown[/dim]",
-    "Not managed": "[dim]Not managed[/dim]",
-}
-
-
 async def _async_firmware_compliance_list() -> None:
     from proliant.oneview.firmware import list_compliance
 
     async with _load_client() as client:
-        with get_console().status("[dim]Checking firmware compliance…[/dim]"):
+        with get_console().status("[dim]Checking compliance against candidate firmware bundles…[/dim]"):
             rows = await list_compliance(client)
 
     if get_output_mode() == OutputMode.JSON:
@@ -1891,7 +1883,8 @@ async def _async_firmware_compliance_list() -> None:
 
     console = get_console()
     if not rows:
-        console.print("[yellow]No server profiles found.[/yellow]")
+        console.print("[green]No newer unused firmware bundles to check compliance against — "
+                       "every managed server is already current with the newest assigned baseline.[/green]")
         return
 
     table = make_table(
@@ -1900,17 +1893,22 @@ async def _async_firmware_compliance_list() -> None:
         ("Model", {"no_wrap": True}),
         ("Logical Resource", {"no_wrap": True}),
         ("Firmware Bundle", {}),
-        ("Status", {"no_wrap": True}),
+        ("Update Required", {"no_wrap": True}),
+        ("Components", {"justify": "right", "no_wrap": True}),
     )
     for r in rows:
         bundle = f"{r['bundle_name']} ({r['bundle_version']})" if r["bundle_name"] else "—"
-        status = _COMPLIANCE_STYLE.get(r["consistency_state"], r["consistency_state"])
-        table.add_row(_short_server_name(r["hardware"]), r["model"], r["logical_resource"], bundle, status)
+        required = "[yellow]Yes[/yellow]" if r["update_required"] else "[green]No[/green]"
+        components = f"{r['components_needing_update']}/{r['components_total']}"
+        table.add_row(_short_server_name(r["hardware"]), r["model"], r["logical_resource"],
+                      bundle, required, components)
     console.print(table)
     console.print(
-        "[dim]Status reflects OneView's own firmware consistencyState per server profile. "
-        "The GUI's Update Category / Estimated Update Time columns are computed by an "
-        "internal component-diff engine not exposed via the REST API.[/dim]",
+        "[dim]Each row checks a server against one candidate bundle — a registered baseline newer "
+        "than what's currently assigned anywhere (see 'oneview upgrade cleanup'). 'Components' is the "
+        "real count of firmware/software components needing an update out of those evaluated, from "
+        "OneView's own compliance engine. The GUI's Update Category (Recommended/Optional) and "
+        "Estimated Update Time are computed internally and aren't exposed via the REST API.[/dim]",
         highlight=False,
     )
 
@@ -2053,9 +2051,9 @@ examples:
   proliant oneview servers list                          List all managed servers
   proliant oneview servers firmware list                 Fleet firmware (all servers)
   proliant oneview servers firmware list --server "Enc1, bay 1"
-  proliant oneview firmware bundles list                 Registered SPP/SSP bundles
-  proliant oneview firmware repository list              Internal + external repositories
-  proliant oneview firmware compliance list              Per-server firmware drift
+  proliant oneview firmware bundles                      Registered SPP/SSP bundles
+  proliant oneview firmware repository                   Internal + external repositories
+  proliant oneview firmware compliance                   Compliance vs newer candidate bundles
   proliant oneview networks list                         All ethernet networks
   proliant oneview networks describe VLAN-160            Network overview + fabric mapping
   proliant oneview networksets list                      All network sets
@@ -2111,23 +2109,15 @@ examples:
 
     p_fw_bundles = s_firmware.add_parser("bundles", aliases=["bundle"],
         help="List registered firmware bundles (SPP/SSP)")
-    s_fw_bundles = p_fw_bundles.add_subparsers(dest="action", metavar="ACTION")
-    s_fw_bundles.required = True
-    s_fw_bundles.add_parser("list", help="List all firmware bundles").set_defaults(func=_cmd_firmware_bundles_list)
+    p_fw_bundles.set_defaults(func=_cmd_firmware_bundles_list)
 
     p_fw_repo = s_firmware.add_parser("repository", aliases=["repositories", "repo"],
         help="List firmware repositories (Internal + external)")
-    s_fw_repo = p_fw_repo.add_subparsers(dest="action", metavar="ACTION")
-    s_fw_repo.required = True
-    s_fw_repo.add_parser("list", help="List all firmware repositories").set_defaults(func=_cmd_firmware_repository_list)
+    p_fw_repo.set_defaults(func=_cmd_firmware_repository_list)
 
     p_fw_compliance = s_firmware.add_parser("compliance",
-        help="Per-server firmware compliance vs assigned bundle")
-    s_fw_compliance = p_fw_compliance.add_subparsers(dest="action", metavar="ACTION")
-    s_fw_compliance.required = True
-    s_fw_compliance.add_parser("list", help="List per-server firmware compliance").set_defaults(
-        func=_cmd_firmware_compliance_list)
-
+        help="Firmware compliance vs newer candidate bundles (per server)")
+    p_fw_compliance.set_defaults(func=_cmd_firmware_compliance_list)
 
     p_networks = sub.add_parser("networks", aliases=["network"], help="List or describe ethernet networks")
     s_networks = p_networks.add_subparsers(dest="what", metavar="ACTION")

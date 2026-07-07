@@ -8,21 +8,30 @@ Per-server inventory (``proliant oneview servers firmware list``):
   GET /rest/server-hardware/{id}/firmware   → single server firmware
 
 Appliance/repository level (``proliant oneview firmware bundles|repository|compliance``):
-  GET /rest/firmware-drivers   → registered SPP/SSP bundles
-  GET /rest/repositories       → Internal + external Firmware Bundles repositories
-  GET /rest/server-profiles    → per-profile firmware.consistencyState (drift signal)
-  GET /rest/server-hardware    → Model / Hardware name for the compliance join
+  GET  /rest/firmware-drivers                       → registered SPP/SSP bundles
+  GET  /rest/repositories                           → Internal + external Firmware Bundles repositories
+  POST /rest/server-hardware/firmware-compliance     → real per-component compliance check (one server x one bundle)
 
-Note: the GUI's "Firmware Compliance" tab shows Update Category / Estimated
-Update Time columns that are computed by OneView's internal SPP
-component-diff engine — that data isn't exposed via any documented REST
-endpoint (confirmed live: no ``/rest/*compliance*`` endpoint returns it).
-``list_compliance()`` instead surfaces the real, available signal: each
-server profile's own ``firmware.consistencyState``.
+Note on ``list_compliance()``: the GUI's "Firmware Compliance" page shows one
+row per (server, *candidate* bundle) pair — confirmed live by matching the
+GUI's candidate bundle set for a hardware bay against this CLI's own
+"retained newer" baselines (see ``upgrade.classify_baselines``). The actual
+compliance data comes from ``POST /rest/server-hardware/firmware-compliance``
+(schema reverse-engineered from HPE's own ``oneview-python`` SDK — it is NOT
+documented in the OneView REST API guide): body is
+``{"firmwareBaselineId": <bundle's short id, not full URI>, "serverUUID": <server-hardware's uuid, not its URI>}``,
+response is ``{"componentMappingList": [...], "serverFirmwareUpdateRequired": bool}``.
+The GUI's "Update Category" (Recommended/Optional) and "Estimated Update
+Time" columns are computed by an internal SPP diff engine and are not
+present anywhere in this response or in a bundle's own ``fwComponents``
+list (checked live) — only real per-component "needs update" counts are
+available, so those are surfaced instead.
 """
 
 from __future__ import annotations
 
+import asyncio
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -115,37 +124,91 @@ async def list_repositories(client: "OneViewClient") -> list[dict[str, Any]]:
     return repos
 
 
-async def list_compliance(client: "OneViewClient") -> list[dict[str, Any]]:
-    """Per-server-profile firmware compliance vs each profile's assigned bundle.
+def _candidate_compliance_bundles(stale: dict[str, Any]) -> list[dict[str, Any]]:
+    """Unused baselines newer than what's assigned anywhere, regardless of repo.
 
-    Uses ``firmware.consistencyState`` — OneView's own drift indicator for
-    managed firmware — rather than the GUI's Update Category / Estimated
-    Update Time columns, which are computed by an internal SPP
-    component-diff engine not exposed via the public REST API.
+    ``classify_baselines()``'s own ``retained_newer`` only covers *internal*
+    (deletable) baselines — it deliberately excludes external-repository
+    baselines from that bucket since those can never be reclaimed by
+    ``upgrade cleanup``. But the GUI's Firmware Compliance page checks
+    servers against newer candidates from **any** repository (confirmed
+    live: the appliance's actual "newer unused" candidates are all hosted in
+    an external repo, yet still appear as compliance candidates in the GUI).
+    So for compliance purposes, combine ``retained_newer`` with any
+    ``external_unused`` baseline released after the same cutoff.
     """
-    from proliant.oneview.upgrade import normalize_baselines
+    from proliant.oneview.upgrade import _parse_iso
+
+    candidates = list(stale.get("retained_newer", []))
+    cutoff = _parse_iso(stale.get("cutoff_date", ""))
+    if cutoff is not None:
+        for b in stale.get("external_unused", []):
+            released = _parse_iso(b.get("release_date", ""))
+            if released is not None and released > cutoff:
+                candidates.append(b)
+    return candidates
+
+
+async def list_compliance(client: "OneViewClient") -> list[dict[str, Any]]:
+    """Per-(server, candidate-bundle) firmware compliance matrix.
+
+    Mirrors the GUI's Firmware Compliance page shape: for every server
+    profile with firmware management enabled, checks real compliance
+    against each "candidate" bundle — every registered baseline that's
+    newer than what's currently assigned anywhere on the appliance, from
+    any repository (internal or external) — via
+    ``POST /rest/server-hardware/firmware-compliance``.
+
+    Returns one row per (server, candidate bundle) with a real count of
+    components needing an update, rather than the GUI's internal-only
+    Update Category / Estimated Update Time (see module docstring).
+    """
+    from proliant.oneview.upgrade import gather_stale_baselines
+
+    stale = await gather_stale_baselines(client)
+    candidates = _candidate_compliance_bundles(stale)
+    if not candidates:
+        return []
 
     profiles = await client.get_all("/rest/server-profiles")
     hardware = await client.get_all("/rest/server-hardware")
-    raw_baselines = await client.get_all("/rest/firmware-drivers")
-
     hw_by_uri = {h.get("uri", ""): h for h in hardware}
-    baseline_by_uri = {b["uri"].split("?")[0]: b for b in normalize_baselines(raw_baselines) if b["uri"]}
 
-    rows: list[dict[str, Any]] = []
-    for p in profiles:
-        fw = p.get("firmware") or {}
-        hw = hw_by_uri.get(p.get("serverHardwareUri") or "", {})
-        baseline_uri = (fw.get("firmwareBaselineUri") or "").split("?")[0]
-        baseline = baseline_by_uri.get(baseline_uri)
-        managed = bool(fw.get("manageFirmware"))
-        rows.append({
+    managed_profiles = [p for p in profiles if (p.get("firmware") or {}).get("manageFirmware")]
+    if not managed_profiles:
+        return []
+
+    async def _check(profile: dict, bundle: dict) -> dict[str, Any] | None:
+        hw = hw_by_uri.get(profile.get("serverHardwareUri") or "", {})
+        server_uuid = hw.get("uuid")
+        if not server_uuid:
+            return None
+        baseline_id = bundle["uri"].rstrip("/").rsplit("/", 1)[-1]
+        try:
+            result = await client.post("/rest/server-hardware/firmware-compliance", {
+                "firmwareBaselineId": baseline_id,
+                "serverUUID": server_uuid,
+            })
+        except Exception:  # noqa: BLE001 — best-effort per (server, bundle) pair
+            return None
+        components = result.get("componentMappingList") or []
+        needing = sum(1 for c in components if c.get("componentFirmwareUpdateRequired"))
+        return {
             "hardware": hw.get("name", ""),
             "model": hw.get("model", ""),
-            "logical_resource": p.get("name", ""),
-            "bundle_name": baseline["name"] if baseline else "",
-            "bundle_version": baseline["version"] if baseline else "",
-            "managed": managed,
-            "consistency_state": fw.get("consistencyState", "Unknown") if managed else "Not managed",
-        })
-    return sorted(rows, key=lambda r: r["hardware"].lower())
+            "logical_resource": profile.get("name", ""),
+            "bundle_name": bundle["name"],
+            "bundle_version": bundle["version"],
+            "release_date": bundle.get("release_date", ""),
+            "update_required": bool(result.get("serverFirmwareUpdateRequired")),
+            "components_needing_update": needing,
+            "components_total": len(components),
+        }
+
+    results = await asyncio.gather(*(_check(p, b) for p in managed_profiles for b in candidates))
+    rows = [r for r in results if r is not None]
+
+    from proliant.oneview.upgrade import _parse_iso
+
+    return sorted(rows, key=lambda r: (r["hardware"].lower(),
+                                        _parse_iso(r["release_date"]) or datetime.min.replace(tzinfo=timezone.utc)))

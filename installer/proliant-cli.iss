@@ -61,6 +61,15 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdi
 [Icons]
 Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
 
+[Run]
+; Adds a checked-by-default checkbox to the Finished wizard page so users can
+; jump straight into a shell instead of having to go find/open one themselves.
+; Prefers Windows Terminal (if installed) over plain powershell.exe. Skipped
+; entirely for silent installs (e.g. `proliant update`'s background
+; self-update) -- postinstall/Finished-page entries never appear there anyway,
+; but skipifsilent is added defensively to match the rest of this file.
+Filename: "{code:GetTerminalExe}"; Description: "Launch a new terminal"; Flags: postinstall skipifsilent nowait
+
 [Code]
 const
   EnvKey = 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment';
@@ -70,6 +79,20 @@ begin
   Result := Pos(
     ';' + Uppercase(Dir) + ';',
     ';' + Uppercase(PathList) + ';') > 0;
+end;
+
+function GetTerminalExe(Param: string): string;
+var
+  WTPath: string;
+begin
+  { Windows Terminal isn't preinstalled everywhere (e.g. Server Core / older
+    Server images without it from the Store) -- fall back to the PowerShell
+    that ships with every Windows install when it's not present. }
+  WTPath := ExpandConstant('{localappdata}\Microsoft\WindowsApps\wt.exe');
+  if FileExists(WTPath) then
+    Result := WTPath
+  else
+    Result := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
 end;
 
 procedure AddToSystemPath();
@@ -139,18 +162,10 @@ begin
       nothing about proliant-cli itself, and 'proliant update' (and any other
       silent invocation) runs with /SILENT, which shows only a progress bar
       and no wizard pages at all -- the installer would otherwise just
-      disappear with zero guidance either way. Show one explicit message in
-      both cases covering where it installed and how to start using it. }
+      disappear with zero indication of where it went. Show one explicit,
+      minimal message in both cases. }
     DoneMsg := 'proliant-cli {#MyAppVersion} installed successfully.' + #13#10#13#10;
-    DoneMsg := DoneMsg + 'Location: ' + ExpandConstant('{app}') + #13#10#13#10;
-    DoneMsg := DoneMsg + 'Getting started:' + #13#10;
-    DoneMsg := DoneMsg + '  1. Open a NEW PowerShell window -- this one won''t have' + #13#10;
-    DoneMsg := DoneMsg + '     proliant on PATH yet.' + #13#10;
-    DoneMsg := DoneMsg + '  2. Run ''proliant --help'' to see all commands.' + #13#10;
-    DoneMsg := DoneMsg + '  3. Run ''proliant ilo init'' to create a starter inventory.ini' + #13#10;
-    DoneMsg := DoneMsg + '     for your iLO / OneView hosts.' + #13#10#13#10;
-    DoneMsg := DoneMsg + 'Tab completion (proliant i<Tab>) is already set up -- it will work' + #13#10;
-    DoneMsg := DoneMsg + 'as soon as you open that new window.';
+    DoneMsg := DoneMsg + 'Location: ' + ExpandConstant('{app}');
     MsgBox(DoneMsg, mbInformation, MB_OK);
   end;
 end;

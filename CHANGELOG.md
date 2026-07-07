@@ -10,6 +10,9 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 - `proliant oneview upgrade readiness`: read-only pre-upgrade check. Reports the appliance version, the supported Synergy Composer upgrade path (recommended next hop + full milestone chain to the latest release), and a PASS/WARN/FAIL assessment of disk space, memory/CPU, active alerts, backup freshness, logical interconnect consistency, and interconnect redundancy.
 - `proliant oneview upgrade cleanup`: reclaim appliance disk by removing unused firmware baselines (SPP/SSP) not assigned to any logical enclosure, logical interconnect, or server profile. Newer unused baselines are kept as upgrade targets. Dry-run preview by default; `--yes` performs the deletion. Repository-only — never touches running enclosures or interconnects.
 
+### Enhancements
+- `proliant oneview upgrade cleanup`: prunable and external-repository baseline tables are now sorted oldest -> newest by release date, instead of the API's arbitrary member order, making it easier to scan chronologically.
+
 ### Bug Fixes
 - `proliant oneview upgrade cleanup`/`readiness`: firmware baselines that only exist in an external repository (e.g. an SPP repository added under Firmware Bundles > External Repositories) are no longer counted as reclaimable or attempted for deletion. OneView always rejects deleting these (HTTP 400 "exists only in the external repository...") and their reported size isn't appliance disk at all, so `cleanup` used to promise disk it could never free and spam a failed-deletion line per baseline. They're now listed separately as informational "not deletable via OneView" entries.
 

@@ -284,6 +284,20 @@ def _collect_referenced_uris(
     return refs
 
 
+def _sort_by_release_date(baselines: list[dict]) -> list[dict]:
+    """Sort baselines oldest -> newest by release_date.
+
+    Entries with a missing/unparseable release date sort last (their
+    position relative to each other is otherwise stable) since there's no
+    chronological info to place them by.
+    """
+    return sorted(
+        baselines,
+        key=lambda b: (_parse_iso(b.get("release_date", "")) is None,
+                       _parse_iso(b.get("release_date", "")) or datetime.min.replace(tzinfo=timezone.utc)),
+    )
+
+
 def classify_baselines(
     baselines: list[dict],
     logical_enclosures: list[dict],
@@ -356,6 +370,10 @@ def classify_baselines(
             retained_newer.append(newest)
 
     reclaimable = sum(b["size_bytes"] for b in prunable)
+    in_use = _sort_by_release_date(in_use)
+    prunable = _sort_by_release_date(prunable)
+    retained_newer = _sort_by_release_date(retained_newer)
+    external_unused = _sort_by_release_date(external_unused)
     return {
         "in_use": in_use,
         "prunable": prunable,

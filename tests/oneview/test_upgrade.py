@@ -163,6 +163,48 @@ def test_classify_baselines_respects_server_profile_and_li_and_parent():
     assert prunable_uris == set()
 
 
+def test_classify_baselines_sorts_prunable_and_external_by_release_date():
+    raw = [
+        {"uri": "/rest/firmware-drivers/used", "baselineShortName": "SPP assigned",
+         "version": "v9", "bundleType": "ServicePack",
+         "releaseDate": "2026-01-01T00:00:00Z", "bundleSize": 1, "state": "Created"},
+        # Unused internal baselines, added out of chronological order.
+        {"uri": "/rest/firmware-drivers/mid", "baselineShortName": "SPP mid",
+         "version": "v2", "bundleType": "ServicePack",
+         "releaseDate": "2020-06-01T00:00:00Z", "bundleSize": 1, "state": "Created"},
+        {"uri": "/rest/firmware-drivers/oldest", "baselineShortName": "SPP oldest",
+         "version": "v1", "bundleType": "ServicePack",
+         "releaseDate": "2018-01-01T00:00:00Z", "bundleSize": 1, "state": "Created"},
+        {"uri": "/rest/firmware-drivers/mid2", "baselineShortName": "SPP mid2",
+         "version": "v3", "bundleType": "ServicePack",
+         "releaseDate": "2022-01-01T00:00:00Z", "bundleSize": 1, "state": "Created"},
+        # Unused external baselines, also out of order.
+        {"uri": "/rest/firmware-drivers/ext-new", "baselineShortName": "SPP ext new",
+         "version": "e2", "bundleType": "ServicePack",
+         "releaseDate": "2021-01-01T00:00:00Z", "bundleSize": 1, "state": "Created",
+         "locations": {"/rest/repositories/ext": "hst-fileserver"}},
+        {"uri": "/rest/firmware-drivers/ext-old", "baselineShortName": "SPP ext old",
+         "version": "e1", "bundleType": "ServicePack",
+         "releaseDate": "2019-01-01T00:00:00Z", "bundleSize": 1, "state": "Created",
+         "locations": {"/rest/repositories/ext": "hst-fileserver"}},
+        # Unused baseline with no release date -> must sort last.
+        {"uri": "/rest/firmware-drivers/nodate", "baselineShortName": "SPP nodate",
+         "version": "v0", "bundleType": "ServicePack",
+         "releaseDate": "", "bundleSize": 1, "state": "Created"},
+    ]
+    baselines = normalize_baselines(raw)
+    logical_enclosures = [{"firmware": {"firmwareBaselineUri": "/rest/firmware-drivers/used"}}]
+    repo_types = {"/rest/repositories/ext": "FirmwareExternalRepo"}
+    summary = classify_baselines(
+        baselines, logical_enclosures, [], [], raw_members=raw, repo_types=repo_types,
+    )
+
+    assert [b["name"] for b in summary["prunable"]] == [
+        "SPP oldest", "SPP mid", "SPP mid2", "SPP nodate",
+    ]
+    assert [b["name"] for b in summary["external_unused"]] == ["SPP ext old", "SPP ext new"]
+
+
 # ── external-repository baseline detection ───────────────────────────────────
 
 def test_is_external_baseline_no_locations_is_internal():

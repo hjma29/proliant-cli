@@ -106,3 +106,19 @@ def test_load_hosts_missing_file_raises(tmp_path, monkeypatch):
 
     with pytest.raises(FileNotFoundError):
         ilo_config.load_hosts()
+
+
+def test_load_hosts_malformed_ini_raises_friendly_valueerror_not_traceback(tmp_path, monkeypatch):
+    """A duplicate key (e.g. hand-edited inventory.ini) must surface as a
+    clear, actionable ValueError -- not a raw configparser.DuplicateOptionError
+    traceback. Regression test for a real crash seen with 'proliant setup'."""
+    ini = tmp_path / "inventory.ini"
+    _write_ini(ini, "[dl380-gen11]\nhost = 10.0.0.5\nhost = 10.0.0.6\n")
+    monkeypatch.setattr(ilo_config, "HOSTS_FILE", ini)
+
+    with pytest.raises(ValueError) as excinfo:
+        ilo_config.load_hosts()
+
+    message = str(excinfo.value)
+    assert "not in the right format" in message
+    assert "sample-inventory.ini" in message

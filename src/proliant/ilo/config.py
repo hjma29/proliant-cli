@@ -95,23 +95,9 @@ def load_hosts(name: str | None = None) -> list[dict]:
     try:
         cfg.read(HOSTS_FILE)
     except configparser.Error as exc:
-        # Extract line number from the exception message if present
-        import re
-        line_hint = ""
-        m = re.search(r"\[line (\d+)\]", str(exc))
-        if m:
-            line_hint = f" (line {m.group(1)})"
-        raise ValueError(
-            f"inventory.ini has a syntax error{line_hint}: {exc}\n\n"
-            f"  Common cause: a key=value line is outside any section header.\n"
-            f"  Every entry must belong to a [section]. For example:\n\n"
-            f"    [my-server]          # iLO host\n"
-            f"    host = 192.0.2.10\n\n"
-            f"    [my-oneview]         # OneView appliance (skipped by 'proliant ilo')\n"
-            f"    host = 192.0.2.20\n"
-            f"    type = oneview\n\n"
-            f"  Check {HOSTS_FILE}"
-        ) from exc
+        from proliant.common.inventory_errors import format_inventory_parse_error
+
+        raise ValueError(format_inventory_parse_error(exc, HOSTS_FILE)) from exc
 
     # "Administrator" matches the fallback 'proliant setup' itself assumes
     # (see wizard.py::_effective_username) and what it silently relies on: an

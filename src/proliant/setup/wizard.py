@@ -64,6 +64,41 @@ def _load_ini(dest: Path) -> configparser.ConfigParser:
     return cfg
 
 
+def _load_ini_or_recover(dest: Path) -> configparser.ConfigParser | None:
+    """Load *dest*, recovering interactively if it's not valid INI.
+
+    A hand-edited inventory.ini can easily end up with a syntax error (a
+    duplicate key, a stray line outside any [section], etc.). Rather than
+    crash with a raw configparser traceback, explain what's wrong, point at
+    a working example, and offer to open the file in an editor right away
+    so the file can be fixed against that sample without leaving the wizard.
+    Returns None if the user gives up instead of fixing it.
+    """
+    from proliant.common.inventory_errors import format_inventory_parse_error
+    from rich.markup import escape
+
+    while True:
+        try:
+            return _load_ini(dest)
+        except configparser.Error as exc:
+            console.print(f"\n[red]{escape(format_inventory_parse_error(exc, dest))}[/red]")
+            try:
+                fix_now = Confirm.ask("\n  Open it in your editor now to fix it?", default=True)
+            except (KeyboardInterrupt, EOFError):
+                console.print("\n\n[yellow]Setup interrupted.[/yellow]")
+                return None
+            if fix_now:
+                _open_in_editor(dest)
+                try:
+                    Prompt.ask("  Press Enter once you're done editing", default="")
+                except (KeyboardInterrupt, EOFError):
+                    console.print("\n\n[yellow]Setup interrupted.[/yellow]")
+                    return None
+                continue
+            console.print("  Cancelled -- fix the file manually and re-run [bold]proliant setup[/bold].")
+            return None
+
+
 _MAX_BACKUPS = 3
 
 
@@ -630,7 +665,9 @@ async def run_setup_wizard(dest: Path | None = None) -> None:
     run any time to add, change, or remove servers.
     """
     dest = dest or _default_dest()
-    cfg = _load_ini(dest)
+    cfg = _load_ini_or_recover(dest)
+    if cfg is None:
+        return
     existing = _existing_names(cfg)
 
     console.print("\n[bold]proliant setup[/bold] -- manage your servers in inventory.ini\n")
@@ -694,7 +731,11 @@ async def run_setup_wizard(dest: Path | None = None) -> None:
                     "  Reload inventory.ini and re-test connections when you're done editing?",
                     default=True,
                 ):
-                    cfg = _load_ini(dest)
+                    new_cfg = _load_ini_or_recover(dest)
+                    if new_cfg is None:
+                        console.print("  [yellow]Reload skipped -- keeping previous entries in memory.[/yellow]")
+                        continue
+                    cfg = new_cfg
                     existing = _existing_names(cfg)
                     entries = _entries(cfg)
                     if entries:

@@ -624,6 +624,83 @@ async def test_run_setup_wizard_handles_keyboard_interrupt_gracefully(tmp_path, 
     assert not dest.exists()
 
 
+# ---------------------------------------------------------------------------
+# _load_ini_or_recover / run_setup_wizard — malformed inventory.ini recovery
+# ---------------------------------------------------------------------------
+
+def test_load_ini_or_recover_valid_file_returns_cfg(tmp_path):
+    dest = tmp_path / "inventory.ini"
+    dest.write_text("[srv1]\nhost = 10.0.0.5\n")
+
+    cfg = wiz._load_ini_or_recover(dest)
+
+    assert cfg.get("srv1", "host") == "10.0.0.5"
+
+
+def test_load_ini_or_recover_malformed_declines_edit_returns_none(tmp_path, capsys):
+    """Regression test for a real crash: a duplicate key in a hand-edited
+    inventory.ini used to raise configparser.DuplicateOptionError straight
+    out of 'proliant setup' with a full Python traceback. It must instead
+    print a friendly explanation (with a link to the sample file) and let
+    the user decline fixing it, returning cleanly instead of crashing."""
+    dest = tmp_path / "inventory.ini"
+    dest.write_text("[dl380-gen11]\nhost = 10.0.0.5\nhost = 10.0.0.6\n")
+
+    with patch("rich.prompt.Confirm.ask", return_value=False):
+        cfg = wiz._load_ini_or_recover(dest)
+
+    assert cfg is None
+    out = capsys.readouterr().out
+    assert "not in the right format" in out
+    assert "sample-inventory.ini" in out
+
+
+def test_load_ini_or_recover_eof_during_recovery_prompt_returns_none(tmp_path, capsys):
+    """Regression test: Ctrl+Z/closed stdin while answering the 'open in
+    editor?' recovery prompt must not escape as a raw EOFError traceback --
+    the wizard's normal KeyboardInterrupt/EOFError handling only wraps the
+    main menu loop, not this earlier recovery step, so it needs its own
+    handling."""
+    dest = tmp_path / "inventory.ini"
+    dest.write_text("[dl380-gen11]\nhost = 10.0.0.5\nhost = 10.0.0.6\n")
+
+    with patch("rich.prompt.Confirm.ask", side_effect=EOFError):
+        cfg = wiz._load_ini_or_recover(dest)
+
+    assert cfg is None
+    assert "Setup interrupted" in capsys.readouterr().out
+
+
+def test_load_ini_or_recover_opens_editor_and_retries_after_fix(tmp_path):
+    dest = tmp_path / "inventory.ini"
+    dest.write_text("[dl380-gen11]\nhost = 10.0.0.5\nhost = 10.0.0.6\n")
+
+    def _fix_file(path):
+        path.write_text("[dl380-gen11]\nhost = 10.0.0.5\n")
+
+    with patch("rich.prompt.Confirm.ask", return_value=True), \
+         patch.object(wiz, "_open_in_editor", side_effect=_fix_file), \
+         patch("rich.prompt.Prompt.ask", return_value=""):
+        cfg = wiz._load_ini_or_recover(dest)
+
+    assert cfg is not None
+    assert cfg.get("dl380-gen11", "host") == "10.0.0.5"
+
+
+@pytest.mark.asyncio
+async def test_run_setup_wizard_malformed_ini_declines_edit_does_not_crash(tmp_path, capsys):
+    dest = tmp_path / "inventory.ini"
+    dest.write_text("[dl380-gen11]\nhost = 10.0.0.5\nhost = 10.0.0.6\n")
+
+    with patch("rich.prompt.Confirm.ask", return_value=False):
+        await wiz.run_setup_wizard(dest=dest)
+
+    out = capsys.readouterr().out
+    assert "not in the right format" in out
+    # bailed out before touching anything else -- original bad content is untouched
+    assert "host = 10.0.0.6" in dest.read_text()
+
+
 @pytest.mark.asyncio
 async def test_run_setup_wizard_adds_oneview_when_confirmed(tmp_path):
     dest = tmp_path / "inventory.ini"

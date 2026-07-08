@@ -48,6 +48,22 @@ def test_load_oneview_config_missing_file_error_points_at_config_dir(tmp_path, m
     assert str(fake_home / ".config" / "proliant-cli" / "inventory.ini") in str(excinfo.value)
 
 
+def test_list_oneview_appliances_malformed_ini_raises_friendly_valueerror(tmp_path, monkeypatch):
+    """A duplicate key must surface as a clear ValueError -- not a raw
+    configparser.DuplicateOptionError traceback. Regression test matching
+    proliant.ilo.config's handling of the same failure mode."""
+    ini = tmp_path / "inventory.ini"
+    ini.write_text("[datacenter-a]\nhost = 10.0.0.5\nhost = 10.0.0.6\ntype = oneview\n")
+    monkeypatch.setenv("PCLI_CONFIG", str(ini))
+
+    with pytest.raises(ValueError) as excinfo:
+        ov_config.list_oneview_appliances()
+
+    message = str(excinfo.value)
+    assert "not in the right format" in message
+    assert "sample-inventory.ini" in message
+
+
 def test_main_reports_missing_config_cleanly_instead_of_raw_traceback(capsys):
     """proliant.oneview.cli.main() must not let FileNotFoundError from a
     missing inventory.ini escape as a raw traceback — it should be caught
@@ -60,7 +76,11 @@ def test_main_reports_missing_config_cleanly_instead_of_raw_traceback(capsys):
             "Run 'proliant setup' to add one."
         )
 
-    with patch("proliant.oneview.config.load_oneview_config", side_effect=_raise):
+    # _load_client() calls list_oneview_appliances() before load_oneview_config();
+    # mock both so this test doesn't depend on whatever inventory.ini (if any)
+    # happens to exist on the machine running the suite.
+    with patch("proliant.oneview.config.list_oneview_appliances", return_value=[]), \
+         patch("proliant.oneview.config.load_oneview_config", side_effect=_raise):
         with pytest.raises(SystemExit) as excinfo:
             ov_cli.main(["servers", "list"])
 

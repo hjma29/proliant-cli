@@ -103,7 +103,12 @@ def list_oneview_appliances() -> list[dict[str, str]]:
 
     # interpolation=None: passwords may legitimately contain a literal '%'.
     cfg = configparser.ConfigParser(interpolation=None)
-    cfg.read(config_file)
+    try:
+        cfg.read(config_file)
+    except configparser.Error as exc:
+        from proliant.common.inventory_errors import format_inventory_parse_error
+
+        raise ValueError(format_inventory_parse_error(exc, config_file)) from exc
 
     appliances: list[dict[str, str]] = []
     for section in cfg.sections():

@@ -17,6 +17,7 @@ nav:
   - COM: com.md
   - OneView: oneview.md
   - Additional Setup: additional-setup.md
+  - Feedback ↗: https://github.com/hjma29/proliant-cli/issues/new
 
 theme:
   name: material
@@ -71,6 +72,3 @@ extra:
     - icon: fontawesome/brands/github
       link: https://github.com/hjma29/proliant-cli
       name: Source on GitHub
-    - icon: fontawesome/regular/comment-dots
-      link: https://github.com/hjma29/proliant-cli/discussions/new/choose
-      name: Give feedback or ask a question

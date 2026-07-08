@@ -4,6 +4,13 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ---
 
+## v1.0.27 — 2026-07-08
+
+### Bug Fixes
+- Windows installer: the "Launch a new terminal" checkbox on the Finished page opened a shell rooted in `C:\Windows\System32\WindowsPowerShell\v1.0\` (or wherever `wt.exe`/`powershell.exe` itself lives) instead of the user's home directory — Inno Setup defaults a `[Run]` entry's working directory to the launched exe's own folder when none is specified. Now explicitly starts in `%USERPROFILE%`.
+
+---
+
 ## v1.0.26 — 2026-07-07
 
 ### Enhancements

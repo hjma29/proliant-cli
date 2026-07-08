@@ -68,7 +68,10 @@ Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
 ; entirely for silent installs (e.g. `proliant version`'s background
 ; self-update) -- postinstall/Finished-page entries never appear there anyway,
 ; but skipifsilent is added defensively to match the rest of this file.
-Filename: "{code:GetTerminalExe}"; Description: "Launch a new terminal"; Flags: postinstall skipifsilent nowait
+; WorkingDir is required -- without it Inno defaults to the directory the
+; launched exe itself lives in (e.g. C:\Windows\System32\WindowsPowerShell\v1.0
+; for plain powershell.exe), which looks broken/unexpected to a fresh user.
+Filename: "{code:GetTerminalExe}"; WorkingDir: "{%USERPROFILE}"; Description: "Launch a new terminal"; Flags: postinstall skipifsilent nowait
 
 [Code]
 const

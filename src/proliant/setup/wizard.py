@@ -81,7 +81,7 @@ def _load_ini_or_recover(dest: Path) -> configparser.ConfigParser | None:
         try:
             return _load_ini(dest)
         except configparser.Error as exc:
-            console.print(f"\n[red]{escape(format_inventory_parse_error(exc, dest))}[/red]")
+            console.print(f"\n[yellow]{escape(format_inventory_parse_error(exc, dest))}[/yellow]")
             try:
                 fix_now = Confirm.ask("\n  Open it in your editor now to fix it?", default=True)
             except (KeyboardInterrupt, EOFError):

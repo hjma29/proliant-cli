@@ -50,7 +50,7 @@ Use `--help` at any level (`proliant ilo --help`, `proliant ilo firmware --help`
 
 ### Getting started
 
-Run `proliant setup` to manage your `inventory.ini` — a guided menu to view,
+Run `proliant setup` to manage your local inventory file — a guided menu to view,
 add, edit, or delete iLO servers (and, optionally, a OneView appliance).
 The entries table shows a live Status column (Reachable / Timeout /
 Unreachable / Auth failed), checked in parallel on start and refreshed after
@@ -62,7 +62,7 @@ proliant setup
 
 ### iLO
 
-Talks directly to iLO via Redfish. Requires an `inventory.ini` — run `proliant setup` to create one.
+Talks directly to iLO via Redfish. Requires a local inventory file — run `proliant setup` to create one.
 
 ```bash
 # Inventory
@@ -106,7 +106,7 @@ proliant com reports memory
 
 ### OneView
 
-Requires an `inventory.ini` with a `[oneview]` (or `type = oneview`) section — run `proliant setup` to add one.
+Requires a local inventory file with a `[oneview]` (or `type = oneview`) section — run `proliant setup` to add one.
 
 ```bash
 proliant oneview servers list

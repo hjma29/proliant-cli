@@ -6,9 +6,9 @@ description: HPE Compute Ops Management — cloud device/server inventory and fi
 # COM (Compute Ops Management)
 
 `proliant com` talks to the HPE Compute Ops Management (COM) cloud API. Unlike
-`ilo` and `oneview`, it doesn't use `inventory.ini` — you authenticate once
-(with Okta or your HPE GreenLake email/password) and the CLI stores a token
-for subsequent calls.
+`ilo` and `oneview`, it doesn't use a local inventory file — you authenticate
+once (with Okta or your HPE GreenLake email/password) and the CLI stores a
+token for subsequent calls.
 
 ## Login
 
@@ -18,10 +18,6 @@ proliant com login --email you@hpe.com            # Pre-fill email, skip the pro
 proliant com login --password                     # Username + password (external/gmail accounts)
 proliant com logout
 ```
-
-See [Additional Setup](additional-setup.md) if login ever fails with a 404 on
-`compute-ops-mgmt` calls — that's almost always a stale/missing GLP
-credential.
 
 ## Inventory & reports
 

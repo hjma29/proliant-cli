@@ -51,7 +51,7 @@ proliant --help
 
 ## Connect your first server
 
-Run `proliant setup` to manage your `inventory.ini` — a guided menu to view,
+Run `proliant setup` to manage your local inventory file — a guided menu to view,
 add, edit, or delete iLO servers (and, optionally, a OneView appliance). The
 entries table shows a live Status column (Reachable / Timeout / Unreachable /
 Auth failed), checked in parallel on start and refreshed after any change.
@@ -61,8 +61,9 @@ Safe to run any time to add, change, or remove entries.
 proliant setup
 ```
 
-COM doesn't use `inventory.ini` — it authenticates against the cloud API
-directly with `proliant com login`. See the [COM](com.md) page for details.
+COM doesn't use a local inventory file — it authenticates against the cloud
+API directly with `proliant com login`. See the [COM](com.md) page for
+details.
 
 ## Where to go next
 

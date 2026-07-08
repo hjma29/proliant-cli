@@ -19,21 +19,23 @@ proliant spp inspect <version>                   # Inspect SPP contents
 proliant spp diff <version1> <version2>          # Compare two SPP releases
 ```
 
-## `inventory.ini`
+## Local inventory file
 
-`proliant setup` is the guided way to manage `inventory.ini` — it can view,
-add, edit, or delete entries (both iLO hosts and an optional `[oneview]`
-appliance section), test connectivity live, and open the file directly in
-your `$EDITOR`/`$VISUAL` if you'd rather hand-edit it. Every save keeps
-rotating backups (`inventory.ini.bak1`–`.bak3`), so an accidental edit or
-deletion is always recoverable.
+`proliant setup` is the guided way to manage your local inventory file — it
+can view, add, edit, or delete entries (both iLO hosts and an optional
+`[oneview]` appliance section), test connectivity live, and open the file
+directly in your `$EDITOR`/`$VISUAL` if you'd rather hand-edit it. Every
+save keeps rotating backups, so an accidental edit or deletion is always
+recoverable.
 
 ```bash
 proliant setup
 ```
 
-`proliant` looks for `inventory.ini` in this order: an explicit env override,
-then `~/.config/proliant/ilo/`, then the current directory.
+`proliant` looks for the local inventory file in this order: an explicit env
+override, then `~/.config/proliant/ilo/`, then the current directory. It's
+only used by `ilo` and `oneview` — `com` authenticates against the cloud API
+directly.
 
 ## Shell completion
 
@@ -73,7 +75,7 @@ export PROLIANT_NO_TELEMETRY=1
 ## Video walkthrough
 
 <!--
-  [![Watch: inventory.ini setup walkthrough](assets/setup-demo-thumb.png)](https://youtu.be/YOUR_VIDEO_ID)
+  [![Watch: local inventory file setup walkthrough](assets/setup-demo-thumb.png)](https://youtu.be/YOUR_VIDEO_ID)
 -->
 
 _Coming soon._

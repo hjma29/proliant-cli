@@ -44,6 +44,61 @@ def test_sentry_keeps_and_scrubs_unexpected_bugs():
     assert event["exception"]["values"][0]["value"] == "failed on <ip> with password=<redacted>"
 
 
+def test_sentry_strips_server_name_hostname():
+    """Regression test: the Sentry SDK defaults server_name to
+    socket.gethostname() unless told otherwise. It must never reach the
+    outgoing event, even if init() options change in the future."""
+    event = _event("KeyError", "boom")
+    event["server_name"] = "HPE-2MQ4420XS0"
+
+    result = _sentry_scrub(event, {})
+
+    assert result is not None
+    assert "server_name" not in result
+
+
+def test_sentry_scrubs_username_from_exception_message():
+    # RuntimeError (not FileNotFoundError) so this isn't dropped as an
+    # "expected failure" by _SENTRY_DROP_TYPES -- we want to exercise scrubbing.
+    event = _event(
+        "RuntimeError",
+        r"could not read C:\Users\jdoe\.config\proliant-cli\inventory.ini",
+    )
+
+    result = _sentry_scrub(event, {})
+
+    assert result is not None
+    value = result["exception"]["values"][0]["value"]
+    assert "jdoe" not in value
+    assert r"C:\Users\<user>\.config\proliant-cli\inventory.ini" in value
+
+
+def test_sentry_scrubs_username_from_stacktrace_frame_paths():
+    event = _event("KeyError", "boom")
+    event["exception"]["values"][0]["stacktrace"] = {
+        "frames": [
+            {
+                "filename": "cli.py",
+                "abs_path": r"C:\Users\jdoe\work\proliant-cli\src\proliant\cli.py",
+                "module": "proliant.cli",
+            },
+            {
+                "filename": "cli.py",
+                "abs_path": "/home/jdoe/work/proliant-cli/src/proliant/cli.py",
+                "module": "proliant.cli",
+            },
+        ],
+    }
+
+    result = _sentry_scrub(event, {})
+
+    assert result is not None
+    frames = result["exception"]["values"][0]["stacktrace"]["frames"]
+    assert frames[0]["abs_path"] == r"C:\Users\<user>\work\proliant-cli\src\proliant\cli.py"
+    assert frames[1]["abs_path"] == "/home/<user>/work/proliant-cli/src/proliant/cli.py"
+    assert "jdoe" not in str(frames)
+
+
 def test_enable_windows_vt_mode_noop_without_real_console(monkeypatch):
     """Regression test for a real Sentry-reported crash (PROLIANT-CLI-6).
 

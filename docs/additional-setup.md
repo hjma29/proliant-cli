@@ -53,20 +53,9 @@ proliant version    # Show installed version; offers to upgrade if a newer relea
 
 ## Telemetry
 
-`proliant` uses two small, anonymous signals. Neither ever includes personal
-data — no IPs, hostnames, credentials, or command-line arguments are sent.
+`proliant` can log CLI tracebacks and send them to [Sentry](https://sentry.io) to help fix bugs. It's opt-in and off by default — no personal data (IPs, hostnames, usernames, or credentials) is ever included.
 
-- **Install/update counter** (always on) — a single ping that counts installs
-  and updates by operating system only, so we know the tool is actually being
-  used.
-- **Error telemetry** (opt-in, off by default) — if you turn it on, only the
-  crash traceback for a genuine unexpected bug is sent to
-  [Sentry](https://sentry.io), our error-tracking service, so we can find and
-  fix it. Expected errors (wrong password, timeouts, missing files, and the
-  like) are never sent, and any IPs, hostnames, or credentials are stripped
-  before anything leaves your machine.
-
-Check or change the error telemetry setting any time:
+Check or change it any time:
 
 ```bash
 proliant setting telemetry

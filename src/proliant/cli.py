@@ -17,41 +17,34 @@ from proliant.common.platform import is_frozen
 
 
 _USAGE = """\
-usage: proliant [-h] NAMESPACE ...
+usage: proliant [-h] COMMAND ...
 
 HPE ProLiant CLI
 
-namespaces:
+commands:
   ilo          Direct iLO Redfish management (firmware, inventory, power)
   com          HPE GreenLake / Compute Ops Management (devices, workspaces)
   oneview      HPE OneView (Synergy & ProLiant fleet management)
   spp          HPE Service Pack for ProLiant catalog analysis
+  setup        Guided menu to view/add/edit/delete inventory.ini entries (iLO/OneView)
+  version      Show installed version; offers to upgrade if a newer release exists
   setting      View and manage proliant configuration
 
-commands:
-  setup                Guided menu to view/add/edit/delete inventory.ini entries (iLO/OneView)
-  version [-y|--yes]   Show installed version; offers to upgrade if a newer release exists
-                        (-y/--yes skips the confirmation prompt)
-
-Run 'proliant <namespace> --help' for namespace-specific help.
-
-notes:
-  Tab completion for bash/zsh/PowerShell is set up automatically by the
-  installer (install.sh / install.ps1) — there is no 'proliant install-completion'
-  subcommand. Re-run the installer to (re)enable tab completion.
+Run 'proliant <command> --help' for command-specific help.
 
 examples:
-  proliant ilo firmware list                       Firmware summary across all iLO hosts
-  proliant ilo firmware upgrade myilo             Upgrade firmware via HPE SDR
-  proliant com login                               Login to HPE GreenLake
-  proliant com devices list                         List GreenLake devices
-  proliant oneview servers list                    List all OneView-managed servers
-  proliant oneview firmware list                   Fleet firmware inventory via OneView
-  proliant spp list                                List available gen12 SPP versions
-  proliant spp inspect gen12 2026.03.00.00         Analyse a gen12 SPP catalog
-  proliant spp diff gen12 2025.09.01.00 2026.03.00.00  What changed between SPPs?
-  proliant setup                                    Guided menu to manage your iLO/OneView inventory
-  proliant version                                 Show version, offers to upgrade if newer exists
+  proliant ilo servers list                                 List all servers from inventory.ini
+  proliant ilo servers describe <server name>               Show full details for one server
+  proliant com servers list                                 List servers in the active COM workspace
+  proliant com servers describe <server name>               Show details for one COM server
+  proliant com reports memory                               Memory part-number breakdown across fleet
+  proliant oneview server-profiles list                     List all OneView server profiles
+  proliant oneview server-profiles describe <server profile name>  Show details for one profile
+  proliant oneview mac describe <mac address>               Trace a MAC address through the fabric
+  proliant spp list                                         List available gen12 SPP versions
+  proliant spp inspect gen12 2026.03.00.00                  Analyse a gen12 SPP catalog
+  proliant setup                                            Guided menu to manage your iLO/OneView inventory
+  proliant version                                          Show version, offers to upgrade if newer exists
 """
 
 _POWERSHELL_COMPLETION_BLOCK = """\
@@ -1298,7 +1291,7 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit(0)
         _cmd_version(auto_confirm=_version_args_want_auto_confirm(version_args))
     else:
-        print(f"proliant: unknown namespace '{namespace}'\n", file=sys.stderr)
+        print(f"proliant: unknown command '{namespace}'\n", file=sys.stderr)
         print(_USAGE)
         sys.exit(2)
 
@@ -1388,22 +1381,33 @@ def _sentry_event_expected_failure(event) -> bool:  # noqa: ANN001
 
 
 def _sentry_scrub(event, hint):  # noqa: ANN001
-    """Strip IPs, hostnames and credential patterns before sending."""
+    """Strip IPs, hostnames, usernames and credential patterns before sending."""
     import re
     if _sentry_hint_expected_failure(hint) or _sentry_event_expected_failure(event):
         return None
 
     _IP = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
     _CRED = re.compile(r'(password|secret|token|key|auth)\s*[=:]\s*\S+', re.IGNORECASE)
+    # Matches the username segment of a home directory path, e.g.
+    # "C:\Users\jdoe\..." or "/home/jdoe/..." or "/Users/jdoe/...".
+    _HOME_PATH = re.compile(r'([\\/](?:Users|home)[\\/])([^\\/]+)', re.IGNORECASE)
 
     def _scrub(text: str) -> str:
         text = _IP.sub('<ip>', text)
         text = _CRED.sub(r'\1=<redacted>', text)
+        text = _HOME_PATH.sub(r'\1<user>', text)
         return text
+
+    # The Sentry SDK defaults server_name to the machine's hostname — drop it.
+    event.pop('server_name', None)
 
     for exc in event.get('exception', {}).get('values', []):
         if exc.get('value'):
             exc['value'] = _scrub(str(exc['value']))
+        for frame in exc.get('stacktrace', {}).get('frames', []):
+            for path_key in ('filename', 'abs_path', 'module'):
+                if frame.get(path_key):
+                    frame[path_key] = _scrub(str(frame[path_key]))
     return event
 
 
@@ -1428,6 +1432,8 @@ def _init_sentry() -> None:
             before_send=_sentry_scrub,
             send_default_pii=False,
             traces_sample_rate=0.0,
+            server_name="",  # never populate with socket.gethostname()
+            include_local_variables=False,  # never capture local variable values
         )
     except ImportError:
         pass

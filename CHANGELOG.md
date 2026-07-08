@@ -4,6 +4,19 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ---
 
+## v1.0.32 — 2026-07-08
+
+### New Features
+- `proliant setting telemetry` (no arguments): shows a status panel — the default, your current setting and why — then asks `Enable telemetry? [Y/n]`/`[y/N]` before changing anything. One command now replaces having to guess or check config files; `proliant setting telemetry on`/`off` still work directly with no prompt for scripting.
+
+### Bug Fixes
+- Error telemetry (Sentry): fixed a leak where a crash report could include your machine's hostname and Windows/macOS/Linux username (as part of file paths in the stack trace). Both are now stripped before anything is sent, and local variable values are no longer captured at all.
+
+### Enhancements
+- `proliant -h`: rewritten to be shorter and more useful — replaced generic examples with real, verified commands, removed outdated tab-completion notes, and collapsed namespaces/commands into a single list.
+
+---
+
 ## v1.0.31 — 2026-07-08
 
 ### Bug Fixes

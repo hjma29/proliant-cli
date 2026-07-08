@@ -144,7 +144,15 @@ def _region_names_completer(prefix, **kwargs):
 
 
 def _server_targets_completer(prefix: str, **kwargs) -> list[str]:
-    """Return COM server names, serials, and iLO hostnames for tab completion."""
+    """Return COM server names for tab completion.
+
+    'describe' still accepts a serial number or iLO hostname if typed
+    manually (see describe.py::_find_server) -- but suggesting all three
+    per server tripled the completion list for no benefit, since Name is
+    the friendly identifier shown first in 'servers list'. Only fall back
+    to serial/iLO hostname for the rare server that has no name at all,
+    so every server stays completable.
+    """
     try:
         session = COMSession.load()
 
@@ -156,13 +164,13 @@ def _server_targets_completer(prefix: str, **kwargs) -> list[str]:
                 for server in data.get("items", []):
                     hardware = server.get("hardware", {})
                     bmc = hardware.get("bmc") or {}
-                    values.extend(
-                        value for value in (
-                            server.get("name", ""),
-                            hardware.get("serialNumber", ""),
-                            bmc.get("hostname", ""),
-                        ) if value
+                    value = (
+                        server.get("name", "")
+                        or hardware.get("serialNumber", "")
+                        or bmc.get("hostname", "")
                     )
+                    if value:
+                        values.append(value)
                 seen = set()
                 return [v for v in values if not (v in seen or seen.add(v))]
 

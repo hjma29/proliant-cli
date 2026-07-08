@@ -133,3 +133,73 @@ class TestModelNamesCompleter:
             result = cli._model_names_completer("dl380")
 
         assert result == ["dl380-gen11"]
+
+
+class TestServerTargetsCompleter:
+    """'describe' still accepts serial/iLO hostname if typed manually, but
+    tab completion should only *suggest* names -- see _server_targets_completer
+    docstring in com/cli.py."""
+
+    def test_returns_empty_list_when_not_logged_in(self):
+        from proliant.com.cli import _server_targets_completer
+
+        with patch("proliant.com.auth.COMSession.load", side_effect=Exception("no session")):
+            assert _server_targets_completer("") == []
+
+    def test_suggests_name_only_not_serial_or_ilo_hostname(self, tmp_path, monkeypatch):
+        from proliant.com import cli
+        from proliant.common import completers as completers_mod
+
+        monkeypatch.setattr(completers_mod, "cache_dir", lambda: tmp_path)
+
+        fake_data = {
+            "items": [
+                {
+                    "name": "com-team13.hol.enablement.local",
+                    "hardware": {
+                        "serialNumber": "2M294600BJ",
+                        "bmc": {"hostname": "ILO2M294600BJ.hol.enablement.local"},
+                    },
+                },
+            ]
+        }
+        fake_client = AsyncMock()
+        fake_client.get = AsyncMock(return_value=fake_data)
+        fake_client.__aenter__ = AsyncMock(return_value=fake_client)
+        fake_client.__aexit__ = AsyncMock(return_value=False)
+        fake_session = MagicMock(region="us-west")
+
+        with patch("proliant.com.auth.COMSession.load", return_value=fake_session), \
+             patch("proliant.com.cli.COMClient", return_value=fake_client):
+            result = cli._server_targets_completer("")
+
+        assert result == ["com-team13.hol.enablement.local"]
+
+    def test_falls_back_to_serial_when_server_has_no_name(self, tmp_path, monkeypatch):
+        from proliant.com import cli
+        from proliant.common import completers as completers_mod
+
+        monkeypatch.setattr(completers_mod, "cache_dir", lambda: tmp_path)
+
+        fake_data = {
+            "items": [
+                {
+                    "name": "",
+                    "hardware": {
+                        "serialNumber": "TWA25325G1206",
+                        "bmc": {"hostname": ""},
+                    },
+                },
+            ]
+        }
+        fake_client = AsyncMock()
+        fake_client.get = AsyncMock(return_value=fake_data)
+        fake_client.__aenter__ = AsyncMock(return_value=fake_client)
+        fake_client.__aexit__ = AsyncMock(return_value=False)
+        fake_session = MagicMock(region="us-west")
+
+        with patch("proliant.com.auth.COMSession.load", return_value=fake_session), \
+             patch("proliant.com.cli.COMClient", return_value=fake_client):
+            result = cli._server_targets_completer("")
+
+        assert result == ["TWA25325G1206"]

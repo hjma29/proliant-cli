@@ -7,3 +7,21 @@
 .md-nav--primary .md-nav__title[for="__drawer"] {
   display: none;
 }
+
+/*
+ * Slightly larger body/heading text for readability. Headings use `em`
+ * units relative to this base size, so they scale proportionally too.
+ * Material default is 0.8rem.
+ */
+.md-typeset {
+  font-size: 0.85rem;
+}
+
+/*
+ * Slightly wider overall page grid. Nav/TOC sidebars have a fixed width, so
+ * the extra room goes entirely to the center content panel. Material
+ * default is 61rem.
+ */
+.md-grid {
+  max-width: 70rem;
+}

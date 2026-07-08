@@ -6,6 +6,8 @@ Whether you manage a handful of bare-metal servers or a large fleet across multi
 
 > **Disclaimer:** This is a side project — not affiliated with or supported by HPE. Great for exploring and gathering information; exercise the usual caution with any change operations.
 
+> **Built with [GitHub Copilot](https://github.com/features/copilot).** The code in this repository was written with GitHub Copilot as an AI pair programmer.
+
 ## Installation
 
 ### Linux / macOS

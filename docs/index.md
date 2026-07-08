@@ -8,8 +8,7 @@ description: Install proliant and connect it to your iLO, COM, or OneView enviro
 `proliant` is a cross-platform CLI for HPE ProLiant environments. From a single
 terminal you can inspect server inventory and firmware across **iLO
 (Redfish)**, **Compute Ops Management (COM)**, and **Synergy OneView**, and
-browse **Service Pack for ProLiant (SPP)** contents — no Python or GUI
-required.
+browse **Service Pack for ProLiant (SPP)** contents.
 
 !!! warning "Disclaimer"
     This is a side project, not affiliated with or supported by HPE. Code in

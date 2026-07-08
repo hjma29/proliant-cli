@@ -25,3 +25,11 @@
 .md-grid {
   max-width: 70rem;
 }
+
+/*
+ * Bump the left page-nav and right table-of-contents panels up one size too.
+ * Both share the same .md-nav base rule. Material default is 0.7rem.
+ */
+.md-nav {
+  font-size: 0.75rem;
+}

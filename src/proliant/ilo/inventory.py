@@ -792,6 +792,7 @@ async def fetch_server_list_info(client: ILOClient) -> list[tuple[str, str]]:
     raw_model = system.get("Model", "N/A")
     model  = _MODEL_STRIP_RE.sub("", raw_model).strip() or raw_model
     serial = system.get("SerialNumber", "N/A") or "N/A"
+    power    = system.get("PowerState") or "—"
     os_name  = system.get("HostName") or ""
     ilo_name = manager.get("HostName") or ""  # may be None; overridden by interface below
 
@@ -832,6 +833,7 @@ async def fetch_server_list_info(client: ILOClient) -> list[tuple[str, str]]:
         ("OS_Name",  os_name),
         ("iLO_Name", ilo_name),
         ("Model",    model),
+        ("Power",    power),
         ("IP",       ip_addr),
     ]
 

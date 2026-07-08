@@ -4,6 +4,13 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ---
 
+## v1.0.25 — 2026-07-10
+
+### Enhancements
+- `proliant ilo servers list`: now shows the server's friendly inventory.ini alias as the first column (previously not shown at all), added a Power column, and the OS Name/iLO Name columns now size to their actual content instead of stretching with excess blank padding to fill the terminal.
+
+---
+
 ## v1.0.24 — 2026-07-10
 
 ### New Features

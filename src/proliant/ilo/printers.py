@@ -342,11 +342,18 @@ def _error_hint(error: str) -> str:
     return "error"
 
 
+def _fmt_power(v: str) -> str:
+    label = {"ON": "On", "OFF": "Off"}.get((v or "").upper(), v or "—")
+    color = {"ON": "green", "OFF": "red"}.get((v or "").upper(), "dim")
+    return f"[{color}]{label}[/{color}]"
+
+
 def print_servers_table(
     results: list[tuple[str, str | None, list]],
     addr_map: dict[str, str] | None = None,
 ) -> None:
-    """Print server list with Serial, OS Name, iLO Name, Model, IP — Rich styled.
+    """Print server list: Server (inventory alias), Serial, OS Name, iLO Name,
+    Model, Power, IP — Rich styled.
 
     On an error row the configured IP is shown in the IP column followed by a
     short hint about the failure (e.g. "(check authentication?)").
@@ -360,12 +367,13 @@ def print_servers_table(
     table = Table(
         box=box.SIMPLE_HEAD,
         show_lines=False,
-        expand=True,
     )
+    table.add_column("Server",   style="bold cyan", no_wrap=True)
     table.add_column("Serial",   style="grey70",  no_wrap=True, min_width=13)
-    table.add_column("OS Name",  style="default", ratio=4, overflow="fold")
-    table.add_column("iLO Name", style="green",   ratio=4, overflow="fold")
+    table.add_column("OS Name",  style="default", no_wrap=True, max_width=36, overflow="ellipsis")
+    table.add_column("iLO Name", style="green",   no_wrap=True, max_width=36, overflow="ellipsis")
     table.add_column("Model",    style="grey70",  no_wrap=True, max_width=13)
+    table.add_column("Power",    style="default", no_wrap=True, min_width=5)
     table.add_column("IP",       style="white",   no_wrap=True, min_width=15)
 
     for host_name, error, rows in sorted(results, key=lambda r: r[0]):
@@ -374,7 +382,7 @@ def print_servers_table(
             hint = _error_hint(error)
             ip_cell = f"{ip_addr}  [red]({hint})[/red]" if ip_addr != "—" else f"[red]({hint})[/red]"
             table.add_row(
-                f"[grey70]{host_name}[/grey70]", "—", "—", "—", ip_cell,
+                f"[grey70]{host_name}[/grey70]", "—", "—", "—", "—", "—", ip_cell,
             )
             continue
         d = dict(rows)
@@ -382,10 +390,14 @@ def print_servers_table(
         os_name  = d.get("OS_Name", "")
         ilo_name = d.get("iLO_Name", "") or "—"
         model    = d.get("Model", "—")
+        power    = d.get("Power", "—")
         ip_addr  = d.get("IP", "—")
 
         os_cell = f"[cyan]{os_name}[/cyan]" if os_name else "[cyan]—[/cyan]"
-        table.add_row(serial, os_cell, ilo_name, model, ip_addr)
+        table.add_row(
+            f"[bold cyan]{host_name}[/bold cyan]", serial, os_cell, ilo_name, model,
+            _fmt_power(power), ip_addr,
+        )
 
     count = len(results)
     console.print(f"\n[bold]iLO Servers ({count} total)[/bold]")

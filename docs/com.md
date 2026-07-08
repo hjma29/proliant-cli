@@ -59,8 +59,4 @@ proliant com workspaces use MyWorkspace           # Switch active workspace
 
 ## Video walkthrough
 
-<!--
-  [![Watch: COM login & inventory walkthrough](assets/com-demo-thumb.png)](https://youtu.be/YOUR_VIDEO_ID)
--->
-
-_Coming soon._
+![COM video walkthrough](assets/com-walkthrough.gif)

@@ -4,7 +4,10 @@ describe`.
 
 This connects directly to the local OneView appliance (via inventory.ini,
 not through COM) to fetch profile status/virtual-identity/connections that
-COM itself doesn't expose. All network calls are mocked.
+COM itself doesn't expose. Matched by hardware serial number (COM's
+`oneview.name` field is actually the hardware's OneView name/bay label, not
+the profile name, so it can't be used to look up the profile directly).
+All network calls are mocked.
 """
 from __future__ import annotations
 
@@ -26,14 +29,19 @@ class TestRenderServerProfileSkips:
     OneView side of the lookup can't be completed."""
 
     @pytest.mark.asyncio
-    async def test_skips_when_oneview_name_missing(self, capsys):
-        await _render_server_profile({}, {}, {})
+    async def test_skips_when_serial_missing(self, capsys):
+        await _render_server_profile({}, {}, "")
+        assert capsys.readouterr().out == ""
+
+    @pytest.mark.asyncio
+    async def test_skips_when_serial_is_placeholder(self, capsys):
+        await _render_server_profile({}, {}, "—")
         assert capsys.readouterr().out == ""
 
     @pytest.mark.asyncio
     async def test_skips_when_no_local_appliance_configured(self, capsys):
         with patch("proliant.oneview.config.list_oneview_appliances", return_value=[]):
-            await _render_server_profile({}, {}, {"name": "HyperV-04"})
+            await _render_server_profile({}, {}, "3M1D0P12KD")
         assert capsys.readouterr().out == ""
 
     @pytest.mark.asyncio
@@ -42,18 +50,18 @@ class TestRenderServerProfileSkips:
                        "username": "Administrator", "password": "pw"}]
         with patch("proliant.oneview.config.list_oneview_appliances", return_value=appliances), \
              patch("proliant.oneview.client.OneViewClient", side_effect=ConnectionError("unreachable")):
-            await _render_server_profile({}, {}, {"name": "HyperV-04"})
+            await _render_server_profile({}, {}, "3M1D0P12KD")
         assert capsys.readouterr().out == ""
 
     @pytest.mark.asyncio
-    async def test_skips_when_profile_name_not_found(self, capsys):
+    async def test_skips_when_no_hardware_matches_serial(self, capsys):
         appliances = [{"name": "oneview", "host": "10.1.1.1",
                        "username": "Administrator", "password": "pw"}]
         with patch("proliant.oneview.config.list_oneview_appliances", return_value=appliances), \
              patch("proliant.oneview.client.OneViewClient", return_value=_fake_client_ctx(object())), \
-             patch("proliant.oneview.profiles.describe_profile",
-                   AsyncMock(side_effect=ValueError("Server profile 'HyperV-04' not found."))):
-            await _render_server_profile({}, {}, {"name": "HyperV-04"})
+             patch("proliant.oneview.profiles.describe_profile_by_serial",
+                   AsyncMock(side_effect=ValueError("No OneView server hardware found with serial '3M1D0P12KD'"))):
+            await _render_server_profile({}, {}, "3M1D0P12KD")
         assert capsys.readouterr().out == ""
 
 
@@ -77,8 +85,8 @@ class TestRenderServerProfileRenders:
         }
         with patch("proliant.oneview.config.list_oneview_appliances", return_value=appliances), \
              patch("proliant.oneview.client.OneViewClient", return_value=_fake_client_ctx(object())), \
-             patch("proliant.oneview.profiles.describe_profile", AsyncMock(return_value=profile)):
-            await _render_server_profile({}, {}, {"name": "HyperV-04"})
+             patch("proliant.oneview.profiles.describe_profile_by_serial", AsyncMock(return_value=profile)):
+            await _render_server_profile({}, {}, "3M1D0P12KD")
 
         out = capsys.readouterr().out
         assert "Server Profile" in out
@@ -120,7 +128,7 @@ class TestRenderServerProfileRenders:
 
         with patch("proliant.oneview.config.list_oneview_appliances", return_value=appliances), \
              patch("proliant.oneview.client.OneViewClient", _RecordingOneViewClient), \
-             patch("proliant.oneview.profiles.describe_profile", AsyncMock(return_value=profile)):
-            await _render_server_profile(appliance_map, server_appliance, {"name": "HyperV-04"})
+             patch("proliant.oneview.profiles.describe_profile_by_serial", AsyncMock(return_value=profile)):
+            await _render_server_profile(appliance_map, server_appliance, "3M1D0P12KD")
 
         assert captured_hosts == ["oneview-b.example.com"]

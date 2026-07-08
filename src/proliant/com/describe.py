@@ -195,7 +195,7 @@ async def run_describe(session: COMSession, target: str) -> None:
 
     # ── Full width: Server Profile (OneView-managed servers only) + Memory + Firmware ──
     if connection_type == "ONEVIEW":
-        await _render_server_profile(appliance_map, appliance, oneview)
+        await _render_server_profile(appliance_map, appliance, serial)
 
     await _render_memory(hw, bmc)
 
@@ -212,28 +212,33 @@ async def run_describe(session: COMSession, target: str) -> None:
         get_console().print(fw_t)
 
 
-async def _render_server_profile(appliance_map: dict, appliance: dict, oneview: dict) -> None:
+async def _render_server_profile(appliance_map: dict, appliance: dict, serial: str) -> None:
     """Best-effort: fetch the server's OneView server profile (status, virtual
     identity, network/SAN connections) directly from the bridging OneView
     appliance and render it, matching the GUI's "Server profile" panel.
 
+    Matched by hardware serial number, not by COM's ``oneview.name`` field --
+    that field is actually the server *hardware's* OneView name/bay label
+    (e.g. "MXQ713060B, bay 5"), which is independent of the profile's own
+    name (e.g. "HyperV-04"), so matching a profile by that value would
+    silently fail to find anything.
+
     COM itself doesn't expose profile connections, so this connects straight
     to the OneView appliance using inventory.ini credentials (see
     ``proliant oneview appliances``). Silently skipped if no OneView
-    appliance is configured locally, it's unreachable, or the profile can't
-    be matched by name.
+    appliance is configured locally, it's unreachable, or no profile is
+    assigned to this hardware.
     """
     from rich import box as rich_box
     from rich.table import Table
 
-    profile_name = oneview.get("name")
-    if not profile_name:
+    if not serial or serial == "—":
         return
 
     try:
         from proliant.oneview.client import OneViewClient
         from proliant.oneview.config import list_oneview_appliances
-        from proliant.oneview.profiles import describe_profile
+        from proliant.oneview.profiles import describe_profile_by_serial
 
         appliances = list_oneview_appliances()
         if not appliances:
@@ -249,8 +254,8 @@ async def _render_server_profile(appliance_map: dict, appliance: dict, oneview: 
                     break
 
         async with OneViewClient(chosen["host"], chosen["username"], chosen["password"]) as ov:
-            profile = await describe_profile(ov, profile_name)
-    except Exception:  # intentional: OneView unreachable/no creds/profile mismatch — skip
+            profile = await describe_profile_by_serial(ov, serial)
+    except Exception:  # intentional: OneView unreachable/no creds/no profile assigned — skip
         return
 
     get_console().print("[bold]Server Profile[/bold]")

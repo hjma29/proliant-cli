@@ -75,7 +75,8 @@ async def list_profiles(client: "OneViewClient") -> list[dict]:
 
 
 async def describe_profile(client: "OneViewClient", name: str) -> dict:
-    """Return full detail for a single profile, with all URIs resolved."""
+    """Return full detail for a single profile (matched by profile name), with
+    all URIs resolved."""
     raw_profiles, raw_hw, raw_egs, raw_shts, raw_templates, raw_networks, raw_network_sets = await asyncio.gather(
         client.get_all("/rest/server-profiles"),
         client.get_all("/rest/server-hardware"),
@@ -90,8 +91,62 @@ async def describe_profile(client: "OneViewClient", name: str) -> dict:
     if not matched:
         known = ", ".join(p.get("name", "") for p in raw_profiles)
         raise ValueError(f"Server profile '{name}' not found. Known: {known}")
-    raw = matched[0]
 
+    return await _resolve_profile_detail(
+        client, matched[0], raw_hw, raw_egs, raw_shts, raw_templates, raw_networks, raw_network_sets,
+    )
+
+
+async def describe_profile_by_serial(client: "OneViewClient", serial: str) -> dict:
+    """Return full profile detail for the server hardware with the given
+    serial number, matched via its assigned ``serverProfileUri``.
+
+    Use this instead of ``describe_profile()`` when the caller only has the
+    server hardware's identity (e.g. from another system like COM) -- a
+    profile's own ``name`` (e.g. "HyperV-04") is independent of its
+    hardware's name/bay label (e.g. "MXQ713060B, bay 5"), so matching by
+    profile name would fail even though the hardware clearly has one.
+    """
+    raw_profiles, raw_hw, raw_egs, raw_shts, raw_templates, raw_networks, raw_network_sets = await asyncio.gather(
+        client.get_all("/rest/server-profiles"),
+        client.get_all("/rest/server-hardware"),
+        client.get_all("/rest/enclosure-groups"),
+        client.get_all("/rest/server-hardware-types"),
+        client.get_all("/rest/server-profile-templates"),
+        client.get_all("/rest/ethernet-networks"),
+        client.get_all("/rest/network-sets"),
+    )
+
+    hw = next((h for h in raw_hw if (h.get("serialNumber") or "").upper() == serial.upper()), None)
+    if hw is None:
+        raise ValueError(f"No OneView server hardware found with serial '{serial}'")
+
+    profile_uri = hw.get("serverProfileUri")
+    if not profile_uri:
+        raise ValueError(f"Server hardware '{hw.get('name', serial)}' has no assigned server profile")
+
+    matched = [p for p in raw_profiles if p.get("uri") == profile_uri]
+    if not matched:
+        raise ValueError(f"Server profile at '{profile_uri}' not found")
+
+    return await _resolve_profile_detail(
+        client, matched[0], raw_hw, raw_egs, raw_shts, raw_templates, raw_networks, raw_network_sets,
+    )
+
+
+async def _resolve_profile_detail(
+    client: "OneViewClient",
+    raw: dict,
+    raw_hw: list[dict],
+    raw_egs: list[dict],
+    raw_shts: list[dict],
+    raw_templates: list[dict],
+    raw_networks: list[dict],
+    raw_network_sets: list[dict],
+) -> dict:
+    """Shared detail-resolution logic once the raw profile dict is matched --
+    used by both describe_profile() (match by name) and
+    describe_profile_by_serial() (match by hardware serial)."""
     hw_map = {h["uri"]: h for h in raw_hw}
     eg_map = {eg["uri"]: eg.get("name", "") for eg in raw_egs}
     sht_map = {sht.get("uri", ""): sht.get("name", "") for sht in raw_shts}

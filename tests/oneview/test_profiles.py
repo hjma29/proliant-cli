@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from proliant.oneview.cli import _profile_alert_messages, _section_banner, _status_style
-from proliant.oneview.profiles import describe_profile
+from proliant.oneview.profiles import describe_profile, describe_profile_by_serial
 
 
 PROFILE_URI = "/rest/server-profiles/profile1"
@@ -125,6 +125,98 @@ async def test_describe_profile_resolves_gui_detail_fields():
             "status": "OK",
         }
     ]
+
+
+def _serial_lookup_collections(hw_extra: dict | None = None):
+    """Shared fixture data for describe_profile_by_serial tests: one profile
+    assigned to server hardware with serial 'MXQ1240F2M'."""
+    hw = {
+        "uri": SERVER_URI,
+        "name": "Enclosure-01, bay 3",
+        "model": "SY 480 Gen10",
+        "serialNumber": "MXQ1240F2M",
+        "powerState": "On",
+        "status": "OK",
+        "state": "ProfileApplied",
+        "position": 3,
+        "serverProfileUri": PROFILE_URI,
+    }
+    if hw_extra:
+        hw.update(hw_extra)
+    return {
+        "/rest/server-profiles": [
+            {
+                "uri": PROFILE_URI,
+                "name": "HyperV-04",
+                "status": "OK",
+                "state": "Normal",
+                "description": "",
+                "serverHardwareUri": SERVER_URI,
+                "serverProfileTemplateUri": "",
+                "serverHardwareTypeUri": "",
+                "enclosureGroupUri": "",
+                "firmware": {},
+                "boot": {"manageBoot": False, "order": []},
+                "bios": {"manageBios": False, "consistencyState": "Unknown", "overriddenSettings": []},
+                "connectionSettings": {"connections": []},
+            }
+        ],
+        "/rest/server-hardware": [hw],
+        "/rest/enclosure-groups": [],
+        "/rest/server-hardware-types": [],
+        "/rest/server-profile-templates": [],
+        "/rest/ethernet-networks": [],
+        "/rest/network-sets": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_describe_profile_by_serial_matches_hardware_serial_not_profile_name():
+    """Regression test: COM's oneview.name is the hardware's name/bay label
+    (e.g. "MXQ713060B, bay 5"), NOT the profile's own name (e.g.
+    "HyperV-04") -- describe_profile_by_serial must match via the hardware's
+    serialNumber -> serverProfileUri chain, independent of either name."""
+    result = await describe_profile_by_serial(
+        FakeClient(_serial_lookup_collections()), "MXQ1240F2M"
+    )
+
+    assert result["name"] == "HyperV-04"
+    assert result["server_serial"] == "MXQ1240F2M"
+
+
+@pytest.mark.asyncio
+async def test_describe_profile_by_serial_is_case_insensitive():
+    result = await describe_profile_by_serial(
+        FakeClient(_serial_lookup_collections()), "mxq1240f2m"
+    )
+
+    assert result["name"] == "HyperV-04"
+
+
+@pytest.mark.asyncio
+async def test_describe_profile_by_serial_raises_when_hardware_not_found():
+    with pytest.raises(ValueError, match="No OneView server hardware found"):
+        await describe_profile_by_serial(
+            FakeClient(_serial_lookup_collections()), "NOTFOUND123"
+        )
+
+
+@pytest.mark.asyncio
+async def test_describe_profile_by_serial_raises_when_hardware_has_no_profile():
+    collections = _serial_lookup_collections()
+    del collections["/rest/server-hardware"][0]["serverProfileUri"]
+
+    with pytest.raises(ValueError, match="no assigned server profile"):
+        await describe_profile_by_serial(FakeClient(collections), "MXQ1240F2M")
+
+
+@pytest.mark.asyncio
+async def test_describe_profile_by_serial_raises_when_profile_uri_not_found():
+    collections = _serial_lookup_collections()
+    collections["/rest/server-hardware"][0]["serverProfileUri"] = "/rest/server-profiles/missing"
+
+    with pytest.raises(ValueError, match="not found"):
+        await describe_profile_by_serial(FakeClient(collections), "MXQ1240F2M")
 
 
 def test_profile_alert_display_uses_issue_details_and_plain_ok():

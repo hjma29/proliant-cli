@@ -3,10 +3,8 @@
 > Engineering context for contributors and AI agents working on this repo.
 > Update whenever a new coding gotcha or schema difference is discovered.
 > User-facing CLI reference: `README.md` (update when commands or flags change).
-> Deep debugging narratives, incident write-ups, and troubleshooting procedures
-> live in `~/work/work-notes/notes-proliant-cli.md` (private notes repo) — do
-> not duplicate them here. This file stays a short, current reference for
-> facts that affect how code must be written, not how to diagnose problems.
+> This file stays a short, current reference for facts that affect how code
+> must be written — not a debugging log or troubleshooting guide.
 
 ---
 
@@ -77,17 +75,8 @@ proliant version
 
 ---
 
-## Critical gotchas & reference details
+## Quick facts
 
-Component-level Redfish/COM schema quirks, firmware task-queue rules, job template IDs,
-API base URLs, HPE SDR/Redfish doc links, and other implementation-detail reference
-material live in `~/work/work-notes/notes-proliant-cli.md` — check that file before
-touching `ilo/`, `com/`, `oneview/`, or `common/inventory_errors.py` code. It is kept
-current and is the source of truth for these facts, not this document. Key sections
-there: "4. COM API Implementation", "9. classify_update_method() Rules", "10. Lessons
-Learned".
-
-Two facts worth remembering without opening that file:
 - COM token cache: `~/.config/proliant-cli/com/token.json`.
 - `proliant ilo` upgrade order is iLO first, then BIOS, then everything else, with a
   ~90s wait after an iLO flash for it to restart before continuing.

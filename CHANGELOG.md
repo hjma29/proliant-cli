@@ -4,6 +4,13 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ---
 
+## v1.0.29 — 2026-07-08
+
+### Bug Fixes
+- `proliant ilo`/`proliant com`: the yellow "did you mean" / valid-choices highlighting on an invalid-argument error was written as raw ANSI escape codes straight to stderr. On some Windows consoles (older/legacy `conhost` sessions — e.g. the classic blue "Windows PowerShell" console, as opposed to Windows Terminal) these escape codes don't render as color at all, showing plain text instead, even though every other colored message in the app (drawn via Rich) displayed correctly in the same window. Error output now goes through Rich as well, so it uses the same terminal-aware color path (including Rich's legacy-Windows-console fallback) as the rest of the CLI, and no longer leaks raw escape bytes when stderr is piped/redirected.
+
+---
+
 ## v1.0.28 — 2026-07-08
 
 ### Bug Fixes

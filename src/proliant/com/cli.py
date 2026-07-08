@@ -62,7 +62,6 @@ Note: Run 'proliant com login' before any resource command (like kubectl/gcloud/
 # PYTHON_ARGCOMPLETE_OK
 import argparse
 import asyncio
-import difflib
 import json
 import sys
 from typing import Optional
@@ -75,6 +74,7 @@ from proliant.common.completers import suppress_file_completion, cached_names
 from proliant.common.runner import run_sync
 from proliant.com.auth import COMSession, CredentialsError, AuthError
 from proliant.com.client import COMClient, friendly_http_error
+from proliant.common.argparse_utils import SuggestingArgumentParser as _SuggestingArgumentParser
 from proliant.com import devices as _devices
 from proliant.com import servers as _servers_mod
 from proliant.com import workspaces as _workspaces
@@ -636,44 +636,6 @@ async def _cmd_describe_server(args: argparse.Namespace) -> None:
     except Exception as e:
         get_console().print(f"[red]Error:[/red] {_friendly_com_error(e)}")
         sys.exit(1)
-
-
-class _SuggestingArgumentParser(argparse.ArgumentParser):
-    """ArgumentParser that suggests close matches on invalid choice errors."""
-
-    _GREEN  = "\033[32m"
-    _YELLOW = "\033[33m"
-    _BOLD   = "\033[1m"
-    _RESET  = "\033[0m"
-
-    def error(self, message: str) -> None:
-        import re
-        suggestion = None
-        match = re.search(r"(invalid choice: '[^']+') \(choose from ([^)]+)\)", message)
-        if match:
-            bad_part = match.group(1)
-            choices_str = match.group(2)
-            choices = [c.strip().strip("'") for c in choices_str.split(",")]
-            close = difflib.get_close_matches(
-                re.search(r"'([^']+)'", bad_part).group(1), choices, n=1, cutoff=0.6
-            )
-            if close:
-                suggestion = close[0]
-            colored_choices = ", ".join(
-                f"{self._YELLOW}{c}{self._RESET}" for c in choices
-            )
-            message = re.sub(
-                r"\(choose from [^)]+\)",
-                f"(choose from {colored_choices})",
-                message,
-            )
-        if suggestion:
-            sys.stderr.write(
-                f"\n{self._GREEN}{self._BOLD}  Did you mean: '{suggestion}'?{self._RESET}\n\n"
-            )
-        self.print_usage(sys.stderr)
-        sys.stderr.write(f"{self.prog}: error: {message}\n")
-        sys.exit(2)
 
 
 def _build_parser() -> argparse.ArgumentParser:

@@ -34,7 +34,6 @@ from __future__ import annotations
 # PYTHON_ARGCOMPLETE_OK
 import argparse
 import asyncio
-import difflib
 import json
 import sys
 from collections.abc import Awaitable, Callable
@@ -47,6 +46,7 @@ from proliant.ilo.boot import fetch_boot_order, set_one_time_pxe
 from proliant.ilo.inventory import apply_license_key
 from proliant.common.completers import comma_sep_completer, file_completion, suppress_file_completion, cached_names
 from proliant.common.display import get_console, make_table, print_json, OutputMode, get_output_mode
+from proliant.common.argparse_utils import SuggestingArgumentParser as _SuggestingArgumentParser
 from proliant.common.runner import run_parallel, run_sync
 from proliant.common.targets import resolve_hosts, add_target_args
 from proliant.ilo import firmware, inventory
@@ -146,45 +146,6 @@ async def _run_parallel_async(hosts: list[dict], fetch_fn: FetchFn) -> list[tupl
 async def _run_report_memory(args: argparse.Namespace) -> None:
     hosts = _load_hosts_or_exit(getattr(args, "host", None), getattr(args, "hosts_from", None))
     await run_report_memory(hosts)
-
-
-class _SuggestingArgumentParser(argparse.ArgumentParser):
-    """ArgumentParser that suggests close matches on invalid choice errors."""
-
-    _GREEN  = "\033[32m"
-    _YELLOW = "\033[33m"
-    _BOLD   = "\033[1m"
-    _RESET  = "\033[0m"
-
-    def error(self, message: str) -> None:
-        import re
-        import sys
-        suggestion = None
-        match = re.search(r"(invalid choice: '[^']+') \(choose from ([^)]+)\)", message)
-        if match:
-            bad_part = match.group(1)
-            choices_str = match.group(2)
-            choices = [c.strip().strip("'") for c in choices_str.split(",")]
-            close = difflib.get_close_matches(
-                re.search(r"'([^']+)'", bad_part).group(1), choices, n=1, cutoff=0.6
-            )
-            if close:
-                suggestion = close[0]
-            colored_choices = ", ".join(
-                f"{self._YELLOW}{c}{self._RESET}" for c in choices
-            )
-            message = re.sub(
-                r"\(choose from [^)]+\)",
-                f"(choose from {colored_choices})",
-                message,
-            )
-        if suggestion:
-            sys.stderr.write(
-                f"\n{self._GREEN}{self._BOLD}  Did you mean: '{suggestion}'?{self._RESET}\n\n"
-            )
-        self.print_usage(sys.stderr)
-        sys.stderr.write(f"{self.prog}: error: {message}\n")
-        sys.exit(2)
 
 
 def _build_parser() -> argparse.ArgumentParser:

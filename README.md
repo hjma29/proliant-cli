@@ -92,6 +92,7 @@ proliant ilo boot set <host> pxe
 
 ```bash
 proliant com login                               # Login (Okta or email/password)
+proliant com whoami                              # Show current login (email + method)
 proliant com logout
 proliant com devices list                        # All devices in workspace
 proliant com servers list                        # Servers with firmware info

@@ -908,7 +908,9 @@ def save_token(token: dict, region: str = "us-west",
                workspaces: Optional[list] = None,
                glp_client_id: str = "",
                glp_client_secret: str = "",
-               glp_credential_name: str = "") -> None:
+               glp_credential_name: str = "",
+               email: str = "",
+               login_method: str = "") -> None:
     """Persist the user OAuth token to ~/.config/proliant-cli/com/token.json."""
     TOKEN_CACHE.parent.mkdir(parents=True, exist_ok=True)
 
@@ -917,13 +919,21 @@ def save_token(token: dict, region: str = "us-west",
     # (see 'workspace_regions' / switch_region()/switch_workspace()) instead
     # of wiping them out on every fresh 'proliant com login'.
     workspace_regions: dict = {}
+    existing: dict = {}
     try:
         if TOKEN_CACHE.exists():
-            workspace_regions = json.loads(TOKEN_CACHE.read_text()).get("workspace_regions", {}) or {}
+            existing = json.loads(TOKEN_CACHE.read_text())
+            workspace_regions = existing.get("workspace_regions", {}) or {}
     except Exception:
+        existing = {}
         workspace_regions = {}
     if workspace_id and region:
         workspace_regions[workspace_id] = region
+
+    # Preserve email/login_method across a silent token refresh (which calls
+    # save_token() without knowing either) instead of blanking them out.
+    email = email or existing.get("email", "")
+    login_method = login_method or existing.get("login_method", "")
 
     payload = {
         "access_token":        token.get("access_token"),
@@ -932,6 +942,8 @@ def save_token(token: dict, region: str = "us-west",
         "expires_at":          time.time() + token.get("expires_in", 7200),
         "region":              region,
         "token_type":          "user",
+        "email":               email,
+        "login_method":        login_method,
         "workspace_id":        workspace_id,
         "workspace_name":      workspace_name,
         "ccs_session":         ccs_session,
@@ -1685,7 +1697,8 @@ async def okta_verify_login(email: str, region: Optional[str] = None) -> None:
                            workspaces=ws_list,
                            glp_client_id=glp_client_id,
                            glp_client_secret=glp_client_secret,
-                           glp_credential_name=glp_credential_name)
+                           glp_credential_name=glp_credential_name,
+                           email=email, login_method="okta_verify")
                 console.print(
                     f"[bold green]✓ Logged in as {email}[/bold green]"
                 )
@@ -1957,6 +1970,19 @@ async def password_login(email: str, password: str, region: Optional[str] = None
                                 success_href = await _poll_push(client, poll_href, state_handle)
 
                 else:
+                    # Okta wants to enroll a new authenticator instead of
+                    # challenging an existing password -- this means the
+                    # account has no password authenticator set up yet.
+                    # Retrying with the same credentials can't fix that, so
+                    # raise a clean, actionable message instead of leaking
+                    # raw IDX remediation/authenticator jargon to the user.
+                    if "enroll-authenticator" in remediations or "select-authenticator-enroll" in remediations:
+                        raise AuthFlowError(
+                            "Password login is not available for this account -- "
+                            "no password authenticator is enrolled yet in HPE "
+                            "GreenLake. Sign in via the GreenLake console once to "
+                            "set a password, then retry 'proliant com login --password'."
+                        )
                     raise AuthFlowError(
                         f"Unexpected remediations after identify: {remediations}. "
                         f"Authenticators: {[a.get('type') for a in authenticators_val]}"
@@ -2014,7 +2040,8 @@ async def password_login(email: str, password: str, region: Optional[str] = None
                            workspaces=ws_list,
                            glp_client_id=glp_client_id,
                            glp_client_secret=glp_client_secret,
-                           glp_credential_name=glp_credential_name)
+                           glp_credential_name=glp_credential_name,
+                           email=email, login_method="password")
                 console.print(f"[bold green]✓ Logged in as {email}[/bold green]")
                 console.print(f"[dim]Token saved to {TOKEN_CACHE}[/dim]")
                 return  # success

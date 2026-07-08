@@ -4,6 +4,19 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ---
 
+## v1.0.30 — 2026-07-08
+
+### New Features
+- `proliant com whoami`: shows who you're currently logged in as — email + login method (Okta Verify push, username/password, or API client) and active workspace/region — without needing to inspect `token.json` by hand.
+
+### Bug Fixes
+- `proliant com login --password`: an account with no password authenticator enrolled yet in HPE GreenLake (Okta's IDX flow asks to *enroll* one instead of challenging an existing password) used to retry 3 times and then fail with raw internal jargon — `Unexpected remediations after identify: ['enroll-authenticator', ...]. Authenticators: [...]`. Now fails immediately (no pointless retries) with a clear message explaining the account needs a password set up via the GreenLake console first.
+
+### Enhancements
+- `proliant com login`: removed the login-specific `--region` flag — it duplicated the top-level `--region` flag and encouraged picking a region before the workspace/account was even known. Region/workspace selection now happens after login via `proliant com regions use` / `proliant com workspaces use`, same as before this flag existed.
+
+---
+
 ## v1.0.29 — 2026-07-08
 
 ### Bug Fixes

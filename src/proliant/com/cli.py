@@ -9,6 +9,7 @@ Usage::
     proliant com login --email you@hpe.com     Pre-fill email, skip prompt
     proliant com login --password              Username + password login (external/gmail accounts)
 
+    proliant com whoami                        Show current login (email + login method)
     proliant com logout                        Remove cached credentials and token
 
     proliant com devices list                   All devices (COM servers + GreenLake storage/network)
@@ -103,6 +104,7 @@ from proliant.com.printers import (
     print_workspaces_table,
     print_regions_table,
     print_bundles_table,
+    print_whoami,
 )
 
 
@@ -269,6 +271,14 @@ async def _cmd_login(args: argparse.Namespace) -> None:
                         "[yellow]HPE returned an SSO/certificate identity provider instead of a password challenge.[/yellow]"
                     )
                     sys.exit(1)
+                elif "no password authenticator is enrolled" in msg.lower():
+                    get_console().print("[red]Password login is not available for this account.[/red]")
+                    get_console().print(
+                        "[yellow]No password is set up for this account in HPE GreenLake yet. "
+                        "Sign in via the GreenLake console once to set a password, "
+                        "or use Okta Verify login instead.[/yellow]"
+                    )
+                    sys.exit(1)
                 else:
                     get_console().print(f"[red]Login failed:[/red] {e}")
                     sys.exit(1)
@@ -371,6 +381,67 @@ async def _cmd_logout(_args: argparse.Namespace) -> None:
         get_console().print("[green]✓ Logged out.[/green]")
     else:
         get_console().print("[yellow]Not logged in (no credentials found).[/yellow]")
+
+
+# ---------------------------------------------------------------------------
+# Whoami command
+# ---------------------------------------------------------------------------
+
+_LOGIN_METHOD_LABELS = {
+    "password":     "Username + password",
+    "okta_verify":  "Okta Verify (push)",
+}
+
+
+async def _cmd_whoami(_args: argparse.Namespace) -> None:
+    """Show who is currently logged in and which login method was used."""
+    import os
+    from proliant.com.login import TOKEN_CACHE, CREDS_FILE, load_token
+
+    # Same credential priority as COMSession.load(): env vars > credentials.yml > token.json
+    env_id = os.environ.get("HPECOM_CLIENT_ID")
+    env_secret = os.environ.get("HPECOM_CLIENT_SECRET")
+    if env_id and env_secret:
+        print_whoami({
+            "logged_in":    True,
+            "auth_type":    "api_client",
+            "client_id":    env_id,
+            "login_method": "API client (HPECOM_CLIENT_ID/HPECOM_CLIENT_SECRET env vars)",
+            "region":       os.environ.get("HPECOM_REGION", "us-west"),
+        })
+        return
+
+    if CREDS_FILE.exists():
+        import yaml
+        try:
+            data = yaml.safe_load(CREDS_FILE.read_text()) or {}
+        except Exception:
+            data = {}
+        print_whoami({
+            "logged_in":    True,
+            "auth_type":    "api_client",
+            "client_id":    data.get("client_id", ""),
+            "login_method": "API client (proliant com login --api-client)",
+            "region":       data.get("region", "us-west"),
+            "source":       str(CREDS_FILE),
+        })
+        return
+
+    data = load_token()
+    if not data:
+        get_console().print("[yellow]Not logged in.[/yellow] Run 'proliant com login' first.")
+        sys.exit(1)
+
+    login_method = data.get("login_method", "")
+    print_whoami({
+        "logged_in":      True,
+        "auth_type":      "user",
+        "email":          data.get("email", "") or "(unknown — logged in before this was tracked; log in again to record it)",
+        "login_method":   _LOGIN_METHOD_LABELS.get(login_method, login_method or "(unknown)"),
+        "workspace_name": data.get("workspace_name", ""),
+        "region":         data.get("region", ""),
+        "source":         str(TOKEN_CACHE),
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -646,18 +717,19 @@ def _build_parser() -> argparse.ArgumentParser:
         epilog="""
 examples:
   proliant com login
-  proliant com devices list
-  proliant com devices add --serial-number TWA25380A01
-  proliant com servers list
-  proliant com servers describe TWA25380A01
-  proliant com bundles list --gen 12
-  proliant com workspaces list
-  proliant com workspaces use MyWorkspace
-  proliant com regions list
-  proliant com regions use eu-central
-  proliant com reports memory
-  proliant com reports gpu
-""",
+          proliant com whoami
+          proliant com devices list
+          proliant com devices add --serial-number TWA25380A01
+          proliant com servers list
+          proliant com servers describe TWA25380A01
+          proliant com bundles list --gen 12
+          proliant com workspaces list
+          proliant com workspaces use MyWorkspace
+          proliant com regions list
+          proliant com regions use eu-central
+          proliant com reports memory
+          proliant com reports gpu
+        """,
     )
 
     # Global flags
@@ -713,16 +785,17 @@ examples:
         help=argparse.SUPPRESS,
     )
     login_client_secret_arg.completer = suppress_file_completion()
-    login_p.add_argument(
-        "--region", metavar="REGION",
-        choices=["us-west", "eu-central", "ap-northeast"],
-        help="COM region to use (default: auto-detect the workspace's provisioned region)",
-    )
 
     # ── logout ────────────────────────────────────────────────────────────
     subparsers.add_parser(
         "logout",
         help="Remove cached credentials and token",
+    )
+
+    # ── whoami ────────────────────────────────────────────────────────────
+    subparsers.add_parser(
+        "whoami",
+        help="Show current login (email/login method or API client)",
     )
 
     def _add_device_list_args(p: argparse.ArgumentParser, *, default_fields: tuple[str, ...],
@@ -989,6 +1062,8 @@ async def _async_main(args: argparse.Namespace) -> None:
         await _cmd_login(args)
     elif args.command == "logout":
         await _cmd_logout(args)
+    elif args.command == "whoami":
+        await _cmd_whoami(args)
     elif args.command == "devices":
         if args.what == "list":
             await _cmd_show_devices(args)

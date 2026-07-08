@@ -345,6 +345,42 @@ def print_regions_table(region_list: list) -> None:
     get_console().print("[dim]  * = active region[/dim]")
 
 
+def print_whoami(info: dict) -> None:
+    """Print current login identity (email/login method) or service-account info.
+
+    ``info`` is built by ``_cmd_whoami`` in cli.py and always includes
+    ``auth_type`` ("user" or "api_client") plus the fields relevant to it.
+    """
+    if get_output_mode() == OutputMode.JSON:
+        print_json(info)
+        return
+
+    table = Table(
+        title="proliant com — current login",
+        box=box.ROUNDED,
+        show_header=False,
+        show_lines=False,
+    )
+    table.add_column("Field", style="bold cyan", no_wrap=True)
+    table.add_column("Value", style="white")
+
+    if info.get("auth_type") == "api_client":
+        table.add_row("Auth type",     "API client (service account)")
+        table.add_row("Client ID",     info.get("client_id", "") or "—")
+        table.add_row("Login method",  info.get("login_method", "") or "—")
+        table.add_row("Region",        _REGION_MAP.get(info.get("region", ""), info.get("region", "")) or "—")
+    else:
+        table.add_row("Email",         info.get("email", "") or "—")
+        table.add_row("Login method",  info.get("login_method", "") or "—")
+        table.add_row("Workspace",     info.get("workspace_name", "") or "—")
+        table.add_row("COM Region",    _REGION_MAP.get(info.get("region", ""), info.get("region", "")) or "—")
+
+    if info.get("source"):
+        table.add_row("Credentials",   info["source"])
+
+    get_console().print(table)
+
+
 def print_bundles_table(bundle_list: list) -> None:
     if get_output_mode() == OutputMode.JSON:
         print_json([

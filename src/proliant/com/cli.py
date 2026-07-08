@@ -8,8 +8,6 @@ Usage::
     proliant com login                         Okta Verify push login (prompts for email)
     proliant com login --email you@hpe.com     Pre-fill email, skip prompt
     proliant com login --password              Username + password login (external/gmail accounts)
-    proliant com login --api-client            Login with HPE GreenLake API client credentials
-    proliant com login --api-client --client-id ID --client-secret SECRET  Non-interactive
 
     proliant com logout                        Remove cached credentials and token
 
@@ -665,12 +663,14 @@ examples:
     parser.add_argument("--json", action="store_true", dest="json_output",
                         help="Output as JSON (for piping/scripting)")
 
-    # Global optional credential overrides
+    # Global optional credential overrides (internal use only — intentionally
+    # hidden from --help; regular users authenticate via 'proliant com login'
+    # with Okta or email/password, not a GreenLake API client)
     client_id_arg = parser.add_argument("--client-id",     metavar="ID",     dest="client_id",
-                        help="GreenLake API client ID (overrides env/file)")
+                        help=argparse.SUPPRESS)
     client_id_arg.completer = suppress_file_completion()
     client_secret_arg = parser.add_argument("--client-secret", metavar="SECRET", dest="client_secret",
-                        help="GreenLake API client secret (overrides env/file)")
+                        help=argparse.SUPPRESS)
     client_secret_arg.completer = suppress_file_completion()
     parser.add_argument("--region",        metavar="REGION", default=None,
                         choices=["us-west", "eu-central", "ap-northeast"],
@@ -683,7 +683,7 @@ examples:
     # ── login ─────────────────────────────────────────────────────────────
     login_p = subparsers.add_parser(
         "login",
-        help="Login (Okta Verify push, password, or --api-client)",
+        help="Login (Okta Verify push or password)",
     )
     login_email_arg = login_p.add_argument(
         "--email", "-e", metavar="EMAIL",
@@ -694,18 +694,22 @@ examples:
         "--password", "-p", action="store_true",
         help="Login with username + password (for external/gmail accounts)",
     )
+    # --api-client / --client-id / --client-secret are internal-only
+    # (used for maintainer testing) and intentionally hidden from --help.
+    # Regular users should authenticate interactively via Okta or
+    # email/password login above.
     login_p.add_argument(
         "--api-client", action="store_true", dest="api_client",
-        help="Login using HPE GreenLake API client credentials (no Okta needed)",
+        help=argparse.SUPPRESS,
     )
     login_client_id_arg = login_p.add_argument(
         "--client-id", metavar="ID", dest="client_id",
-        help="Client ID for --api-client login",
+        help=argparse.SUPPRESS,
     )
     login_client_id_arg.completer = suppress_file_completion()
     login_client_secret_arg = login_p.add_argument(
         "--client-secret", metavar="SECRET", dest="client_secret",
-        help="Client Secret for --api-client login",
+        help=argparse.SUPPRESS,
     )
     login_client_secret_arg.completer = suppress_file_completion()
     login_p.add_argument(

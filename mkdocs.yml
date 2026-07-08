@@ -1,4 +1,4 @@
-site_name: Proliant CLI
+site_name: ProLiant CLI
 site_description: >-
   HPE ProLiant CLI — iLO Redfish, Compute Ops Management, and Synergy OneView
   from your terminal.

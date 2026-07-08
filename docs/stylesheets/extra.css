@@ -1,5 +1,5 @@
 /*
- * The fixed header already shows the site title ("Proliant CLI"). Material's
+ * The fixed header already shows the site title ("ProLiant CLI"). Material's
  * mobile nav drawer repeats it again as a title above the page list, which
  * reads as a duplicate. Hide just that title label; the drawer still closes
  * via the header's menu button and the click-outside overlay.

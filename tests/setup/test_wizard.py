@@ -61,6 +61,54 @@ def test_open_in_editor_windows_uses_startfile(tmp_path, monkeypatch):
     startfile.assert_called_once_with(str(path))
 
 
+def test_open_in_editor_headless_linux_falls_back_to_nano(tmp_path, monkeypatch):
+    """No $EDITOR, no xdg-open (headless server/VM) -> fall back to a
+    terminal editor that's actually installed, rather than giving up."""
+    path = tmp_path / "inv.ini"
+    path.write_text("[srv1]\nhost = 10.0.0.5\n")
+    monkeypatch.delenv("EDITOR", raising=False)
+    monkeypatch.delenv("VISUAL", raising=False)
+
+    def fake_which(name):
+        return "/usr/bin/nano" if name == "nano" else None
+
+    with patch.object(wiz.sys, "platform", "linux"), \
+         patch.object(wiz.shutil, "which", side_effect=fake_which), \
+         patch("subprocess.run") as run:
+        wiz._open_in_editor(path)
+    run.assert_called_once_with(["/usr/bin/nano", str(path)], check=False)
+
+
+def test_open_in_editor_headless_linux_falls_back_to_vi_when_no_nano_or_vim(tmp_path, monkeypatch):
+    path = tmp_path / "inv.ini"
+    path.write_text("[srv1]\nhost = 10.0.0.5\n")
+    monkeypatch.delenv("EDITOR", raising=False)
+    monkeypatch.delenv("VISUAL", raising=False)
+
+    def fake_which(name):
+        return "/usr/bin/vi" if name == "vi" else None
+
+    with patch.object(wiz.sys, "platform", "linux"), \
+         patch.object(wiz.shutil, "which", side_effect=fake_which), \
+         patch("subprocess.run") as run:
+        wiz._open_in_editor(path)
+    run.assert_called_once_with(["/usr/bin/vi", str(path)], check=False)
+
+
+def test_open_in_editor_headless_linux_no_editor_at_all_prints_manual_hint(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "inv.ini"
+    path.write_text("[srv1]\nhost = 10.0.0.5\n")
+    monkeypatch.delenv("EDITOR", raising=False)
+    monkeypatch.delenv("VISUAL", raising=False)
+
+    with patch.object(wiz.sys, "platform", "linux"), \
+         patch.object(wiz.shutil, "which", return_value=None), \
+         patch("subprocess.run") as run:
+        wiz._open_in_editor(path)
+    run.assert_not_called()
+    assert "No editor found" in capsys.readouterr().out
+
+
 # ---------------------------------------------------------------------------
 # _backup_ini rotation
 # ---------------------------------------------------------------------------
@@ -216,7 +264,8 @@ async def test_add_oneview_success_saves_entry_with_type(tmp_path):
     cfg = configparser.ConfigParser(interpolation=None)
     existing: set[str] = set()
 
-    prompt_answers = iter(["oneview", "10.0.0.100", "Administrator"])
+    # No name prompt -- section name is auto-generated, not asked for.
+    prompt_answers = iter(["10.0.0.100", "Administrator"])
     with patch("rich.prompt.Prompt.ask", side_effect=lambda *a, **kw: next(prompt_answers)), \
          patch.object(wiz, "prompt_password_async", AsyncMock(return_value="ovpass")), \
          patch.object(wiz, "_test_oneview", AsyncMock(return_value=(True, "Connected successfully."))):
@@ -226,6 +275,39 @@ async def test_add_oneview_success_saves_entry_with_type(tmp_path):
     saved = _read_cfg(dest)
     assert saved.get("oneview", "host") == "10.0.0.100"
     assert saved.get("oneview", "type") == "oneview"
+
+
+def test_next_oneview_name_defaults_to_oneview_when_none_exist():
+    assert wiz._next_oneview_name(set()) == "oneview"
+
+
+def test_next_oneview_name_increments_past_taken_names():
+    assert wiz._next_oneview_name({"oneview"}) == "oneview-2"
+    assert wiz._next_oneview_name({"oneview", "oneview-2"}) == "oneview-3"
+    # gap in the sequence is skipped over, not reused
+    assert wiz._next_oneview_name({"oneview", "oneview-3"}) == "oneview-2"
+
+
+@pytest.mark.asyncio
+async def test_add_second_oneview_auto_names_without_prompting(tmp_path):
+    """A second OneView appliance must not collide with the first, and the
+    user is never asked to name it -- only host/username/password."""
+    dest = tmp_path / "inventory.ini"
+    cfg = configparser.ConfigParser(interpolation=None)
+    cfg.add_section("oneview")
+    cfg.set("oneview", "host", "10.0.0.1")
+    cfg.set("oneview", "type", "oneview")
+    existing = {"oneview"}
+
+    prompt_answers = iter(["10.0.0.200", "Administrator"])
+    with patch("rich.prompt.Prompt.ask", side_effect=lambda *a, **kw: next(prompt_answers)), \
+         patch.object(wiz, "prompt_password_async", AsyncMock(return_value="ovpass")), \
+         patch.object(wiz, "_test_oneview", AsyncMock(return_value=(True, "Connected successfully."))):
+        added = await wiz._add_oneview(cfg, existing, dest)
+
+    assert added is True
+    saved = _read_cfg(dest)
+    assert saved.get("oneview-2", "host") == "10.0.0.200"
 
 
 # ---------------------------------------------------------------------------

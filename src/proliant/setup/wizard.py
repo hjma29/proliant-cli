@@ -232,6 +232,17 @@ def _open_in_editor(path: Path) -> None:
             if opener:
                 subprocess.run([opener, str(path)], check=False)
             else:
+                # Headless Linux (a bare server/VM over SSH, no desktop
+                # session) has no xdg-open and often no $EDITOR set either.
+                # Fall back to whatever terminal editor is actually
+                # installed instead of just telling the user to do it by
+                # hand -- nano/vim/vi cover the vast majority of distros.
+                for candidate in ("nano", "vim", "vi"):
+                    terminal_editor = shutil.which(candidate)
+                    if terminal_editor:
+                        subprocess.run([terminal_editor, str(path)], check=False)
+                        console.print(f"  [green]Opened {path} in {candidate}.[/green]")
+                        return
                 console.print(
                     "  [yellow]No editor found. Set $EDITOR or open the file manually:[/yellow]"
                 )
@@ -411,6 +422,25 @@ async def _add_ilo_server(
     return True
 
 
+def _next_oneview_name(existing: set[str]) -> str:
+    """Auto-generate an inventory.ini section name for a new OneView entry.
+
+    Not prompted for -- the section name is an internal inventory.ini detail
+    ('proliant oneview appliances use <name>' is the only place it's ever
+    typed, and only needed once there's more than one appliance to pick
+    between). Defaults to 'oneview', then 'oneview-2', 'oneview-3', ... for
+    additional appliances. Users who want something more descriptive (e.g.
+    a real appliance hostname) can still rename it afterwards via the
+    wizard's Edit flow, which does prompt for the section name.
+    """
+    if "oneview" not in existing:
+        return "oneview"
+    i = 2
+    while f"oneview-{i}" in existing:
+        i += 1
+    return f"oneview-{i}"
+
+
 async def _add_oneview(
     cfg: configparser.ConfigParser,
     existing: set[str],
@@ -419,7 +449,7 @@ async def _add_oneview(
 ) -> bool:
     """Prompt for a OneView appliance, test it, and save. Returns True if added."""
     console.print("\n[bold cyan]Add a OneView appliance[/bold cyan]")
-    name = _prompt_name(existing, "OneView section name", default="oneview")
+    name = _next_oneview_name(existing)
     host = Prompt.ask("  OneView appliance IP / hostname").strip()
     if not host:
         console.print("  [red]Host cannot be empty -- skipping.[/red]")

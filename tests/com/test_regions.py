@@ -497,7 +497,7 @@ class TestRegionsCliParsing:
         from proliant.com import cli
         from proliant.com.regions import Region
 
-        args = argparse.Namespace(command="regions", what="list", all=False, raw=False)
+        args = argparse.Namespace(command="regions", what="list", all=False)
         fake_session = MagicMock()
         fake_regions = [Region(code="us-west", location="Oregon", provisioned=True,
                                 instance_id="i-1", active=True, raw={})]
@@ -509,7 +509,7 @@ class TestRegionsCliParsing:
             await cli._async_main(args)
 
         mock_fetch.assert_awaited_once_with(fake_session, show_unprovisioned=False)
-        mock_print.assert_called_once_with(fake_regions, raw=False)
+        mock_print.assert_called_once_with(fake_regions)
 
     def test_region_names_completer_returns_empty_on_error(self):
         from proliant.com.cli import _region_names_completer

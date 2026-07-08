@@ -171,6 +171,43 @@ proliant spp inspect <version>                   # Inspect SPP contents
 proliant spp diff <version1> <version2>          # Compare two SPP releases
 ```
 
+## Automation / scripting
+
+Every `ilo`/`com`/`oneview` sub-CLI accepts a `--json` flag for piping to `jq`
+(Linux/macOS) or `ConvertFrom-Json` (PowerShell) instead of printing a Rich
+table. It's a flag on the sub-CLI itself, so it goes right after
+`ilo`/`com`/`oneview`, before the resource/action:
+
+```bash
+proliant ilo --json firmware list | jq -r '.[] | select(.BIOS < "2.90") | .Server'
+proliant com --json servers list | jq -r '.[] | select(.Health != "OK") | .Name'
+```
+
+```powershell
+proliant ilo --json firmware list | ConvertFrom-Json | Where-Object BIOS -lt "2.90" | Select-Object Server
+proliant com --json servers list | ConvertFrom-Json | Where-Object Health -ne "OK"
+```
+
+Plain-text output can also be filtered directly without `--json`:
+
+```bash
+proliant com servers list | grep hsthyperv
+```
+```powershell
+proliant com servers list | Select-String "hsthyperv"
+```
+
+`proliant ilo` additionally supports `--raw` on most `list`/`describe` commands,
+which dumps the unprocessed Redfish API response (bypassing proliant's own
+field parsing) — useful for inspecting fields the table/`--json` don't surface.
+
+Chain commands together with `--hosts-from -` to read target hosts from stdin:
+
+```bash
+proliant ilo firmware list --json | jq -r '.[] | select(.BIOS < "2.90") | .Server' \
+  | xargs -n1 proliant ilo firmware upgrade
+```
+
 ## Self-update
 
 ```bash

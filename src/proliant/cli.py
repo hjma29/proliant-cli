@@ -643,8 +643,7 @@ _proliant__com() {
         bundles)    _arguments '1: :(list)' \
                       '--gen[server generation]:gen:(10 11 12)' \
                       '--type[bundle type]:type:(base patch hotfix)' \
-                      '--all[show all results]' \
-                      '--raw[raw JSON]' ;;
+                      '--all[show all results]' ;;
         reports)    _arguments '1: :(memory gpu)' '--host[target host]:host:' ;;
       esac ;;
   esac

@@ -17,7 +17,6 @@ Usage::
     proliant com devices list --fields name,serial,model,os
     proliant com devices list --fields name,serial,ilo-hostname,ilo-ip
     proliant com devices list --sort serial     Sort by serial number
-    proliant com devices list --raw             Unprocessed API response
 
     proliant com servers list                   Servers from COM's own inventory (matches GUI's Servers page)
     proliant com servers list --fields name,serial,os,cpu
@@ -28,10 +27,8 @@ Usage::
     proliant com bundles list --gen 12          Gen12 bundles only
     proliant com bundles list --gen 11          Gen11 bundles only
     proliant com bundles list --type patch      PATCH bundles only (base/patch/hotfix)
-    proliant com bundles list --raw             Unprocessed API response
 
     proliant com workspaces list                All workspaces (active one marked with *)
-    proliant com workspaces list --raw          Unprocessed API response
     proliant com workspaces use <name-or-id>    Switch active workspace
     proliant com regions list                   Provisioned COM regions for the active workspace (* = active)
     proliant com regions list --all             Also show unprovisioned region slots
@@ -54,6 +51,10 @@ merges that same compute inventory with GreenLake's claimed storage/network
 devices, so its total may still differ slightly from 'servers list' alone
 (it adds non-compute hardware). COM does not expose "iLO security" status
 over its public API today, so that GUI column has no CLI equivalent yet.
+
+Automation: any 'list' command also accepts a global --json flag (placed
+right after 'com', before the resource) for piping to jq / ConvertFrom-Json,
+e.g. 'proliant com --json servers list' or 'proliant com --json bundles list'.
 
 Note: Run 'proliant com login' before any resource command (like kubectl/gcloud/aws/az).
 """
@@ -453,7 +454,7 @@ async def _cmd_show_devices(args: argparse.Namespace) -> None:
                        if normalized_query in (s.model or "").upper()]
 
     effective_defaults = _SERVER_DEFAULT_FIELDS if is_servers_cmd else _DEVICE_DEFAULT_FIELDS
-    print_devices_table(device_list, raw=getattr(args, "raw", False),
+    print_devices_table(device_list,
                         fields=fields, sort_by=sort_by,
                         default_fields=effective_defaults,
                         title="GreenLake Servers" if is_servers_cmd else "GreenLake Devices")
@@ -472,7 +473,7 @@ async def _cmd_show_workspaces(args: argparse.Namespace) -> None:
             get_console().print(f"[red]Error:[/red] {e}")
             sys.exit(1)
 
-    print_workspaces_table(workspace_list, raw=getattr(args, "raw", False))
+    print_workspaces_table(workspace_list)
 
 
 async def _cmd_show_regions(args: argparse.Namespace) -> None:
@@ -489,7 +490,7 @@ async def _cmd_show_regions(args: argparse.Namespace) -> None:
             get_console().print(f"[red]Error:[/red] {e}")
             sys.exit(1)
 
-    print_regions_table(region_list, raw=getattr(args, "raw", False))
+    print_regions_table(region_list)
 
 
 async def _cmd_show_bundles(args: argparse.Namespace) -> None:
@@ -513,7 +514,7 @@ async def _cmd_show_bundles(args: argparse.Namespace) -> None:
             get_console().print(f"[red]Error:[/red] {e}")
             sys.exit(1)
 
-    print_bundles_table(bundle_list, raw=getattr(args, "raw", False))
+    print_bundles_table(bundle_list)
 
 
 async def _cmd_use_workspace(args: argparse.Namespace) -> None:
@@ -736,7 +737,6 @@ examples:
         model_arg = p.add_argument("--model", metavar="MODEL", dest="filter_model",
                    help="Filter by model (e.g. dl380-gen11, dl325-gen12)")
         model_arg.completer = _model_names_completer  # type: ignore[attr-defined]
-        p.add_argument("--raw", action="store_true", help="Dump unprocessed API response (bypasses proliant field parsing)")
         fields_arg = p.add_argument(
             "--fields", metavar="FIELDS",
             help=(
@@ -826,7 +826,6 @@ examples:
                                                  parser_class=_SuggestingArgumentParser)
     workspaces_sub.required = True
     ws_list_p = workspaces_sub.add_parser("list", help="List all workspaces (* = active)")
-    ws_list_p.add_argument("--raw", action="store_true", help="Dump unprocessed API response (bypasses proliant field parsing)")
     ws_use_p = workspaces_sub.add_parser("use", help="Switch active workspace")
     ws_use_p.add_argument(
         "workspace", metavar="NAME_OR_ID",
@@ -861,7 +860,6 @@ examples:
     rg_list_p = regions_sub.add_parser("list", help="List provisioned COM regions (* = active)")
     rg_list_p.add_argument("--all", action="store_true",
                            help="Also show unprovisioned/available region slots")
-    rg_list_p.add_argument("--raw", action="store_true", help="Dump unprocessed API response (bypasses proliant field parsing)")
     rg_use_p = regions_sub.add_parser("use", help="Switch active COM region")
     rg_use_p.add_argument(
         "region_name", metavar="REGION",
@@ -914,7 +912,6 @@ examples:
                             choices=["base", "patch", "hotfix"],
                             metavar="TYPE",
                             help="Filter by bundle type: base, patch, or hotfix")
-    bun_list_p.add_argument("--raw", action="store_true", help="Dump unprocessed API response (bypasses proliant field parsing)")
 
     # ── reports ───────────────────────────────────────────────────────────
     reports_p = subparsers.add_parser("reports", help="Fleet inventory reports")
@@ -922,10 +919,8 @@ examples:
                                            parser_class=_SuggestingArgumentParser)
     reports_sub.required = True
 
-    rep_mem_p = reports_sub.add_parser("memory", help="Memory part-number breakdown across fleet")
-    rep_mem_p.add_argument("--raw", action="store_true", help="Dump unprocessed API response (bypasses proliant field parsing)")
-    rep_gpu_p = reports_sub.add_parser("gpu", help="Discrete GPU inventory across fleet")
-    rep_gpu_p.add_argument("--raw", action="store_true", help="Dump unprocessed API response (bypasses proliant field parsing)")
+    reports_sub.add_parser("memory", help="Memory part-number breakdown across fleet")
+    reports_sub.add_parser("gpu", help="Discrete GPU inventory across fleet")
 
     return parser
 

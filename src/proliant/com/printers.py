@@ -181,7 +181,22 @@ def parse_fields(fields_str: Optional[str], available: dict, defaults: tuple) ->
 # Table printers
 # ---------------------------------------------------------------------------
 
-def print_devices_table(server_list: list, raw: bool = False,
+def _server_to_json(s) -> dict:
+    """Flatten a Server row into a plain dict of clean values for --json.
+
+    Uses the same field registry (and thus the same values) as the table,
+    minus Rich color markup -- e.g. health becomes plain "OK" instead of
+    "[green]Ok[/green]". Always includes every available field regardless
+    of what --fields narrowed the table to, so JSON consumers (jq /
+    ConvertFrom-Json) get the full picture to filter themselves.
+    """
+    return {
+        _SERVER_FIELDS[key][0]: _strip_markup(str(_SERVER_FIELDS[key][3](s)))
+        for key in _SERVER_FIELDS
+    }
+
+
+def print_devices_table(server_list: list,
                         fields: Optional[str] = None,
                         sort_by: Optional[str] = None,
                         default_fields: Optional[tuple] = None,
@@ -193,8 +208,8 @@ def print_devices_table(server_list: list, raw: bool = False,
     merged) — the two commands differ only in what feeds server_list and
     which default_fields tuple they pass in.
     """
-    if raw or get_output_mode() == OutputMode.JSON:
-        print_json([s.raw for s in server_list])
+    if get_output_mode() == OutputMode.JSON:
+        print_json([_server_to_json(s) for s in server_list])
         return
 
     if not server_list:
@@ -225,9 +240,16 @@ def print_devices_table(server_list: list, raw: bool = False,
     get_console().print(table)
 
 
-def print_workspaces_table(workspace_list: list, raw: bool = False) -> None:
-    if raw or get_output_mode() == OutputMode.JSON:
-        print_json([w.raw for w in workspace_list])
+def print_workspaces_table(workspace_list: list) -> None:
+    if get_output_mode() == OutputMode.JSON:
+        print_json([
+            {
+                "Active": w.active, "Name": w.name, "ID": w.id,
+                "Region": w.region, "Status": w.status,
+                "Address": w.address, "Description": w.description,
+            }
+            for w in workspace_list
+        ])
         return
 
     if not workspace_list:
@@ -274,9 +296,17 @@ def print_workspaces_table(workspace_list: list, raw: bool = False) -> None:
     )
 
 
-def print_regions_table(region_list: list, raw: bool = False) -> None:
-    if raw or get_output_mode() == OutputMode.JSON:
-        print_json([r.raw for r in region_list])
+def print_regions_table(region_list: list) -> None:
+    if get_output_mode() == OutputMode.JSON:
+        print_json([
+            {
+                "Active": r.active, "Region": r.code,
+                "Name": _REGION_MAP.get(r.code, r.code),
+                "Location": r.location, "Provisioned": r.provisioned,
+                "InstanceId": r.instance_id,
+            }
+            for r in region_list
+        ])
         return
 
     if not region_list:
@@ -315,9 +345,17 @@ def print_regions_table(region_list: list, raw: bool = False) -> None:
     get_console().print("[dim]  * = active region[/dim]")
 
 
-def print_bundles_table(bundle_list: list, raw: bool = False) -> None:
-    if raw or get_output_mode() == OutputMode.JSON:
-        print_json([b.raw for b in bundle_list])
+def print_bundles_table(bundle_list: list) -> None:
+    if get_output_mode() == OutputMode.JSON:
+        print_json([
+            {
+                "Generation": b.generation, "Type": b.bundle_type,
+                "Version": b.release_version, "ReleaseDate": b.release_date,
+                "Active": b.is_active, "DisplayName": b.display_name,
+                "Name": b.name, "Id": b.id, "ResourceUri": b.resource_uri,
+            }
+            for b in bundle_list
+        ])
         return
 
     if not bundle_list:

@@ -11,6 +11,7 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ### Enhancements
 - `proliant setup`: adding a OneView appliance no longer prompts for an "OneView section name" — it's an inventory.ini implementation detail the user never needs to type. The first appliance is named `oneview`, additional ones auto-number as `oneview-2`, `oneview-3`, etc. Still renameable later via the wizard's "Edit an entry" flow if you want something more descriptive.
+- `proliant com --json` (`servers list`, `devices list`, `workspaces list`, `regions list`, `bundles list`): now emits clean, self-describing field names (e.g. `"Health"`, `"Name"`, `"Serial"`, `"CPU"`) matching what the table shows, instead of dumping the unprocessed COM API response verbatim. Removed the redundant `--raw` flag from `com` (it produced byte-identical output to `--json` today) — `--json` is now the one consistent automation flag across `ilo`/`com`/`oneview`.
 
 ### Bug Fixes
 - Fixed a Windows-only crash (`OSError: [Errno 22] Invalid argument`) that could happen printing a sufficiently large table on a "legacy" console with no virtual-terminal support — Rich's fallback write path has no output-size guard. Startup now force-enables VT/ANSI processing on the console so Rich always takes its safe, chunked write path.

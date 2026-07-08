@@ -69,7 +69,7 @@ class TestServersListTypeScoping:
 
         args = argparse.Namespace(
             command="servers", fields=None, sort_by=None, filter_text=None,
-            filter_model=None, raw=False,
+            filter_model=None,
         )
         fake_session = MagicMock()
         with patch("proliant.com.cli._ensure_session", new_callable=AsyncMock,
@@ -89,7 +89,7 @@ class TestServersListTypeScoping:
 
         args = argparse.Namespace(
             command="devices", type="STORAGE", fields=None, sort_by=None,
-            filter_text=None, filter_model=None, raw=False,
+            filter_text=None, filter_model=None,
         )
         fake_session = MagicMock()
         with patch("proliant.com.cli._ensure_session", new_callable=AsyncMock,

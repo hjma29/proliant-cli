@@ -87,8 +87,8 @@ class TestComJsonDevices:
     def test_list_devices_json_fields(self, capsys):
         result = _run_com_main(["--json", "devices", "list"], capsys)
         device = result[0]
-        assert device["serial_number"] == "TWA25325G1206"
-        assert device["name"] == "dl325-gen12"
+        assert device["Serial"] == "TWA25325G1206"
+        assert device["Name"] == "dl325-gen12"
 
     def test_list_devices_json_no_rich_markup(self, capsys):
         result = _run_com_main(["--json", "devices", "list"], capsys)
@@ -120,7 +120,7 @@ class TestComJsonWorkspaces:
         captured = capsys.readouterr()
         result = json.loads(captured.out)
         assert isinstance(result, list)
-        assert result[0]["company_name"] == "lab-workspace"
+        assert result[0]["Name"] == "lab-workspace"
 
 
 class TestComParserJson:

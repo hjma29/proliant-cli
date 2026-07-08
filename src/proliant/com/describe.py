@@ -193,7 +193,10 @@ async def run_describe(session: COMSession, target: str) -> None:
     layout.add_row(Group(*left), Group(*right))
     get_console().print(layout)
 
-    # ── Full width: Memory + Firmware ──────────────────────────────────────
+    # ── Full width: Server Profile (OneView-managed servers only) + Memory + Firmware ──
+    if connection_type == "ONEVIEW":
+        await _render_server_profile(appliance_map, appliance, oneview)
+
     await _render_memory(hw, bmc)
 
     if fw_items:
@@ -207,6 +210,74 @@ async def run_describe(session: COMSession, target: str) -> None:
             fw_t.add_row(fw.get("name", ""), fw.get("version", ""),
                          fw.get("deviceContext", ""))
         get_console().print(fw_t)
+
+
+async def _render_server_profile(appliance_map: dict, appliance: dict, oneview: dict) -> None:
+    """Best-effort: fetch the server's OneView server profile (status, virtual
+    identity, network/SAN connections) directly from the bridging OneView
+    appliance and render it, matching the GUI's "Server profile" panel.
+
+    COM itself doesn't expose profile connections, so this connects straight
+    to the OneView appliance using inventory.ini credentials (see
+    ``proliant oneview appliances``). Silently skipped if no OneView
+    appliance is configured locally, it's unreachable, or the profile can't
+    be matched by name.
+    """
+    from rich import box as rich_box
+    from rich.table import Table
+
+    profile_name = oneview.get("name")
+    if not profile_name:
+        return
+
+    try:
+        from proliant.oneview.client import OneViewClient
+        from proliant.oneview.config import list_oneview_appliances
+        from proliant.oneview.profiles import describe_profile
+
+        appliances = list_oneview_appliances()
+        if not appliances:
+            return
+
+        chosen = appliances[0]
+        if len(appliances) > 1:
+            hostname = appliance_map.get(appliance.get("applianceId", ""), "")
+            for a in appliances:
+                if hostname and (hostname.lower() in a["host"].lower()
+                                  or a["host"].lower() in hostname.lower()):
+                    chosen = a
+                    break
+
+        async with OneViewClient(chosen["host"], chosen["username"], chosen["password"]) as ov:
+            profile = await describe_profile(ov, profile_name)
+    except Exception:  # intentional: OneView unreachable/no creds/profile mismatch — skip
+        return
+
+    get_console().print("[bold]Server Profile[/bold]")
+    sp_t = Table(box=rich_box.SIMPLE, show_header=False, padding=(0, 2))
+    sp_t.add_column(style="dim", no_wrap=True)
+    sp_t.add_column()
+    sp_t.add_row("Status",                 _h(profile.get("status", "—")))
+    sp_t.add_row("Name",                   profile.get("name") or "—")
+    sp_t.add_row("State",                  profile.get("state") or "—")
+    sp_t.add_row("Serial Number (virtual)", profile.get("serial_number") or "—")
+    sp_t.add_row("UUID (virtual)",         profile.get("uuid") or "—")
+    get_console().print(sp_t)
+
+    connections = profile.get("connections") or []
+    if connections:
+        get_console().print("[bold]Connections[/bold]")
+        conn_t = Table(box=rich_box.SIMPLE, show_header=True,
+                        header_style="bold cyan", padding=(0, 2))
+        conn_t.add_column("ID", no_wrap=True)
+        conn_t.add_column("Name")
+        conn_t.add_column("Type")
+        conn_t.add_column("MAC/WWPN")
+        for c in connections:
+            mac_wwpn = c.get("mac") or c.get("wwpn") or c.get("wwnn") or "—"
+            conn_t.add_row(str(c.get("id", "—")), c.get("name") or "—",
+                           c.get("function_type") or "—", mac_wwpn)
+        get_console().print(conn_t)
 
 
 async def _render_memory(hw: dict, bmc: dict) -> None:

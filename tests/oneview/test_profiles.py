@@ -116,6 +116,8 @@ async def test_describe_profile_resolves_gui_detail_fields():
             "network_uri": NETWORK_URI,
             "port_id": "Mezz 3:1-a",
             "mac": "22:00:A3:E0:00:08",
+            "wwnn": "",
+            "wwpn": "",
             "requested_mbps": "2500",
             "allocated_mbps": 2500,
             "maximum_mbps": "",

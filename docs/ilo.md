@@ -26,7 +26,7 @@ proliant ilo reports memory                        # Fleet memory report
 
 ## Screenshots
 
-![proliant ilo --help](assets/help-ilo.svg)
+![proliant ilo servers list / firmware list](assets/ilo-screenshot.svg)
 
 <!--
   ADD MORE REAL-USAGE SCREENSHOTS HERE (zero rebuild — just push):

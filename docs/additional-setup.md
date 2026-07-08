@@ -77,7 +77,7 @@ switching it.
 
 ## Screenshots
 
-![proliant spp --help](assets/help-spp.svg)
+![proliant spp list](assets/spp-screenshot.svg)
 
 <!--
   ADD MORE REAL-USAGE SCREENSHOTS HERE (zero rebuild — just push):

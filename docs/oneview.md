@@ -69,7 +69,7 @@ proliant oneview upgrade cleanup --yes          # delete unused baselines (free 
 
 ## Screenshots
 
-![proliant oneview --help](assets/help-oneview.svg)
+![proliant oneview servers list](assets/oneview-screenshot.svg)
 
 <!--
   ADD MORE REAL-USAGE SCREENSHOTS HERE (zero rebuild — just push):

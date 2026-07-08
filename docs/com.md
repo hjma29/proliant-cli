@@ -47,7 +47,7 @@ proliant com workspaces use MyWorkspace           # Switch active workspace
 
 ## Screenshots
 
-![proliant com --help](assets/help-com.svg)
+![proliant com devices list](assets/com-screenshot.svg)
 
 <!--
   ADD MORE REAL-USAGE SCREENSHOTS HERE (zero rebuild — just push):

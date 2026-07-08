@@ -4,6 +4,14 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ---
 
+## v1.0.28 — 2026-07-08
+
+### Bug Fixes
+- `proliant com` (`devices list`, `servers list`, `workspaces list`, `regions list`, `bundles list`, `workspace use`, `region use`, `devices add`, `servers describe`, `reports gpu`, `reports memory`): a 403 from Compute Ops Management (account has no role assigned in the workspace) used to print httpx's raw `Client error '403 Forbidden' for url ...` message with a dangling `developer.mozilla.org` link. Now shows the same plain-language explanation GreenLake's own web UI shows — "It looks like you do not have a role assigned for Compute Ops Management ... Contact your HPE GreenLake administrator" — with no raw URL. `servers describe`, `reports gpu`, and `reports memory` previously had no error handling at all and could crash with a raw Python traceback on any API error; they now fail cleanly like every other `com` command.
+- `proliant setup`: the "Setup complete!" hint suggested running `proliant ilo list firmwares`, which isn't valid syntax (`proliant ilo` commands are resource-then-action, e.g. `proliant ilo firmware list`) and would error with "invalid choice: 'list'". Now just points back to `proliant setup` for adding/editing/re-testing entries.
+
+---
+
 ## v1.0.27 — 2026-07-08
 
 ### Bug Fixes

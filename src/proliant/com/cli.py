@@ -68,12 +68,13 @@ import sys
 from typing import Optional
 
 import argcomplete
+import httpx
 
 from proliant.common.display import get_console, make_table, print_json, print_memory_report, OutputMode, get_output_mode, set_output_mode
 from proliant.common.completers import suppress_file_completion, cached_names
 from proliant.common.runner import run_sync
 from proliant.com.auth import COMSession, CredentialsError, AuthError
-from proliant.com.client import COMClient
+from proliant.com.client import COMClient, friendly_http_error
 from proliant.com import devices as _devices
 from proliant.com import servers as _servers_mod
 from proliant.com import workspaces as _workspaces
@@ -285,7 +286,6 @@ async def _cmd_login_agent(args: argparse.Namespace) -> None:
     import getpass
     from proliant.com.login import CREDS_FILE
     from proliant.com.auth import COMSession, TOKEN_URL, AuthError
-    import httpx
 
     client_id     = getattr(args, "client_id", None) or ""
     client_secret = getattr(args, "client_secret", None) or ""
@@ -377,6 +377,15 @@ async def _cmd_logout(_args: argparse.Namespace) -> None:
 # Auth helper — fail fast like gcloud/aws/az
 # ---------------------------------------------------------------------------
 
+def _friendly_com_error(e: Exception) -> str:
+    """Turn a raw httpx.HTTPStatusError into a clean, actionable message.
+
+    Thin wrapper around ``proliant.com.client.friendly_http_error`` kept
+    local so call sites in this module don't need renaming.
+    """
+    return friendly_http_error(e)
+
+
 async def _ensure_session(args: argparse.Namespace) -> COMSession:
     """Return a valid COMSession or exit with a clear login prompt.
 
@@ -441,7 +450,7 @@ async def _cmd_show_devices(args: argparse.Namespace) -> None:
             get_console().print(f"[red]Auth error:[/red] {e}")
             sys.exit(1)
         except Exception as e:
-            get_console().print(f"[red]Error:[/red] {e}")
+            get_console().print(f"[red]Error:[/red] {_friendly_com_error(e)}")
             sys.exit(1)
 
     # --filter: substring match across serial, name, model
@@ -478,7 +487,7 @@ async def _cmd_show_workspaces(args: argparse.Namespace) -> None:
             get_console().print(f"[red]Auth error:[/red] {e}")
             sys.exit(1)
         except Exception as e:
-            get_console().print(f"[red]Error:[/red] {e}")
+            get_console().print(f"[red]Error:[/red] {_friendly_com_error(e)}")
             sys.exit(1)
 
     print_workspaces_table(workspace_list)
@@ -495,7 +504,7 @@ async def _cmd_show_regions(args: argparse.Namespace) -> None:
             get_console().print(f"[red]Error:[/red] {e}")
             sys.exit(1)
         except Exception as e:
-            get_console().print(f"[red]Error:[/red] {e}")
+            get_console().print(f"[red]Error:[/red] {_friendly_com_error(e)}")
             sys.exit(1)
 
     print_regions_table(region_list)
@@ -519,7 +528,7 @@ async def _cmd_show_bundles(args: argparse.Namespace) -> None:
             get_console().print(f"[red]Auth error:[/red] {e}")
             sys.exit(1)
         except Exception as e:
-            get_console().print(f"[red]Error:[/red] {e}")
+            get_console().print(f"[red]Error:[/red] {_friendly_com_error(e)}")
             sys.exit(1)
 
     print_bundles_table(bundle_list)
@@ -536,7 +545,7 @@ async def _cmd_use_workspace(args: argparse.Namespace) -> None:
         get_console().print(f"[red]Error:[/red] {e}")
         sys.exit(1)
     except Exception as e:
-        get_console().print(f"[red]Error:[/red] {e}")
+        get_console().print(f"[red]Error:[/red] {_friendly_com_error(e)}")
         sys.exit(1)
 
 
@@ -551,7 +560,7 @@ async def _cmd_use_region(args: argparse.Namespace) -> None:
         get_console().print(f"[red]Error:[/red] {e}")
         sys.exit(1)
     except Exception as e:
-        get_console().print(f"[red]Error:[/red] {e}")
+        get_console().print(f"[red]Error:[/red] {_friendly_com_error(e)}")
         sys.exit(1)
 
 
@@ -569,7 +578,7 @@ async def _cmd_add_device(args: argparse.Namespace) -> None:
         get_console().print(f"[red]Error:[/red] {e}")
         sys.exit(1)
     except Exception as e:
-        get_console().print(f"[red]Error:[/red] {e}")
+        get_console().print(f"[red]Error:[/red] {_friendly_com_error(e)}")
         sys.exit(1)
 
     exit_code = 0
@@ -590,14 +599,28 @@ async def _cmd_add_device(args: argparse.Namespace) -> None:
 
 async def _cmd_report_gpu(args: argparse.Namespace) -> None:
     session = await _ensure_session(args)
-    await _run_report_gpu(session)
+    try:
+        await _run_report_gpu(session)
+    except AuthError as e:
+        get_console().print(f"[red]Auth error:[/red] {e}")
+        sys.exit(1)
+    except Exception as e:
+        get_console().print(f"[red]Error:[/red] {_friendly_com_error(e)}")
+        sys.exit(1)
 
 
 # ── proliant com reports memory ───────────────────────────────────────────────────
 
 async def _cmd_report_memory(args: argparse.Namespace) -> None:
     session = await _ensure_session(args)
-    await _run_report_memory(session)
+    try:
+        await _run_report_memory(session)
+    except AuthError as e:
+        get_console().print(f"[red]Auth error:[/red] {e}")
+        sys.exit(1)
+    except Exception as e:
+        get_console().print(f"[red]Error:[/red] {_friendly_com_error(e)}")
+        sys.exit(1)
 
 
 
@@ -605,7 +628,14 @@ async def _cmd_report_memory(args: argparse.Namespace) -> None:
 
 async def _cmd_describe_server(args: argparse.Namespace) -> None:
     session = await _ensure_session(args)
-    await _run_describe(session, args.server)
+    try:
+        await _run_describe(session, args.server)
+    except AuthError as e:
+        get_console().print(f"[red]Auth error:[/red] {e}")
+        sys.exit(1)
+    except Exception as e:
+        get_console().print(f"[red]Error:[/red] {_friendly_com_error(e)}")
+        sys.exit(1)
 
 
 class _SuggestingArgumentParser(argparse.ArgumentParser):

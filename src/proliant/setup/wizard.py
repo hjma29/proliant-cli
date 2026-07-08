@@ -753,6 +753,6 @@ async def run_setup_wizard(dest: Path | None = None) -> None:
     console.print("\n[bold green]Setup complete![/bold green]")
     if final_entries:
         console.print(f"  Config: [bold]{dest}[/bold]")
-        console.print("  Try: [bold]proliant ilo list firmwares[/bold]\n")
+        console.print("  Try: [bold]proliant setup[/bold] any time to add, edit, or re-test entries.\n")
     else:
         console.print("  No servers configured. Run [bold]proliant setup[/bold] again any time.\n")

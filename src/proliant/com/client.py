@@ -49,6 +49,31 @@ class QueryResult:
     status_code: int | None = None
 
 
+def friendly_http_error(e: Exception) -> str:
+    """Turn a raw httpx.HTTPStatusError into a clean, actionable message.
+
+    httpx's default str() is a 'Client error ... for url ...' line plus a
+    link to the MDN HTTP status docs -- neither is useful to an end user
+    and the URL just looks broken/unfinished. 403 in particular almost
+    always means the authenticated account has no role assigned for
+    Compute Ops Management in the active workspace -- GreenLake's own web
+    UI shows exactly this condition as "It looks like you do not have a
+    role assigned for Compute Ops Management" with no raw URL, so match
+    that wording here instead of dumping httpx's default text.
+    """
+    if isinstance(e, httpx.HTTPStatusError):
+        status = e.response.status_code
+        if status == 403:
+            return (
+                "It looks like you do not have a role assigned for Compute Ops "
+                "Management in this workspace (error code: 403). Contact your "
+                "HPE GreenLake administrator to confirm that a role has been "
+                "assigned."
+            )
+        return f"Compute Ops Management API error (HTTP {status})."
+    return str(e)
+
+
 # ---------------------------------------------------------------------------
 # COMClient — the core async HTTP engine
 # ---------------------------------------------------------------------------

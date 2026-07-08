@@ -256,6 +256,14 @@ def test_select_entry_out_of_range_cancels():
     assert name is None
 
 
+def test_select_entry_prints_compact_numbered_list(capsys):
+    with patch("rich.prompt.Prompt.ask", return_value="2"):
+        wiz._select_entry(["srv1", "srv2"], "delete")
+    out = capsys.readouterr().out
+    assert "1. srv1" in out
+    assert "2. srv2" in out
+
+
 # ---------------------------------------------------------------------------
 # _edit_ilo_server / _edit_oneview
 # ---------------------------------------------------------------------------

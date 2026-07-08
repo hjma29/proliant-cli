@@ -162,7 +162,13 @@ def _print_entries(
 
 
 def _select_entry(entries: list[str], verb: str) -> str | None:
-    """Prompt for an entry by number. Returns the section name, or None if cancelled."""
+    """Prompt for an entry by number. Returns the section name, or None if cancelled.
+
+    Reprints a compact "#. name" list right above the prompt so users don't
+    need to scroll back up to the full table to look up a number.
+    """
+    for i, name in enumerate(entries, start=1):
+        console.print(f"    {i}. {name}")
     raw = Prompt.ask(f"  Which entry do you want to {verb}? (number, blank to cancel)", default="").strip()
     if not raw:
         return None

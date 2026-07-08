@@ -7,7 +7,7 @@ Usage::
 
     proliant com login                         Okta Verify push login (prompts for email)
     proliant com login --email you@hpe.com     Pre-fill email, skip prompt
-    proliant com login --password              Username + password login (external/gmail accounts)
+                                                (auto-detects Okta Verify vs. password by email domain)
 
     proliant com whoami                        Show current login (email + login method)
     proliant com logout                        Remove cached credentials and token
@@ -64,6 +64,7 @@ Note: Run 'proliant com login' before any resource command (like kubectl/gcloud/
 import argparse
 import asyncio
 import json
+import os
 import sys
 from typing import Optional
 
@@ -216,7 +217,7 @@ def _model_names_completer(prefix: str, **kwargs) -> list[str]:
 # ---------------------------------------------------------------------------
 
 async def _cmd_login(args: argparse.Namespace) -> None:
-    from proliant.com.login import okta_verify_login, password_login
+    from proliant.com.login import okta_verify_login, password_login, OktaVerifyNotAvailable
     from rich.prompt import Prompt
 
     # ── Agent / service-account login (client credentials) ────────────────
@@ -242,12 +243,7 @@ async def _cmd_login(args: argparse.Namespace) -> None:
     # once it's known, instead of blindly defaulting to 'us-west'.
     region = getattr(args, "region", None)
 
-    # Non-HPE accounts (gmail etc.) use username + password.
-    # HPE accounts use Okta Verify push.
-    # --password flag overrides auto-detection (forces password flow).
-    use_password = getattr(args, "password", False) or not email.lower().endswith("@hpe.com")
-
-    if use_password:
+    async def _run_password_login() -> None:
         for _try in range(3):
             try:
                 passwd = await _prompt_password_async("Password: ")
@@ -282,10 +278,23 @@ async def _cmd_login(args: argparse.Namespace) -> None:
                 else:
                     get_console().print(f"[red]Login failed:[/red] {e}")
                     sys.exit(1)
+
+    # Non-HPE accounts (gmail etc.) use username + password directly.
+    # HPE accounts try Okta Verify push first, since that's how most HPE
+    # employees are enrolled -- but some HPE accounts only have a password
+    # authenticator (no Okta Verify enrolled), so fall back automatically
+    # instead of retrying the same broken push flow 3 times.
+    if not email.lower().endswith("@hpe.com"):
+        await _run_password_login()
         return
 
     try:
         await okta_verify_login(email=email, region=region)
+    except OktaVerifyNotAvailable:
+        get_console().print(
+            "[yellow]Okta Verify isn't set up for this account — falling back to password login.[/yellow]"
+        )
+        await _run_password_login()
     except Exception as e:
         get_console().print(f"[red]Login failed:[/red] {e}")
         sys.exit(1)
@@ -756,21 +765,22 @@ examples:
     # ── login ─────────────────────────────────────────────────────────────
     login_p = subparsers.add_parser(
         "login",
-        help="Login (Okta Verify push or password)",
+        help="Login (Okta Verify push or password, auto-detected)",
     )
     login_email_arg = login_p.add_argument(
         "--email", "-e", metavar="EMAIL",
         help="HPE GreenLake email address",
     )
     login_email_arg.completer = suppress_file_completion()
-    login_p.add_argument(
-        "--password", "-p", action="store_true",
-        help="Login with username + password (for external/gmail accounts)",
-    )
     # --api-client / --client-id / --client-secret are internal-only
     # (used for maintainer testing) and intentionally hidden from --help.
-    # Regular users should authenticate interactively via Okta or
-    # email/password login above.
+    # Regular users authenticate interactively -- login flow (Okta Verify
+    # push vs. password) is auto-detected from the email domain, with
+    # automatic fallback to password if an @hpe.com account has no Okta
+    # Verify authenticator enrolled. There's no --password override flag:
+    # it used to exist but was a confusing boolean switch (it never took
+    # a value -- the password itself is always entered at a masked
+    # prompt) and is now redundant with the auto-detect/fallback above.
     login_p.add_argument(
         "--api-client", action="store_true", dest="api_client",
         help=argparse.SUPPRESS,
@@ -1002,7 +1012,10 @@ examples:
 # Entry point
 # ---------------------------------------------------------------------------
 
+
 def main(argv: Optional[list[str]] = None) -> None:
+    argv = list(argv if argv is not None else sys.argv[1:])
+
     parser = _build_parser()
     argcomplete.autocomplete(parser)
     args = parser.parse_args(argv)
@@ -1022,13 +1035,13 @@ def main(argv: Optional[list[str]] = None) -> None:
             console.print(f"\n[yellow]Session expired or not logged in.[/yellow] Please log in to continue.\n")
             try:
                 from rich.prompt import Prompt
-                from proliant.com.login import okta_verify_login, password_login
+                from proliant.com.login import okta_verify_login, password_login, OktaVerifyNotAvailable
                 email = Prompt.ask("[bold]HPE GreenLake email[/bold]").strip()
                 if not email:
                     console.print("[red]Email is required.[/red]")
                     sys.exit(1)
-                # gmail / external accounts use password auth; HPE SSO uses Okta Verify
-                if not email.lower().endswith("@hpe.com"):
+
+                def _run_password_login() -> None:
                     for _try in range(3):
                         try:
                             passwd = _prompt_password("Password: ")
@@ -1037,7 +1050,7 @@ def main(argv: Optional[list[str]] = None) -> None:
                             sys.exit(1)
                         try:
                             run_sync(password_login(email=email, password=passwd, region=None))
-                            break  # success
+                            return  # success
                         except Exception as _pe:
                             msg = str(_pe)
                             if "Authentication failed" in msg or "401" in msg or "unauthorized" in msg.lower():
@@ -1048,8 +1061,20 @@ def main(argv: Optional[list[str]] = None) -> None:
                                     sys.exit(1)
                             else:
                                 raise
+
+                # gmail / external accounts use password auth directly; HPE
+                # accounts try Okta Verify first, falling back to password
+                # automatically if the account has no Okta Verify enrolled.
+                if not email.lower().endswith("@hpe.com"):
+                    _run_password_login()
                 else:
-                    run_sync(okta_verify_login(email=email, region=None))
+                    try:
+                        run_sync(okta_verify_login(email=email, region=None))
+                    except OktaVerifyNotAvailable:
+                        console.print(
+                            "[yellow]Okta Verify isn't set up for this account — falling back to password login.[/yellow]"
+                        )
+                        _run_password_login()
                 console.print("\n[green]✓ Logged in.[/green] Continuing...\n")
             except (KeyboardInterrupt, EOFError):
                 console.print("\n[yellow]Login cancelled.[/yellow]")

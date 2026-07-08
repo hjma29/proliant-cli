@@ -306,7 +306,7 @@ async def _select_okta_verify_push(
     )
     if not okta_verify:
         available = [a.get("displayName") for a in authenticators]
-        raise AuthFlowError(
+        raise OktaVerifyNotAvailable(
             f"Okta Verify not available. Authenticators: {available}"
         )
 
@@ -1541,6 +1541,17 @@ class AuthFlowError(Exception):
     """Raised when the Okta IDX auth flow fails."""
 
 
+class OktaVerifyNotAvailable(AuthFlowError):
+    """Raised when an account has no Okta Verify authenticator enrolled.
+
+    This is a permanent condition for the account, not a transient auth
+    failure -- retrying the same push flow again will always hit the same
+    wall, so callers should catch this separately and fall back to
+    password login instead of burning through okta_verify_login's normal
+    retry loop.
+    """
+
+
 async def okta_verify_login(email: str, region: Optional[str] = None) -> None:
     """
     Full Okta Verify push login for HPE GreenLake.
@@ -1707,6 +1718,11 @@ async def okta_verify_login(email: str, region: Optional[str] = None) -> None:
                 )
                 return  # success
 
+        except OktaVerifyNotAvailable:
+            # Permanent condition for this account -- retrying the same
+            # push flow again would just hit the same wall. Let the caller
+            # decide whether to fall back to password login instead.
+            raise
         except AuthFlowError as e:
             last_error = e
             console.print(f"[yellow]Auth flow error:[/yellow] {e}")
@@ -1981,7 +1997,7 @@ async def password_login(email: str, password: str, region: Optional[str] = None
                             "Password login is not available for this account -- "
                             "no password authenticator is enrolled yet in HPE "
                             "GreenLake. Sign in via the GreenLake console once to "
-                            "set a password, then retry 'proliant com login --password'."
+                            "set a password, then retry 'proliant com login'."
                         )
                     raise AuthFlowError(
                         f"Unexpected remediations after identify: {remediations}. "

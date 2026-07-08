@@ -15,9 +15,13 @@ token for subsequent calls.
 ```bash
 proliant com login                                # Interactive login (Okta Verify push)
 proliant com login --email you@hpe.com            # Pre-fill email, skip the prompt
-proliant com login --password                     # Username + password (external/gmail accounts)
 proliant com logout
 ```
+
+Login method is auto-detected from the email domain: `@hpe.com` accounts try
+Okta Verify push first (falling back to a masked password prompt if the
+account has no Okta Verify authenticator enrolled), and external accounts
+(e.g. gmail.com) go straight to a masked password prompt.
 
 ## Inventory & reports
 

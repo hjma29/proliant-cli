@@ -4,6 +4,14 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ---
 
+## v1.0.31 — 2026-07-08
+
+### Bug Fixes
+- `proliant com login`: removed the confusing `--password`/`-p` flag entirely — it was a boolean switch that took no value (the password is always entered at a masked prompt), so `proliant com login --email you@example.com --password abc` misleadingly printed the *parent* `proliant com` parser's "unrecognized arguments" error instead of a login-specific one. Login method is now fully auto-detected: `@hpe.com` accounts try Okta Verify push first and fall back automatically to a masked password prompt if the account has no Okta Verify authenticator enrolled (previously this just retried the same broken push flow 3 times and failed with `Okta Verify not available. Authenticators: ['Password']`); external accounts (e.g. gmail.com) go straight to the password prompt, same as before.
+- Windows installer (`install.ps1`): the "Getting started" hint after install suggested `proliant ilo init` — a leftover from before the `proliant setup` wizard existed. Now correctly points to `proliant setup` for configuring iLO/OneView inventory.
+
+---
+
 ## v1.0.30 — 2026-07-08
 
 ### New Features

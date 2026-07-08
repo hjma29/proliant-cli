@@ -198,6 +198,6 @@ Write-Host "Getting started:" -ForegroundColor Cyan
 Write-Host "  Open a new terminal (or run '. `$PROFILE' in this one) so PATH and" -ForegroundColor Cyan
 Write-Host "  tab completion take effect, then:" -ForegroundColor Cyan
 Write-Host "    proliant --help       View all commands" -ForegroundColor Cyan
-Write-Host "    proliant ilo init     Create a starter inventory.ini" -ForegroundColor Cyan
+Write-Host "    proliant setup        Set up your iLO/OneView inventory" -ForegroundColor Cyan
 Write-Host ""
 

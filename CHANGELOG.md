@@ -6,9 +6,6 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ## v1.0.26 — 2026-07-07
 
-### New Features
-- `proliant com servers describe`: for OneView-managed servers, now shows a "Server Profile" panel (Status, Name, State, Serial Number (virtual), UUID (virtual)) plus a Connections table (ID, Name, Type, MAC/WWPN) — matching the GreenLake GUI's server detail page. COM itself doesn't expose profile connections, so this connects directly to the bridging OneView appliance using its inventory.ini credentials; silently omitted if no local OneView appliance is configured, unreachable, or no profile is assigned to the hardware. Matched by the server's hardware serial number (not COM's `oneview.name` field, which is actually the hardware's bay label, e.g. "MXQ713060B, bay 5", not the profile's own name, e.g. "HyperV-04" — matching by that field would silently find nothing).
-
 ### Enhancements
 - `proliant ilo servers list`: now shows the server's friendly inventory.ini alias as the first column (previously not shown at all), added a Power column, and the OS Name/iLO Name columns now size to their actual content instead of stretching with excess blank padding to fill the terminal.
 - `proliant setup`: adding a OneView appliance no longer prompts for an "OneView section name" — it's an inventory.ini implementation detail the user never needs to type. The first appliance is named `oneview`, additional ones auto-number as `oneview-2`, `oneview-3`, etc. Still renameable later via the wizard's "Edit an entry" flow if you want something more descriptive.

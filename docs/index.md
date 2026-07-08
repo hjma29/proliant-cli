@@ -47,6 +47,8 @@ browse **Service Pack for ProLiant (SPP)** contents.
 proliant --help
 ```
 
+![proliant --help](assets/help-root.svg)
+
 ## Connect your first server
 
 Run `proliant setup` to manage your local inventory file — a guided menu to view,
@@ -69,7 +71,7 @@ details.
 - **[OneView](oneview.md)** — server profiles, networks, interconnects, and
   an end-to-end fabric map with MAC tracing.
 - **[Additional Setup](additional-setup.md)** — SPP browsing, shell
-  completion, telemetry opt-out, and self-update.
+  completion, telemetry settings, and self-update.
 
 ## Video walkthrough
 

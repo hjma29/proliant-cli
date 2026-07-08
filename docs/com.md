@@ -47,12 +47,12 @@ proliant com workspaces use MyWorkspace           # Switch active workspace
 
 ## Screenshots
 
-![COM screenshot placeholder](assets/placeholder-com.svg)
+![proliant com --help](assets/help-com.svg)
 
 <!--
-  HOW TO REPLACE THE PLACEHOLDER ABOVE (zero rebuild — just push):
+  ADD MORE REAL-USAGE SCREENSHOTS HERE (zero rebuild — just push):
   1. Drop a PNG into  docs/assets/  (e.g. com-gpu-report.png)
-  2. Swap the line above for something like:
+  2. Add another image line below, e.g.:
 
   ![COM GPU health report](assets/com-gpu-report.png)
 -->

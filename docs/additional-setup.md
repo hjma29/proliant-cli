@@ -53,21 +53,36 @@ proliant version    # Show installed version; offers to upgrade if a newer relea
 
 ## Telemetry
 
-`proliant` sends anonymous, best-effort usage counters (no personal data) to
-help understand adoption. Set the following to opt out:
+`proliant` uses two small, anonymous signals. Neither ever includes personal
+data — no IPs, hostnames, credentials, or command-line arguments are sent.
+
+- **Install/update counter** (always on) — a single ping that counts installs
+  and updates by operating system only, so we know the tool is actually being
+  used.
+- **Error telemetry** (opt-in, off by default) — if you turn it on, only the
+  crash traceback for a genuine unexpected bug is sent to
+  [Sentry](https://sentry.io), our error-tracking service, so we can find and
+  fix it. Expected errors (wrong password, timeouts, missing files, and the
+  like) are never sent, and any IPs, hostnames, or credentials are stripped
+  before anything leaves your machine.
+
+Check or change the error telemetry setting any time:
 
 ```bash
-export PROLIANT_NO_TELEMETRY=1
+proliant setting telemetry
 ```
+
+This shows whether it's currently on or off and asks you to confirm before
+switching it.
 
 ## Screenshots
 
-![Additional Setup screenshot placeholder](assets/placeholder-setup.svg)
+![proliant spp --help](assets/help-spp.svg)
 
 <!--
-  HOW TO REPLACE THE PLACEHOLDER ABOVE (zero rebuild — just push):
+  ADD MORE REAL-USAGE SCREENSHOTS HERE (zero rebuild — just push):
   1. Drop a PNG into  docs/assets/  (e.g. setup-menu.png)
-  2. Swap the line above for something like:
+  2. Add another image line below, e.g.:
 
   ![proliant setup guided menu](assets/setup-menu.png)
 -->

@@ -69,12 +69,12 @@ proliant oneview upgrade cleanup --yes          # delete unused baselines (free 
 
 ## Screenshots
 
-![OneView screenshot placeholder](assets/placeholder-oneview.svg)
+![proliant oneview --help](assets/help-oneview.svg)
 
 <!--
-  HOW TO REPLACE THE PLACEHOLDER ABOVE (zero rebuild — just push):
+  ADD MORE REAL-USAGE SCREENSHOTS HERE (zero rebuild — just push):
   1. Drop a PNG into  docs/assets/  (e.g. oneview-fabric-map.png)
-  2. Swap the line above for something like:
+  2. Add another image line below, e.g.:
 
   ![OneView fabric map with MAC tracing](assets/oneview-fabric-map.png)
 -->

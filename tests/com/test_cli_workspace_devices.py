@@ -74,12 +74,12 @@ class TestServersListTypeScoping:
         fake_session = MagicMock()
         with patch("proliant.com.cli._ensure_session", new_callable=AsyncMock,
                    return_value=fake_session), \
-             patch("proliant.com.devices.fetch_devices", new_callable=AsyncMock,
+             patch.object(cli._servers_mod, "fetch_servers", new_callable=AsyncMock,
                    return_value=[]) as mock_fetch, \
              patch("proliant.com.cli.print_devices_table") as mock_print:
             await cli._cmd_show_devices(args)
 
-        mock_fetch.assert_awaited_once_with(fake_session, device_type="COMPUTE")
+        mock_fetch.assert_awaited_once_with(fake_session)
         _, kwargs = mock_print.call_args
         assert kwargs["title"] == "GreenLake Servers"
 
@@ -94,7 +94,7 @@ class TestServersListTypeScoping:
         fake_session = MagicMock()
         with patch("proliant.com.cli._ensure_session", new_callable=AsyncMock,
                    return_value=fake_session), \
-             patch("proliant.com.devices.fetch_devices", new_callable=AsyncMock,
+             patch.object(cli._servers_mod, "fetch_all_devices", new_callable=AsyncMock,
                    return_value=[]) as mock_fetch, \
              patch("proliant.com.cli.print_devices_table") as mock_print:
             await cli._cmd_show_devices(args)

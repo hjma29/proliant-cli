@@ -22,22 +22,6 @@ from proliant.common.display import get_console, get_output_mode, OutputMode, pr
 # Helpers
 # ---------------------------------------------------------------------------
 
-_TIER_MAP = {
-    "STANDARD_PROLIANT":   "Standard-ProLiant",
-    "ENHANCED_PROLIANT":   "Enhanced-ProLiant",
-    "BASIC_PROLIANT":      "Basic-ProLiant",
-    "FOUNDATION_PROLIANT": "Foundation-ProLiant",
-    "FOUNDATION_STORAGE":  "Foundation-Storage",
-}
-
-_TIER_SHORT_MAP = {
-    "STANDARD_PROLIANT":   "Std",
-    "ENHANCED_PROLIANT":   "Enh",
-    "BASIC_PROLIANT":      "Bas",
-    "FOUNDATION_PROLIANT": "Fnd",
-    "FOUNDATION_STORAGE":  "Fnd",
-}
-
 _REGION_MAP = {
     "us-west":    "US West",
     "us-east":    "US East",
@@ -47,146 +31,133 @@ _REGION_MAP = {
 }
 
 
-def _fmt_tier(raw: dict) -> str:
-    subs = raw.get("subscription") or []
-    tier = (subs[0].get("tier") or "") if subs else ""
-    return _TIER_MAP.get(tier) or (tier.replace("_", "-").title() if tier else "—")
-
-
-def _fmt_tier_short(raw: dict) -> str:
-    subs = raw.get("subscription") or []
-    tier = (subs[0].get("tier") or "") if subs else ""
-    return _TIER_SHORT_MAP.get(tier) or (tier.split("_")[0].title() if tier else "—")
-
-
-def _fmt_region(raw: dict) -> str:
-    region = raw.get("region") or ""
-    return _REGION_MAP.get(region.lower(), region) or "—"
-
-
-def _fmt_device_cell(d) -> str:
-    """Serial (green bold primary) + iLO hostname (white secondary)."""
-    hostname = d.raw.get("deviceName") or d.raw.get("secondaryName") or ""
-    if hostname:
-        return f"[bold green]{d.serial_number}[/bold green]\n{hostname}"
-    return f"[bold green]{d.serial_number}[/bold green]"
-
-
-_UNNAMED_OS = {"host is unnamed", "unnamed", "localhost"}
-_COMPUTE_TYPES = {"compute", "server"}
-
-
-def _is_compute(d) -> bool:
-    dtype = (d.device_type or "").lower()
-    cat   = (d.raw.get("category") or "").lower()
-    return dtype in _COMPUTE_TYPES or cat in _COMPUTE_TYPES
-
-
-def _fmt_os_name(d) -> str:
-    """OS hostname (secondary_name); — colored by device type if absent."""
-    name = (d.raw.get("secondary_name") or d.raw.get("secondaryName") or "").strip()
-    if name and name.lower() not in _UNNAMED_OS:
-        return f"[cyan]{name}[/cyan]"
-    return "[cyan]—[/cyan]" if _is_compute(d) else "[grey70]—[/grey70]"
-
-
-def _fmt_ilo_name(d) -> str:
-    """iLO hostname (name/deviceName); — colored by device type if absent."""
-    name = d.raw.get("name") or d.raw.get("deviceName") or ""
-    if name:
-        return name
-    return "—" if _is_compute(d) else "[grey70]—[/grey70]"
-
-
-def _fmt_service(d) -> str:
-    svc    = d.service_name or ""
-    region = _fmt_region(d.raw)
-    if svc and region:
-        return f"{svc}\n[dim]{region}[/dim]"
-    if region:
-        return region
-    return "—"
-
-
 def _strip_markup(s: str) -> str:
     """Strip Rich markup tags for sort-key comparison."""
     return re.sub(r'\[/?[^\]]*\]', '', s)
 
 
-_TYPE_ABBREV = {
-    "compute":    ("Comp", "cyan"),
-    "server":     ("Comp", "cyan"),
-    "storage":    ("Stor", "yellow"),
-    "networking": ("Net",  "magenta"),
-    "switch":     ("Net",  "magenta"),
-    "network":    ("Net",  "magenta"),
+# ---------------------------------------------------------------------------
+# Server/device field registry
+#
+# Both 'com servers list' (COM's own /servers inventory, compute-only) and
+# 'com devices list' (that same inventory plus GreenLake-claimed storage/
+# network devices, adapted via servers.device_to_server_row) render through
+# this one registry, operating on proliant.com.servers.Server rows. Fields
+# that don't apply to a given row (e.g. Health/Baseline for a switch) simply
+# render "—" rather than being guessed at.
+# ---------------------------------------------------------------------------
+
+_HEALTH_COLOR = {
+    "OK": "green", "WARNING": "yellow", "CRITICAL": "red", "DISABLED": "dim",
 }
 
-_NETWORKING_TYPES = {"networking", "switch", "network"}
+
+def _fmt_health(v: str) -> str:
+    color = _HEALTH_COLOR.get((v or "").upper())
+    if not color or v in ("—", None):
+        return f"[dim]{v or '—'}[/dim]"
+    return f"[{color}]{v.title()}[/{color}]"
 
 
-def _fmt_type(d) -> str:
-    dtype = (d.device_type or "").lower()
-    cat   = (d.raw.get("category") or "").lower()
-    key   = dtype if dtype in _TYPE_ABBREV else cat
-    abbrev, color = _TYPE_ABBREV.get(key, ((d.device_type or "?")[:4].title(), "white"))
+_STATE_COLOR = {
+    "Connected": "green", "Not connected": "yellow", "Not activated": "red",
+}
+
+
+def _fmt_state(v: str) -> str:
+    color = _STATE_COLOR.get(v, "")
+    return f"[{color}]{v}[/{color}]" if color else (v or "—")
+
+
+def _fmt_power(v: str) -> str:
+    label = {"ON": "On", "OFF": "Off"}.get((v or "").upper(), v or "—")
+    color = {"ON": "green", "OFF": "red"}.get((v or "").upper(), "dim")
+    return f"[{color}]{label}[/{color}]"
+
+
+_TYPE_ABBREV = {
+    "compute": ("Comp", "cyan"), "storage": ("Stor", "yellow"),
+    "switch":  ("Net",  "magenta"), "network": ("Net", "magenta"),
+}
+
+
+def _fmt_device_type(v: str) -> str:
+    abbrev, color = _TYPE_ABBREV.get((v or "").lower(), ((v or "?")[:4].title(), "white"))
     return f"[{color}]{abbrev}[/{color}]"
 
 
-# ---------------------------------------------------------------------------
-# Device field registry
-# ---------------------------------------------------------------------------
+def _fmt_yesno(v: bool) -> str:
+    return "Yes" if v else "No"
 
-_DEVICE_FIELDS: dict = {
-    "device":   ("Device",    "default",    {"no_wrap": True, "min_width": 14, "ratio": 3},
-                 lambda d, _u: _fmt_device_cell(d)),
-    "os-name":  ("OS Name",   "default",    {"no_wrap": True, "min_width": 10, "max_width": 36},
-                 lambda d, _u: _fmt_os_name(d)),
-    "ilo-name": ("iLO Name",  "green",      {"no_wrap": True, "min_width": 10, "max_width": 36},
-                 lambda d, _u: _fmt_ilo_name(d)),
-    "name":     ("Name",      "bold cyan",  {"no_wrap": True, "ratio": 4},
-                 lambda d, _u: d.display_name),
-    "serial":   ("Serial",    "grey70",     {"no_wrap": True, "min_width": 13},
-                 lambda d, _u: d.serial_number),
-    "type":     ("Type",      "default",    {"no_wrap": True, "min_width": 4},
-                 lambda d, _u: _fmt_type(d)),
-    "model":    ("Model",     "grey70",     {"no_wrap": True, "max_width": 13},
-                 lambda d, _u: d.model),
-    "part":     ("Part #",    "grey70",     {"no_wrap": True, "min_width": 11},
-                 lambda d, _u: d.product_id or "—"),
-    "service":  ("Service",   "grey70",     {"no_wrap": True, "ratio": 2},
-                 lambda d, _u: d.service_name or "—"),
-    "region":   ("Region",    "grey70",     {"no_wrap": True, "min_width": 9},
-                 lambda d, _u: _fmt_region(d.raw)),
-    "tier":     ("Subscription Tier", "grey70", {"no_wrap": True, "min_width": 12},
-                 lambda d, _u: _fmt_tier(d.raw)),
-    "sub":      ("Sub",       "grey70",     {"no_wrap": True, "min_width": 3},
-                 lambda d, _u: _fmt_tier_short(d.raw)),
-    "flex":     ("Flex",      "grey70",     {"no_wrap": True, "min_width": 4},
-                 lambda d, _u: "Yes" if d.raw.get("isFlex") else "No"),
-    "sub-key":  ("Sub Key",   "grey70",     {"no_wrap": True, "min_width": 9, "max_width": 10},
-                 lambda d, _u: (d.subscription_key[:8] + "…") if d.subscription_key else "—"),
-    "location": ("Location",  "grey70",     {"no_wrap": True, "max_width": 10},
-                 lambda d, _u: (d.raw.get("location") or {}).get("locationName") or "—"),
-    "added":    ("Added",     "grey70",     {"no_wrap": True, "min_width": 10},
-                 lambda d, _u: (d.raw.get("createdAt") or "")[:10] or "—"),
-    "updated":  ("Updated",   "grey70",     {"no_wrap": True, "min_width": 10},
-                 lambda d, _u: (d.raw.get("updatedAt") or "")[:10] or "—"),
-    "added-by": ("Added By",  "grey70",     {"no_wrap": True, "ratio": 2},
-                 lambda d, u: u.get(
-                     ((d.raw.get("contact") or {}).get("workspaceUser") or {}).get("id", ""),
-                     "—"
-                 )),
+
+_SERVER_FIELDS: dict = {
+    "health":       ("Health",       "default", {"no_wrap": True, "min_width": 8},
+                     lambda s: _fmt_health(s.health)),
+    "name":         ("Name",         "bold cyan", {"no_wrap": True, "ratio": 3},
+                     lambda s: s.name),
+    "state":        ("State",        "default", {"no_wrap": True, "min_width": 13},
+                     lambda s: _fmt_state(s.state_label)),
+    "serial":       ("Serial",       "grey70",  {"no_wrap": True, "min_width": 13},
+                     lambda s: s.serial_number or "—"),
+    "type":         ("Type",         "default", {"no_wrap": True, "min_width": 4},
+                     lambda s: _fmt_device_type(s.device_type)),
+    "group":        ("Group",        "grey70",  {"no_wrap": True, "max_width": 18},
+                     lambda s: s.group),
+    "power":        ("Power",        "default", {"no_wrap": True, "min_width": 5},
+                     lambda s: _fmt_power(s.power_state)),
+    "baseline":     ("Baseline",     "grey70",  {"no_wrap": True, "min_width": 12},
+                     lambda s: s.baseline),
+    "model":        ("Model",        "grey70",  {"no_wrap": True, "max_width": 22},
+                     lambda s: s.model),
+    "generation":   ("Generation",   "grey70",  {"no_wrap": True, "min_width": 8},
+                     lambda s: s.generation),
+    "product-id":   ("Product ID",   "grey70",  {"no_wrap": True, "min_width": 10},
+                     lambda s: s.product_id),
+    "manufacturer": ("Manufacturer", "grey70",  {"no_wrap": True, "min_width": 6},
+                     lambda s: s.manufacturer),
+    "uuid":         ("UUID",         "dim",     {"no_wrap": True, "min_width": 20},
+                     lambda s: s.uuid),
+    "cpu":          ("CPU",          "grey70",  {"ratio": 2},
+                     lambda s: s.cpu),
+    "os":           ("Operating System", "cyan", {"ratio": 2},
+                     lambda s: s.operating_system),
+    "connection-type": ("Connection Type", "grey70", {"no_wrap": True, "min_width": 14},
+                     lambda s: s.connection_type),
+    "appliance":    ("Appliance",    "grey70",  {"no_wrap": True, "max_width": 30},
+                     lambda s: s.appliance_name),
+    "oneview-name": ("OneView Name", "grey70",  {"no_wrap": True, "max_width": 30},
+                     lambda s: s.oneview_name),
+    "oneview-state": ("OneView State", "grey70", {"no_wrap": True, "min_width": 9},
+                     lambda s: s.oneview_state),
+    "ilo-hostname": ("iLO/BMC Hostname", "green", {"no_wrap": True, "max_width": 36},
+                     lambda s: s.ilo_hostname),
+    "ilo-ip":       ("iLO/BMC IP",   "grey70",  {"no_wrap": True, "min_width": 13},
+                     lambda s: s.ilo_ip),
+    "ilo-version":  ("iLO/BMC Version", "grey70", {"no_wrap": True, "min_width": 10},
+                     lambda s: s.ilo_version),
+    "ilo-license":  ("iLO License",  "grey70",  {"no_wrap": True, "min_width": 10},
+                     lambda s: s.ilo_license),
+    "auto-ilo-fw":  ("Auto iLO FW Update", "grey70", {"no_wrap": True, "min_width": 6},
+                     lambda s: _fmt_yesno(s.auto_ilo_fw_update)),
+    "maintenance-mode": ("Maintenance Mode", "grey70", {"no_wrap": True, "min_width": 6},
+                     lambda s: _fmt_yesno(s.maintenance_mode)),
+    "subscription-tier": ("Subscription Tier", "grey70", {"no_wrap": True, "min_width": 12},
+                     lambda s: s.subscription_tier),
 }
 
-_DEVICE_DEFAULT_FIELDS  = ("serial", "os-name", "ilo-name", "model", "type", "location")
-_SERVER_DEFAULT_FIELDS  = ("serial", "os-name", "ilo-name", "model", "type", "location")
+# Default columns mirror the COM GUI's "Servers" page default column set
+# (Health, Name, State, Serial, Group, Power, Baseline, Model) minus "iLO
+# security", which COM does not expose over the public API today.
+_SERVER_DEFAULT_FIELDS = ("health", "name", "state", "serial", "group", "power", "baseline", "model")
 
-# Fields that render multi-line cells (Rich \n) — used to decide whether the
-# table needs a horizontal rule between rows for readability.
-_MULTILINE_FIELDS = {"device", "service"}
+# 'devices list' spans compute + storage + network, so it keeps a Type
+# column to distinguish rows whose COM-only fields (Group/Baseline/...)
+# will legitimately show "—" for non-compute hardware.
+_DEVICE_DEFAULT_FIELDS = ("health", "name", "state", "serial", "type", "group", "power", "baseline", "model")
 
-DEVICE_FIELD_NAMES = tuple(_DEVICE_FIELDS.keys())
+SERVER_FIELD_NAMES = tuple(_SERVER_FIELDS.keys())
+# Backward-compat alias — 'devices list' and 'servers list' share one registry.
+DEVICE_FIELD_NAMES = SERVER_FIELD_NAMES
 
 
 def make_field_completer(choices: tuple):
@@ -210,42 +181,46 @@ def parse_fields(fields_str: Optional[str], available: dict, defaults: tuple) ->
 # Table printers
 # ---------------------------------------------------------------------------
 
-def print_devices_table(device_list: list, raw: bool = False,
+def print_devices_table(server_list: list, raw: bool = False,
                         fields: Optional[str] = None,
                         sort_by: Optional[str] = None,
-                        user_cache: Optional[dict] = None,
                         default_fields: Optional[tuple] = None,
                         title: str = "GreenLake Devices") -> None:
+    """Render a list of proliant.com.servers.Server rows as a table.
+
+    Used by both 'com servers list' (COM's own inventory, compute-only) and
+    'com devices list' (COM inventory + GreenLake-claimed storage/network,
+    merged) — the two commands differ only in what feeds server_list and
+    which default_fields tuple they pass in.
+    """
     if raw or get_output_mode() == OutputMode.JSON:
-        print_json([d.raw for d in device_list])
+        print_json([s.raw for s in server_list])
         return
 
-    if not device_list:
+    if not server_list:
         get_console().print("[yellow]No devices found.[/yellow]")
         return
 
     effective_defaults = default_fields or _DEVICE_DEFAULT_FIELDS
-    selected = parse_fields(fields, _DEVICE_FIELDS, effective_defaults)
-    uc = user_cache or {}
+    selected = parse_fields(fields, _SERVER_FIELDS, effective_defaults)
 
-    # Sorting — default to serial for stable ordering
-    sort_key = (sort_by or "serial").lower()
-    if sort_key not in _DEVICE_FIELDS:
-        raise SystemExit(f"Unknown sort field: {sort_key}\nAvailable: {', '.join(_DEVICE_FIELDS)}")
-    sorted_list = sorted(device_list,
-                         key=lambda d: _strip_markup(_DEVICE_FIELDS[sort_key][3](d, uc)).lower())
+    # Sorting — default to name for stable ordering
+    sort_key = (sort_by or "name").lower()
+    if sort_key not in _SERVER_FIELDS:
+        raise SystemExit(f"Unknown sort field: {sort_key}\nAvailable: {', '.join(_SERVER_FIELDS)}")
+    sorted_list = sorted(server_list,
+                         key=lambda s: _strip_markup(_SERVER_FIELDS[sort_key][3](s)).lower())
 
     table = Table(
-        title=f"{title} ({len(device_list)} total)",
+        title=f"{title} ({len(server_list)} total)",
         box=box.SIMPLE_HEAD,
-        show_lines=any(key in _MULTILINE_FIELDS for key in selected),
     )
     for key in selected:
-        header, style, kwargs, _ = _DEVICE_FIELDS[key]
+        header, style, kwargs, _ = _SERVER_FIELDS[key]
         table.add_column(header, style=style, **kwargs)
 
-    for d in sorted_list:
-        table.add_row(*[_DEVICE_FIELDS[key][3](d, uc) for key in selected])
+    for s in sorted_list:
+        table.add_row(*[_SERVER_FIELDS[key][3](s) for key in selected])
 
     get_console().print(table)
 

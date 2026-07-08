@@ -60,12 +60,16 @@ def _make_device():
 def _run_com_main(argv: list[str], capsys) -> dict | list:
     """Run proliant com main() with given argv and return parsed stdout JSON."""
     from proliant.com import cli
+    from proliant.com.servers import device_to_server_row
 
     fake_session = MagicMock()
     fake_session.workspace_id = "ws-aaa"
 
+    fake_server_row = device_to_server_row(_make_device())
+
     with patch("proliant.com.cli._ensure_session", new_callable=AsyncMock, return_value=fake_session), \
-         patch("proliant.com.devices.fetch_devices", new_callable=AsyncMock, return_value=[_make_device()]), \
+         patch.object(cli._servers_mod, "fetch_all_devices", new_callable=AsyncMock, return_value=[fake_server_row]), \
+         patch.object(cli._servers_mod, "fetch_servers", new_callable=AsyncMock, return_value=[fake_server_row]), \
          patch("proliant.com.workspaces.fetch_workspaces", new_callable=AsyncMock, return_value=[_make_workspace()]):
         cli.main(argv)
 

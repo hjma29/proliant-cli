@@ -4,6 +4,17 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ---
 
+## v1.0.23 — 2026-07-10
+
+### Bug Fixes
+- `proliant com servers list` / `com devices list` undercounted the fleet (e.g. 35/40 shown vs. 44 in the GreenLake GUI). Both commands previously read GreenLake's device-claim inventory (`/devices`), which omits servers synced in automatically via a linked OneView appliance bridge. They now read COM's own server inventory (`/compute-ops-mgmt/v1/servers`), which is what the GUI's Servers page and Overview widget actually use — counts now match exactly.
+
+### Enhancements
+- `com servers list` and `com devices list` column layout now mirrors the GreenLake GUI's Servers page: Health, Name, State, Serial, Group, Power, Baseline, Model by default, with many more available via `--fields` (Generation, Product ID, Manufacturer, UUID, CPU, Operating System, Connection Type, Appliance, OneView Name/State, iLO Hostname/IP/Version/License, Auto iLO FW Update, Maintenance Mode, Subscription Tier). `devices list` additionally shows a Type column and merges in GreenLake-claimed storage/network devices alongside COM's real compute inventory. Note: "iLO Security" is not exposed by any COM API today and is intentionally omitted.
+- `com servers describe`: enriched with UUID, CPU, Maintenance Mode, Connection Type (Direct/OneView managed), Appliance name, OneView Name/State, and iLO License — matching the fields shown on the GUI's server detail page.
+
+---
+
 ## v1.0.22 — 2026-07-09
 
 ### Enhancements

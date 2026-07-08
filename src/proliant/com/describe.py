@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 
 from proliant.common.display import get_console, print_json, OutputMode, get_output_mode
@@ -48,28 +49,48 @@ async def run_describe(session: COMSession, target: str) -> None:
     from rich.table import Table
     from rich.console import Group
     from rich.text import Text
+    from proliant.com.servers import _fetch_appliance_map
 
     async with COMClient(session) as c:
         with get_console().status("[dim]Fetching server list…[/dim]"):
-            r = await c.get(session.com_url("/servers"), params={"limit": 1000})
+            r, appliance_map = await asyncio.gather(
+                c.get(session.com_url("/servers"), params={"limit": 1000}),
+                _fetch_appliance_map(c, session),
+            )
 
     server = _find_server(r.get("items", []), target)
     if not server:
         get_console().print(f"[red]Server '{target}' not found.[/red]")
         sys.exit(1)
 
-    hw     = server.get("hardware", {})
-    bmc    = hw.get("bmc") or {}
-    state  = server.get("state", {})
-    health = hw.get("health", {})
+    hw       = server.get("hardware", {})
+    bmc      = hw.get("bmc") or {}
+    state    = server.get("state", {})
+    health   = hw.get("health", {})
+    host     = server.get("host") or {}
+    oneview  = server.get("oneview") or {}
+    appliance = server.get("appliance") or {}
 
     if get_output_mode() == OutputMode.JSON:
         print_json(server)
         return
 
-    os_name  = server.get("name") or "—"
+    os_name  = host.get("osName") or server.get("name") or "—"
     ilo_name = bmc.get("hostname") or "—"
     serial   = hw.get("serialNumber", "—")
+
+    connected = bool(state.get("connected"))
+    if connected:
+        state_label = "CONNECTED"
+    elif (state.get("subscriptionState") or "").upper() == "REQUIRED":
+        state_label = "NOT ACTIVATED"
+    else:
+        state_label = "NOT CONNECTED"
+
+    connection_type = server.get("connectionType") or ""
+    connection_label = {"DIRECT": "Direct", "ONEVIEW": "OneView managed"}.get(
+        connection_type, connection_type or "—"
+    )
 
     # ── LEFT COLUMN — matches COM GUI "Device details" ─────────────────────
     left = []
@@ -89,11 +110,29 @@ async def run_describe(session: COMSession, target: str) -> None:
     dev_t.add_row("OS Name",     f"[cyan]{os_name}[/cyan]" if os_name not in ("—", serial) else "[dim]—[/dim]")
     dev_t.add_row("Model",       hw.get("model", "—"))
     dev_t.add_row("Part Number", hw.get("productId", "—"))
+    dev_t.add_row("UUID",        hw.get("uuid", "—"))
     dev_t.add_row("Generation",  server.get("serverGeneration", "—"))
+    dev_t.add_row("CPU",         server.get("processorVendor", "—"))
     dev_t.add_row("Power",       _h(hw.get("powerState", "—")))
-    dev_t.add_row("Connection",  _h("CONNECTED" if state.get("connected") else "DISCONNECTED"))
+    dev_t.add_row("State",       _h(state_label))
     dev_t.add_row("Managed",     "Yes" if state.get("managed") else "No")
+    dev_t.add_row("Maintenance Mode", "Yes" if server.get("maintenanceMode") else "No")
     left.append(dev_t)
+
+    # Connection type / OneView appliance bridge -- only shown for servers
+    # actually connected through a OneView appliance (nothing to add for
+    # plain DIRECT-connected servers beyond the "Connection Type" row).
+    left.append(Text("Connection", style="bold"))
+    conn_t = Table(box=rich_box.SIMPLE, show_header=False, padding=(0, 2))
+    conn_t.add_column(style="dim", no_wrap=True)
+    conn_t.add_column()
+    conn_t.add_row("Connection Type", connection_label)
+    if connection_type == "ONEVIEW":
+        appliance_name = appliance_map.get(appliance.get("applianceId", ""), "—")
+        conn_t.add_row("Appliance",         appliance_name)
+        conn_t.add_row("OneView Name",      oneview.get("name") or "—")
+        conn_t.add_row("OneView State",     oneview.get("state") or "—")
+    left.append(conn_t)
 
     left.append(Text("Subscription", style="bold"))
     sub_t = Table(box=rich_box.SIMPLE, show_header=False, padding=(0, 2))
@@ -113,6 +152,7 @@ async def run_describe(session: COMSession, target: str) -> None:
     ilo_t.add_column()
     ilo_t.add_row("Model",   bmc.get("model", "—"))
     ilo_t.add_row("Version", bmc.get("version", "—"))
+    ilo_t.add_row("License", bmc.get("license", "—"))
     ilo_t.add_row("IP",      bmc.get("ip", "—"))
     ilo_t.add_row("MAC",     bmc.get("mac", "—"))
     right.append(ilo_t)

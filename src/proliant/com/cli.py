@@ -13,17 +13,16 @@ Usage::
 
     proliant com logout                        Remove cached credentials and token
 
-    proliant com devices list                   All devices in workspace
-    proliant com devices list --type COMPUTE    Filter by type (COMPUTE, NETWORK, STORAGE)
-    proliant com devices list --fields name,serial,service
-    proliant com devices list --fields name,serial,added,added-by
-    proliant com devices list --fields name,ilo-name,serial,location
-    proliant com devices list --sort added      Sort by date added
-    proliant com devices list --sort added-by   Sort by who added the device
-    proliant com devices list --fields name,serial,added,added-by --sort added
+    proliant com devices list                   All devices (COM servers + GreenLake storage/network)
+    proliant com devices list --type COMPUTE    Same servers as 'servers list' (COM real inventory)
+    proliant com devices list --type STORAGE    GreenLake-claimed storage devices only
+    proliant com devices list --fields name,serial,model,os
+    proliant com devices list --fields name,serial,ilo-hostname,ilo-ip
+    proliant com devices list --sort serial     Sort by serial number
     proliant com devices list --raw             Unprocessed API response
 
-    proliant com servers list                   Server-focused view of workspace devices
+    proliant com servers list                   Servers from COM's own inventory (matches GUI's Servers page)
+    proliant com servers list --fields name,serial,os,cpu
     proliant com servers describe <serial>      Show one server in detail
 
     proliant com bundles list                   Active SPP firmware bundles in COM
@@ -43,9 +42,20 @@ Usage::
     proliant com reports memory                 Fleet memory report
     proliant com reports gpu                    Fleet GPU report
 
-Available --fields for 'devices list':
-    name, ilo-name, type, model, serial, part, service, sub-key, location,
-    added, updated, added-by
+Available --fields for 'devices list' / 'servers list':
+    health, name, state, serial, type, group, power, baseline, model,
+    generation, product-id, manufacturer, uuid, cpu, os, connection-type,
+    appliance, oneview-name, oneview-state, ilo-hostname, ilo-ip,
+    ilo-version, ilo-license, auto-ilo-fw, maintenance-mode, subscription-tier
+
+Note: 'servers list' sources COM's own live server inventory
+(/compute-ops-mgmt/v1/servers) -- this is the same data behind the GreenLake
+GUI's Servers page and its Overview health widget, and includes servers
+synced in via a linked OneView appliance bridge. 'devices list' (no --type)
+merges that same compute inventory with GreenLake's claimed storage/network
+devices, so its total may still differ slightly from 'servers list' alone
+(it adds non-compute hardware). COM does not expose "iLO security" status
+over its public API today, so that GUI column has no CLI equivalent yet.
 
 Note: Run 'proliant com login' before any resource command (like kubectl/gcloud/aws/az).
 """
@@ -66,6 +76,7 @@ from proliant.common.runner import run_sync
 from proliant.com.auth import COMSession, CredentialsError, AuthError
 from proliant.com.client import COMClient
 from proliant.com import devices as _devices
+from proliant.com import servers as _servers_mod
 from proliant.com import workspaces as _workspaces
 from proliant.com import regions as _regions
 
@@ -83,7 +94,6 @@ from proliant.com import firmware as _firmware
 from proliant.com.describe import run_describe as _run_describe
 from proliant.com.reports import run_report_gpu as _run_report_gpu, run_report_memory as _run_report_memory
 from proliant.com.printers import (
-    _DEVICE_FIELDS,
     _DEVICE_DEFAULT_FIELDS,
     _SERVER_DEFAULT_FIELDS,
     DEVICE_FIELD_NAMES,
@@ -410,9 +420,16 @@ async def _cmd_show_devices(args: argparse.Namespace) -> None:
     filter_text = (getattr(args, "filter_text", None) or "").strip().lower()
     filter_model = (getattr(args, "filter_model", None) or "").strip().lower()
 
-    with get_console().status("[bold cyan]Fetching devices from GreenLake..."):
+    with get_console().status("[bold cyan]Fetching servers from Compute Ops Management..."):
         try:
-            device_list = await _devices.fetch_devices(session, device_type=device_type)
+            if is_servers_cmd:
+                # COM's own /servers inventory — matches the GUI's Servers
+                # page exactly, including servers synced in via a linked
+                # OneView appliance bridge (never individually "claimed"
+                # through GreenLake's device-add flow).
+                device_list = await _servers_mod.fetch_servers(session)
+            else:
+                device_list = await _servers_mod.fetch_all_devices(session, device_type=device_type)
         except AuthError as e:
             get_console().print(f"[red]Auth error:[/red] {e}")
             sys.exit(1)
@@ -420,44 +437,26 @@ async def _cmd_show_devices(args: argparse.Namespace) -> None:
             get_console().print(f"[red]Error:[/red] {e}")
             sys.exit(1)
 
-    # --filter: substring match across serial, hostname, model, location
+    # --filter: substring match across serial, name, model
     if filter_text:
-        def _matches_filter(d) -> bool:
+        def _matches_filter(s) -> bool:
             haystack = " ".join([
-                d.serial_number or "",
-                d.raw.get("deviceName") or "",
-                d.raw.get("secondaryName") or "",
-                d.model or "",
-                (d.raw.get("location") or {}).get("locationName") or "",
+                s.serial_number or "",
+                s.name or "",
+                s.model or "",
             ]).lower()
             return filter_text in haystack
-        device_list = [d for d in device_list if _matches_filter(d)]
+        device_list = [s for s in device_list if _matches_filter(s)]
 
     # --model: normalize hyphens/spaces/case for fuzzy model match (dl380-gen11 → DL380 GEN11)
     if filter_model:
         normalized_query = filter_model.replace("-", " ").replace("gen", "gen").upper()
-        device_list = [d for d in device_list
-                       if normalized_query in (d.model or "").upper()]
+        device_list = [s for s in device_list
+                       if normalized_query in (s.model or "").upper()]
 
-    # Resolve user IDs → emails only when added-by column is requested
-    user_cache: dict = {}
     effective_defaults = _SERVER_DEFAULT_FIELDS if is_servers_cmd else _DEVICE_DEFAULT_FIELDS
-    requested_fields = [f.strip().lower() for f in fields.split(",")] if fields else list(effective_defaults)
-    if "added-by" in requested_fields:
-        user_ids = {
-            ((d.raw.get("contact") or {}).get("workspaceUser") or {}).get("id", "")
-            for d in device_list
-        } - {""}
-        if user_ids:
-            from proliant.com.login import load_token
-            token_data = load_token() or {}
-            glp_token = token_data.get("glp_access_token", "")
-            if glp_token:
-                with get_console().status("[dim]Resolving user names..."):
-                    user_cache = await _devices.resolve_user_ids(user_ids, glp_token)
-
     print_devices_table(device_list, raw=getattr(args, "raw", False),
-                        fields=fields, sort_by=sort_by, user_cache=user_cache,
+                        fields=fields, sort_by=sort_by,
                         default_fields=effective_defaults,
                         title="GreenLake Servers" if is_servers_cmd else "GreenLake Devices")
 
@@ -759,17 +758,16 @@ examples:
         "list",
         help="List all devices in workspace",
         description=(
-            "List all devices registered in the GreenLake workspace.\n\n"
+            "List devices in the GreenLake workspace: COM's own server "
+            "inventory (compute) merged with GreenLake-claimed storage/"
+            "network devices. Use --type to scope to just one source.\n\n"
             "Examples:\n"
             "  proliant com devices list\n"
             "  proliant com devices list --type COMPUTE\n"
-            "  proliant com devices list --fields name,serial,service\n"
-            "  proliant com devices list --fields name,serial,added,added-by\n"
-            "  proliant com devices list --fields name,ilo-name,serial,location\n"
-            "  proliant com devices list --sort added\n"
-            "  proliant com devices list --sort added-by\n"
-            "  proliant com devices list --fields name,serial,added,added-by --sort added\n"
-            "  proliant com devices list --fields name,type,model,serial,part,service,sub-key,location,added,updated,added-by\n"
+            "  proliant com devices list --type STORAGE\n"
+            "  proliant com devices list --fields name,serial,model,os\n"
+            "  proliant com devices list --fields name,serial,ilo-hostname,ilo-ip\n"
+            "  proliant com devices list --sort serial\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -800,11 +798,14 @@ examples:
         "list",
         help="List servers in workspace",
         description=(
-            "List servers in the GreenLake workspace using server-focused default columns.\n\n"
+            "List servers from COM's own inventory (compute-ops-mgmt/v1/servers) "
+            "-- this matches the GreenLake GUI's Servers page exactly, including "
+            "servers synced in via a linked OneView appliance bridge that never "
+            "went through GreenLake's device-claim flow.\n\n"
             "Examples:\n"
             "  proliant com servers list\n"
             "  proliant com servers list --model dl325-gen12\n"
-            "  proliant com servers list --fields name,serial,location\n"
+            "  proliant com servers list --fields name,serial,os,cpu\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

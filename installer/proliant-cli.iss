@@ -74,6 +74,12 @@ Filename: "{code:GetTerminalExe}"; Description: "Launch a new terminal"; Flags: 
 const
   EnvKey = 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment';
 
+{ Only used to refresh Setup.exe's own in-memory environment block (see
+  RefreshProcessPath below) -- has nothing to do with the registry writes,
+  which still go through RegWriteStringValue. }
+function SetEnvironmentVariable(lpName, lpValue: string): BOOL;
+  external 'SetEnvironmentVariableW@kernel32.dll stdcall';
+
 function PathListContains(const PathList, Dir: string): Boolean;
 begin
   Result := Pos(
@@ -111,6 +117,31 @@ begin
   RegWriteStringValue(HKLM, EnvKey, 'Path', Paths);
 end;
 
+procedure RefreshProcessPath(const AppDir: string);
+var
+  CurrentPath: string;
+begin
+  { ChangesEnvironment=yes broadcasts WM_SETTINGCHANGE so *other* already-
+    running processes (like Explorer) refresh their own cached environment
+    and pass the new PATH on to whatever they spawn next -- that's why a
+    manually-opened new terminal picks up "proliant" right away. But
+    Setup.exe's own process environment block was captured when it started,
+    before the registry PATH was updated, and that broadcast does NOT
+    retroactively rewrite it. The [Run] "Launch a new terminal" entry is
+    spawned as a child of this very process, so without this it inherits
+    the stale pre-install PATH and "proliant" appears missing until the
+    user closes that window and opens a fresh one. Updating our own
+    in-memory copy here fixes it for the auto-launched terminal too. }
+  CurrentPath := GetEnv('Path');
+  if not PathListContains(CurrentPath, AppDir) then
+  begin
+    if (CurrentPath <> '') and (CurrentPath[Length(CurrentPath)] <> ';') then
+      CurrentPath := CurrentPath + ';';
+    CurrentPath := CurrentPath + AppDir;
+    SetEnvironmentVariable('Path', CurrentPath);
+  end;
+end;
+
 procedure RemoveFromSystemPath();
 var
   Paths: string;
@@ -138,6 +169,7 @@ begin
   if CurStep = ssPostInstall then
   begin
     AddToSystemPath();
+    RefreshProcessPath(ExpandConstant('{app}'));
     { proliant.exe wires up PowerShell tab completion (writes into $PROFILE)
       the first time it actually runs -- see _windows_first_run_check() in
       cli.py. Left alone, that means completion stays broken until the user

@@ -11,6 +11,7 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ### Bug Fixes
 - Fixed a Windows-only crash (`OSError: [Errno 22] Invalid argument`) that could happen printing a sufficiently large table on a "legacy" console with no virtual-terminal support — Rich's fallback write path has no output-size guard. Startup now force-enables VT/ANSI processing on the console so Rich always takes its safe, chunked write path.
+- Windows installer: the "Launch a new terminal" option on the Finished page could open a terminal where `proliant` wasn't recognized yet, even though PATH was updated correctly — that terminal was spawned by the installer itself, which was still holding its own pre-install copy of PATH in memory. The installer now refreshes its own environment immediately after updating PATH, so the terminal it launches works right away (a separately, manually opened terminal always worked, since Windows Explorer already refreshes PATH for anything it spawns).
 
 ---
 

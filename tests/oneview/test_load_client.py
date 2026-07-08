@@ -62,7 +62,13 @@ def patched_load_client(monkeypatch):
     """Patch the config + client lookups _load_client() does internally."""
     monkeypatch.setattr(
         "proliant.oneview.config.load_oneview_config",
-        lambda: {"host": "10.0.0.99", "url": "https://10.0.0.99", "username": "u", "password": "p"},
+        lambda: {"name": "oneview", "host": "10.0.0.99", "url": "https://10.0.0.99", "username": "u", "password": "p"},
+    )
+    # Single-appliance case (the common one) -- keeps the "Connecting..."
+    # hint free of the appliance name, matching today's single-appliance UX.
+    monkeypatch.setattr(
+        "proliant.oneview.config.list_oneview_appliances",
+        lambda: [{"name": "oneview", "host": "10.0.0.99", "url": "https://10.0.0.99", "username": "u", "password": "p"}],
     )
     monkeypatch.setattr("proliant.oneview.client.OneViewClient", _FakeOneViewClient)
 
@@ -88,3 +94,30 @@ async def test_load_client_closes_client_even_on_error(monkeypatch, patched_load
             raise RuntimeError("boom")
 
     assert _FakeOneViewClient.instances[0].exited is True
+
+
+@pytest.mark.asyncio
+async def test_load_client_names_appliance_in_hint_when_multiple_configured(monkeypatch):
+    """With 2+ appliances configured, the status hint should name which one
+    is active -- otherwise a user with multiple appliances has no visual cue
+    which one a command is actually talking to."""
+    monkeypatch.setattr(
+        "proliant.oneview.config.load_oneview_config",
+        lambda: {"name": "datacenter-b", "host": "10.0.0.55", "url": "https://10.0.0.55", "username": "u", "password": "p"},
+    )
+    monkeypatch.setattr(
+        "proliant.oneview.config.list_oneview_appliances",
+        lambda: [
+            {"name": "datacenter-a", "host": "10.0.0.10", "url": "https://10.0.0.10", "username": "u", "password": "p"},
+            {"name": "datacenter-b", "host": "10.0.0.55", "url": "https://10.0.0.55", "username": "u", "password": "p"},
+        ],
+    )
+    monkeypatch.setattr("proliant.oneview.client.OneViewClient", _FakeOneViewClient)
+
+    statuses: list[str] = []
+    monkeypatch.setattr(oneview_cli, "get_console", lambda: _FakeConsole(statuses))
+
+    async with oneview_cli._load_client() as client:
+        assert client.entered is True
+
+    assert any("'datacenter-b'" in s and "10.0.0.55" in s for s in statuses)

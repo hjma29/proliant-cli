@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -67,3 +68,165 @@ def test_main_reports_missing_config_cleanly_instead_of_raw_traceback(capsys):
     out = capsys.readouterr().out
     assert "inventory.ini not found" in out
     assert "Traceback" not in out
+
+
+# ── multi-appliance support ─────────────────────────────────────────────────
+
+def _write_ini(path: Path, text: str) -> None:
+    path.write_text(text)
+
+
+def test_list_oneview_appliances_empty_when_no_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(ov_config, "_find_config_file", lambda: tmp_path / "inventory.ini")
+    assert ov_config.list_oneview_appliances() == []
+
+
+def test_list_oneview_appliances_collects_literal_and_typed_sections(tmp_path, monkeypatch):
+    ini = tmp_path / "inventory.ini"
+    _write_ini(ini, """
+[defaults]
+username = Administrator
+password = secret
+
+[oneview]
+host = 10.0.0.1
+
+[datacenter-b]
+host = 10.0.0.2
+username = svc
+password = pw2
+type = oneview
+
+[dl380-gen11]
+host = 10.0.0.3
+""")
+    monkeypatch.setattr(ov_config, "_find_config_file", lambda: ini)
+
+    appliances = ov_config.list_oneview_appliances()
+    names = [a["name"] for a in appliances]
+    assert names == ["oneview", "datacenter-b"]  # dl380-gen11 (an iLO host) excluded
+    assert appliances[0]["host"] == "10.0.0.1"
+    assert appliances[0]["username"] == "Administrator"  # falls back to default
+    assert appliances[1]["host"] == "10.0.0.2"
+    assert appliances[1]["username"] == "svc"
+
+
+def test_list_oneview_appliances_raises_on_missing_host(tmp_path, monkeypatch):
+    ini = tmp_path / "inventory.ini"
+    _write_ini(ini, "[oneview]\nusername = Administrator\n")
+    monkeypatch.setattr(ov_config, "_find_config_file", lambda: ini)
+
+    with pytest.raises(ValueError, match="missing the 'host' key"):
+        ov_config.list_oneview_appliances()
+
+
+def test_get_active_appliance_name_defaults_to_first_when_unset(tmp_path, monkeypatch):
+    monkeypatch.setattr(ov_config, "_state_file", lambda: tmp_path / "oneview_state.json")
+    appliances = [{"name": "a"}, {"name": "b"}]
+    assert ov_config.get_active_appliance_name(appliances) == "a"
+
+
+def test_get_active_appliance_name_none_when_no_appliances(tmp_path, monkeypatch):
+    monkeypatch.setattr(ov_config, "_state_file", lambda: tmp_path / "oneview_state.json")
+    assert ov_config.get_active_appliance_name([]) is None
+
+
+def test_get_active_appliance_name_falls_back_when_stale(tmp_path, monkeypatch):
+    """A previously-active appliance that was since removed from inventory.ini
+    shouldn't leave the CLI stuck erroring -- fall back to the first one."""
+    state_file = tmp_path / "oneview_state.json"
+    state_file.write_text(json.dumps({"active_appliance": "removed-appliance"}))
+    monkeypatch.setattr(ov_config, "_state_file", lambda: state_file)
+
+    appliances = [{"name": "a"}, {"name": "b"}]
+    assert ov_config.get_active_appliance_name(appliances) == "a"
+
+
+def test_set_active_appliance_persists_and_is_case_insensitive(tmp_path, monkeypatch):
+    ini = tmp_path / "inventory.ini"
+    _write_ini(ini, "[Datacenter-B]\nhost = 10.0.0.2\ntype = oneview\n")
+    state_file = tmp_path / "oneview_state.json"
+    monkeypatch.setattr(ov_config, "_find_config_file", lambda: ini)
+    monkeypatch.setattr(ov_config, "_state_file", lambda: state_file)
+
+    resolved = ov_config.set_active_appliance("datacenter-b")
+
+    assert resolved == "Datacenter-B"  # returns the canonical section-name casing
+    assert json.loads(state_file.read_text())["active_appliance"] == "Datacenter-B"
+
+
+def test_set_active_appliance_unknown_name_raises_with_known_list(tmp_path, monkeypatch):
+    ini = tmp_path / "inventory.ini"
+    _write_ini(ini, "[oneview]\nhost = 10.0.0.1\n")
+    monkeypatch.setattr(ov_config, "_find_config_file", lambda: ini)
+    monkeypatch.setattr(ov_config, "_state_file", lambda: tmp_path / "oneview_state.json")
+
+    with pytest.raises(ValueError, match="Known appliances: oneview"):
+        ov_config.set_active_appliance("nope")
+
+
+def test_load_oneview_config_single_appliance_ignores_state(tmp_path, monkeypatch):
+    """With only one appliance configured, always return it -- zero friction,
+    identical behaviour to before multi-appliance support existed."""
+    ini = tmp_path / "inventory.ini"
+    _write_ini(ini, "[oneview]\nhost = 10.0.0.1\nusername = Administrator\npassword = pw\n")
+    monkeypatch.setattr(ov_config, "_find_config_file", lambda: ini)
+    monkeypatch.setattr(ov_config, "_state_file", lambda: tmp_path / "oneview_state.json")
+
+    cfg = ov_config.load_oneview_config()
+    assert cfg == {
+        "name": "oneview", "host": "10.0.0.1", "url": "https://10.0.0.1",
+        "username": "Administrator", "password": "pw",
+    }
+
+
+def test_load_oneview_config_multi_appliance_uses_active_selection(tmp_path, monkeypatch):
+    ini = tmp_path / "inventory.ini"
+    _write_ini(ini, """
+[oneview]
+host = 10.0.0.1
+type = oneview
+
+[datacenter-b]
+host = 10.0.0.2
+type = oneview
+""")
+    state_file = tmp_path / "oneview_state.json"
+    state_file.write_text(json.dumps({"active_appliance": "datacenter-b"}))
+    monkeypatch.setattr(ov_config, "_find_config_file", lambda: ini)
+    monkeypatch.setattr(ov_config, "_state_file", lambda: state_file)
+
+    cfg = ov_config.load_oneview_config()
+    assert cfg["name"] == "datacenter-b"
+    assert cfg["host"] == "10.0.0.2"
+
+
+def test_load_oneview_config_explicit_name_overrides_active(tmp_path, monkeypatch):
+    ini = tmp_path / "inventory.ini"
+    _write_ini(ini, """
+[oneview]
+host = 10.0.0.1
+type = oneview
+
+[datacenter-b]
+host = 10.0.0.2
+type = oneview
+""")
+    state_file = tmp_path / "oneview_state.json"
+    state_file.write_text(json.dumps({"active_appliance": "datacenter-b"}))
+    monkeypatch.setattr(ov_config, "_find_config_file", lambda: ini)
+    monkeypatch.setattr(ov_config, "_state_file", lambda: state_file)
+
+    cfg = ov_config.load_oneview_config(name="oneview")
+    assert cfg["name"] == "oneview"
+    assert cfg["host"] == "10.0.0.1"
+
+
+def test_load_oneview_config_unknown_explicit_name_raises(tmp_path, monkeypatch):
+    ini = tmp_path / "inventory.ini"
+    _write_ini(ini, "[oneview]\nhost = 10.0.0.1\n")
+    monkeypatch.setattr(ov_config, "_find_config_file", lambda: ini)
+    monkeypatch.setattr(ov_config, "_state_file", lambda: tmp_path / "oneview_state.json")
+
+    with pytest.raises(ValueError, match="not found"):
+        ov_config.load_oneview_config(name="ghost")

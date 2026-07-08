@@ -53,15 +53,22 @@ def _load_client():
     Print a status hint for the duration of the connect/login only -- it
     disappears the moment we get a real response (success or failure).
     """
-    from proliant.oneview.config import load_oneview_config
+    from proliant.oneview.config import list_oneview_appliances, load_oneview_config
     from proliant.oneview.client import OneViewClient
 
+    appliances = list_oneview_appliances()
     cfg = load_oneview_config()
     client = OneViewClient(cfg["host"], cfg["username"], cfg["password"])
 
+    # With only one appliance configured, keep the status line as-is (no
+    # need to name it). With 2+, show which one is active so it's obvious
+    # without a separate 'appliances list' call -- see 'appliances use' to
+    # switch which one commands target.
+    label = f" '{cfg['name']}'" if len(appliances) > 1 else ""
+
     @asynccontextmanager
     async def _connect():
-        with get_console().status(f"[dim]Connecting to OneView at {cfg['host']}…[/dim]"):
+        with get_console().status(f"[dim]Connecting to OneView{label} at {cfg['host']}…[/dim]"):
             await client.__aenter__()
         try:
             yield client
@@ -95,6 +102,54 @@ def _oneview_cached_object_names(cache_key: str, uri: str) -> list[str]:
         return asyncio.run(_fetch())
 
     return cached_names(f"oneview-{cache_key}-{cfg['host']}", _fetch_names)
+
+
+def _oneview_appliance_name_completer(prefix: str, **kwargs) -> list[str]:
+    """Tab-complete appliance names for 'appliances use'."""
+    try:
+        from proliant.oneview.config import list_oneview_appliances
+        names = [a["name"] for a in list_oneview_appliances()]
+        return [n for n in names if n.lower().startswith(prefix.lower())]
+    except Exception:
+        return []
+
+
+async def _cmd_appliances_list(args: argparse.Namespace) -> None:
+    from proliant.oneview.config import list_oneview_appliances, get_active_appliance_name
+
+    appliances = list_oneview_appliances()
+    if getattr(args, "json_output", False) or get_output_mode() == OutputMode.JSON:
+        print_json(appliances)
+        return
+    if not appliances:
+        get_console().print("[yellow]No OneView appliances configured.[/yellow] Run 'proliant setup' to add one.")
+        return
+
+    active_name = get_active_appliance_name(appliances)
+    table = make_table(
+        f"OneView Appliances ({len(appliances)} total)",
+        ("", {"style": "bold green", "no_wrap": True}),
+        ("Name", {"style": "bold cyan", "no_wrap": True}),
+        ("Host", {"style": "white"}),
+        ("Username", {"style": "dim"}),
+        box_style=box.ROUNDED,
+    )
+    for a in appliances:
+        table.add_row("* " if a["name"] == active_name else "  ", a["name"], a["host"], a["username"])
+    get_console().print(table)
+    if len(appliances) > 1:
+        get_console().print("[dim]  * = active appliance -- switch with 'proliant oneview appliances use <name>'[/dim]")
+
+
+async def _cmd_appliances_use(args: argparse.Namespace) -> None:
+    from proliant.oneview.config import set_active_appliance
+
+    try:
+        resolved = set_active_appliance(args.name)
+        get_console().print(f"[bold green]✓ Switched to OneView appliance:[/bold green] {resolved}")
+    except ValueError as e:
+        get_console().print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
 
 
 def _oneview_network_name_completer(prefix: str, **kwargs) -> list[str]:
@@ -2076,6 +2131,8 @@ examples:
   proliant oneview upgrade readiness                     Pre-upgrade readiness report
   proliant oneview upgrade cleanup                       Preview unused firmware baselines
   proliant oneview upgrade cleanup --yes                 Delete unused baselines (free disk)
+  proliant oneview appliances list                       List configured appliances (* = active)
+  proliant oneview appliances use datacenter-b           Switch which appliance commands target
 """,
     )
 
@@ -2239,6 +2296,22 @@ examples:
     p_up_clean.add_argument("--yes", "-y", action="store_true",
         help="Actually delete the unused baselines (default is a dry-run preview)")
     p_up_clean.set_defaults(func=_cmd_upgrade_cleanup)
+
+    # ── appliances (multi-appliance switching) ────────────────────────────
+    # inventory.ini can hold more than one OneView appliance (each its own
+    # section with 'type = oneview') -- these commands mirror
+    # 'proliant com workspaces list/use' so you can see and switch which one
+    # every other 'proliant oneview' command targets.
+    p_appliances = sub.add_parser("appliances", aliases=["appliance"], help="List or switch OneView appliances")
+    s_appliances = p_appliances.add_subparsers(dest="what", metavar="ACTION")
+    s_appliances.required = True
+    p_app_list = s_appliances.add_parser("list", help="List configured appliances (* = active)")
+    p_app_list.set_defaults(func=_cmd_appliances_list)
+    p_app_use = s_appliances.add_parser("use", help="Switch active appliance")
+    p_app_use.add_argument(
+        "name", metavar="NAME", help="Appliance section name (see 'appliances list')"
+    ).completer = _oneview_appliance_name_completer  # type: ignore[attr-defined]
+    p_app_use.set_defaults(func=_cmd_appliances_use)
 
     return parser
 

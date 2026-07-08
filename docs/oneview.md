@@ -9,6 +9,21 @@ description: HPE Synergy OneView — server profiles, networking, and firmware c
 It requires an `inventory.ini` with a `[oneview]` (or `type = oneview`)
 section — run `proliant setup` to add one.
 
+## Multiple appliances
+
+`inventory.ini` can hold more than one OneView appliance — give each its own
+section name and `type = oneview` (`proliant setup` does this for you). With
+only one configured, every command just uses it — no extra steps. With two
+or more, commands target whichever one is **active**:
+
+```bash
+proliant oneview appliances list              # * marks the active appliance
+proliant oneview appliances use datacenter-b   # switch which one commands target
+```
+
+The active selection persists across commands and terminal sessions until
+you switch again.
+
 ## Servers & profiles
 
 ```bash

@@ -132,6 +132,8 @@ proliant oneview reports memory
 proliant oneview upgrade readiness              # pre-upgrade readiness report
 proliant oneview upgrade cleanup                # preview unused firmware baselines
 proliant oneview upgrade cleanup --yes          # delete unused baselines (free disk)
+proliant oneview appliances list                # multiple appliances configured? * = active
+proliant oneview appliances use datacenter-b    # switch which appliance commands target
 ```
 
 #### Upgrade readiness & disk cleanup

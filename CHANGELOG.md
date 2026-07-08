@@ -4,6 +4,13 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ---
 
+## v1.0.24 — 2026-07-10
+
+### New Features
+- `proliant oneview appliances list` / `proliant oneview appliances use <name>`: `inventory.ini` can hold more than one OneView appliance (each its own section with `type = oneview`) — these commands list them (marking which is active) and let you switch which one every other `proliant oneview` command targets, persisted across sessions. With only one appliance configured (the common case), behavior is unchanged — no extra steps needed.
+
+---
+
 ## v1.0.23 — 2026-07-10
 
 ### Bug Fixes

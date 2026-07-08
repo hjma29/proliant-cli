@@ -1,8 +1,12 @@
 # proliant — Copilot Instructions
 
 > Engineering context for contributors and AI agents working on this repo.
-> Update whenever a new bug, gotcha, or schema difference is discovered.
+> Update whenever a new coding gotcha or schema difference is discovered.
 > User-facing CLI reference: `README.md` (update when commands or flags change).
+> Deep debugging narratives, incident write-ups, and troubleshooting procedures
+> live in `~/work/work-notes/notes-proliant-cli.md` (private notes repo) — do
+> not duplicate them here. This file stays a short, current reference for
+> facts that affect how code must be written, not how to diagnose problems.
 
 ---
 
@@ -11,8 +15,8 @@
 `proliant` — Unified Python CLI for HPE ProLiant server management combining:
 - **`proliant ilo`** — Direct iLO Redfish management (firmware inventory, upgrade via HPE SDR)
 - **`proliant com`** — HPE Compute Ops Management (COM) cloud API
-
-Replaces two separate tools: `hpeilo` (iLO Redfish) and `hpecom` (COM API).
+- **`proliant oneview`** — HPE OneView appliance management
+- **`proliant spp`** — HPE Service Pack for ProLiant (SPP) release inspection/diff
 
 ---
 
@@ -20,44 +24,55 @@ Replaces two separate tools: `hpeilo` (iLO Redfish) and `hpecom` (COM API).
 
 ```
 src/proliant/
-  cli.py                Top-level entry point — dispatches to ilo/com sub-CLIs
+  cli.py                Top-level entry point — dispatches to ilo/com/oneview/spp/qs/setting sub-CLIs
                         Sets _ARGCOMPLETE=2 before delegating for correct tab completion
+  common/                Shared helpers (config_dir(), inventory_errors.py, etc.)
   ilo/
-    cli.py              All proliant ilo commands: get/upgrade subparsers, table printers
+    cli.py              All proliant ilo commands: servers/firmware/nic/storage/... subparsers
     client.py           Async Redfish client (httpx, HTTP/2, session management)
     inventory.py        All read-only Redfish fetches; classify_update_method() BMC/UEFI/OS
     firmware.py         Stage, queue, wait helpers for iLO firmware operations
     sdr.py              HPE SDR fetch, fwpkg parsing, find_upgrades() version matching
-    config.py           hosts.yml discovery: env → ~/.config/proliant/ilo/ → ./
+    config.py           inventory.ini loader: PCLI_CONFIG env → ./inventory.ini → ~/.config/proliant-cli/inventory.ini
   com/
-    cli.py              All proliant com commands: get devices/bundles/servers; login/logout
+    cli.py              All proliant com commands: devices/servers/bundles/workspaces; login/logout
     client.py           Async HTTP COM client (httpx, HTTP/2, pagination)
-    auth.py             COMSession — load/save token.json, client credentials refresh
+    auth.py / login.py  COMSession — load/save token.json, Okta + GLP client-credentials auth
     devices.py          GLP devices API, resolve_user_ids() UUID→email
     firmware.py         FirmwareBundle dataclass, fetch_bundles() from COM API
-tests/                  pytest — run with: pytest tests/ -q  (40 tests, must pass before commit)
-notes.md                Full findings, gotchas, Redfish + COM API reference
+  oneview/
+    cli.py              proliant oneview commands: servers/firmware/networks/profiles/appliances
+    config.py           OneView appliance sections in the same inventory.ini ([oneview] or type = oneview)
+  spp/                  proliant spp list/inspect/diff — SPP catalog + fwpkg inspection
+  setup/
+    wizard.py           `proliant setup` interactive inventory.ini wizard + malformed-file recovery
+  qs/                    proliant qs — HPE QuickSpecs lookup
+  setting/               proliant setting — local CLI settings
+tests/                  pytest — run with: pytest tests/ -q  (must pass before commit)
+sample-inventory.ini    Working example inventory.ini, linked from parse-error messages
 ```
 
 ---
 
 ## CLI commands (current)
 
-```bash
-# iLO commands
-proliant ilo get firmwares [--host NAME] [--fields model,bios,ilo,nic-fw,storage-fw]
-proliant ilo get update-method [--host NAME]    # BMC/UEFI/OS classification per component
-proliant ilo get ilo|network|nic|storage|cpu|memory|full|com|serial|disk-map [--host NAME] [--raw]
-proliant ilo upgrade --host NAME [--dry-run] [--reboot] [--component all|ilo|bios|nic|storage]
-proliant ilo upgrade components|queue|stage|flash|clear --host NAME
-proliant ilo init
+Full command reference lives in `README.md`. Top-level groups:
 
-# COM commands
-proliant com login [--api-client]
-proliant com logout
-proliant com get devices [--fields NAME,...] [--sort FIELD] [--all]
-proliant com get bundles [--gen 10|11|12] [--type base|patch|hotfix] [--all] [--raw]
-proliant com get servers  (planned)
+```bash
+proliant setup                          # Interactive inventory.ini wizard
+
+proliant ilo servers|firmware|nic|storage|cpu|memory|power|boot ...
+proliant ilo firmware upgrade <host> [--dry-run] [--reboot]
+
+proliant com login [--api-client] / logout
+proliant com devices|servers|bundles|workspaces|reports ...
+
+proliant oneview servers|firmware|networks|networksets|uplinksets|server-profiles|enclosures|mac|reports ...
+proliant oneview upgrade readiness|cleanup
+proliant oneview appliances list|use <name>
+
+proliant spp list|inspect|diff
+proliant version
 ```
 
 ---
@@ -65,31 +80,28 @@ proliant com get servers  (planned)
 ## Critical gotchas — will cause bugs if ignored
 
 **1. Gen12 (iLO 7) OEM actions path differs from Gen11 (iLO 6)**
-- Gen11: `svc["Actions"]["Oem"]["Hpe"]`
-- Gen12: `svc["Oem"]["Hpe"]["Actions"]`
-- Fixed in `ilo/firmware.py::_oem_actions()` — tries Gen12 path first, falls back to Gen11.
+- Gen11: `svc["Actions"]["Oem"]["Hpe"]` — Gen12: `svc["Oem"]["Hpe"]["Actions"]`
+- Handled in `ilo/firmware.py::_oem_actions()` — tries Gen12 path first, falls back to Gen11.
 
 **2. NIC firmware is NOT in FirmwareInventory — must use NetworkAdapters**
 - Path: `GET /redfish/v1/Chassis/1/NetworkAdapters/{id}` → `Controllers[0].FirmwarePackageVersion`
 - `inventory.py::fetch_nic_firmware_inventory()` returns FirmwareInventory-style dicts.
 
 **2b. Gen12 NIC labels can differ between Redfish fields for the same Broadcom family**
-- `NetworkAdapters[].Model` may be a generic silicon name like `BCM57414`, while the GUI shows an HPE marketing name such as `Broadcom P225p`.
-- For `proliant ilo list network`, preserve the raw Redfish `Model`/`Name` for the `Name` column and use `PartNumber` + `Location` to disambiguate cards.
-- Example observed on `dl345-gen12`: OCP card reports `BCM57414` + `P10113-001`; PCIe card reports `BCM57414` + `P26264-001` (GUI labels it `P225p`).
+- `NetworkAdapters[].Model` may be a generic silicon name (e.g. `BCM57414`) while the GUI shows an
+  HPE marketing name (e.g. `Broadcom P225p`). Preserve the raw Redfish `Model`/`Name` and use
+  `PartNumber` + `Location` to disambiguate cards — do not assume `Model` is the GUI-visible name.
 
 **2c. iLO 6 NIC location can live in the HPE OEM Devices collection**
-- Some iLO 6 systems leave `NetworkAdapters[].Location` empty/null even though the GUI shows a slot label.
-- Fallback source: `Chassis.Oem.Hpe.Links.Devices` (for example `/redfish/v1/Chassis/1/Devices/2/` → `Location: "OCP 3.0 Slot 15"`).
-- Match the OEM device entry back to the NIC by serial number when the standard Redfish adapter location is blank.
+- Some iLO 6 systems leave `NetworkAdapters[].Location` empty/null. Fallback source:
+  `Chassis.Oem.Hpe.Links.Devices` (match back to the NIC by serial number).
 
 **3. BCM NIC SDR filenames have inverted format (version FIRST)**
 - Normal: `{model}_{version}.fwpkg` — BCM/NIC: `BCM{version}_{chipmodel}.fwpkg`
-- Example: `BCM235.1.164.14_BCM957414A4142HC.fwpkg`
 
-**4. Gen12 (dl325-gen12) Storage has zero members**
+**4. Some Gen12 servers report zero Storage members**
 - Controllers only appear in FirmwareInventory, not in the Storage sub-tree.
-- `fetch_storage_versions()` falls back to FirmwareInventory keyword scan.
+- `fetch_storage_versions()` falls back to a FirmwareInventory keyword scan.
 
 **5. Gen11+ Storage controllers are in a sub-collection, not inline**
 - Path: `Storage/{id}/Controllers/` (NOT inline `StorageControllers[]` — empty on Gen11+).
@@ -99,91 +111,63 @@ proliant com get servers  (planned)
 - `get_component_repository()` and `get_task_queue()` expand each stub via individual GETs.
 
 **7. UpdatableBy in task queue must be `["Uefi"]` for BIOS/components — NOT `["Bmc"]`**
-- `["Bmc"]` task returns `SystemResetRequired` — BIOS ROM is NOT flashed.
-- `["Uefi"]` task: UEFI applies the flash during next POST — this actually works.
-- Passing `["Bmc", "RuntimeAgent", "Uefi"]` on iLO 7 splits into two subtasks; the OS_task never fires without SUM agent in OS.
-- Rule in `add_to_task_queue()`: iLO filenames → `["Bmc"]`; everything else → `["Uefi"]`.
+- `["Bmc"]` task returns `SystemResetRequired` and does not flash the ROM.
+- `["Bmc", "RuntimeAgent", "Uefi"]` on iLO 7 splits into subtasks that never complete without an
+  OS agent. Rule in `add_to_task_queue()`: iLO filenames → `["Bmc"]`; everything else → `["Uefi"]`.
 
 **8. iLO 7 never marks UEFI tasks Complete after POST flash — stale Pending tasks remain**
-- After UEFI flashes a component during POST, the iLO 7 task stays "Pending" forever.
-- Do NOT treat stale Pending task as failure — always check actual version from FirmwareInventory.
-- `_run_fw_upgrade()` auto-clears all Pending/Complete tasks after post-reboot verification.
+- Do NOT treat a stale Pending task as failure — always check the actual version from
+  FirmwareInventory. `_run_fw_upgrade()` auto-clears Pending/Complete tasks post-verification.
 
 **9. iLO 6 HttpPushUri often returns empty 400 — iLO 7 works fine**
-- For Gen11 servers, use `stage_from_uri()` (AddFromUri) instead of direct push when possible.
-- iLO 7 HttpPushUri is reliable.
+- For Gen11 servers, prefer `stage_from_uri()` (AddFromUri) over direct push when possible.
 
-**10. BCM957414 NIC stepping chain — cannot jump from 214.x to 235.x directly**
-- Factory firmware 214.0.194.0 → requires stepping through 226.1.107.0 before reaching 235.1.164.14.
-- `ONFAILEDDEPENDENCY = OmitComponent` in SUM INI handles this gracefully.
-- PLDM advances ~1 step per run+reboot cycle.
+**10. Gen12+ `.json` sidecar is separate from `.fwpkg` (not embedded in ZIP)**
+- Gen11: everything bundled in one signed ZIP. Gen12+: ZIP contains **only** the firmware binary;
+  `{stem}.json` ships as a separate sidecar with no checksum.
+- Gen11 `payload.json` uses **snake_case keys** / `{lang, x_late}`; Gen12 sidecar uses **CamelCase**
+  keys / `{Lang, Value}`. Never assume the JSON is inside the fwpkg ZIP for Gen12.
+- `sdr.py::_fetch_software_ids()` and `proliant spp download` already fetch both files correctly.
 
-**11. BCM57414 OCP3 NIC (P10113-001) does NOT support PLDM OOB on iLO 6**
-- `dl380-gen11` BCM57414 OCP3 returns "No matching target found" — not in FirmwareInventory.
-- Requires in-band OS tools (`bnxtnvm`) for NIC firmware update.
-- PCIe variant of same chip supports PLDM OOB.
+**11. Autocomplete delegation: set `_ARGCOMPLETE=2` before dispatching sub-CLIs**
+- `register-python-argcomplete proliant` sets `_ARGCOMPLETE=1`. Top-level `cli.py` must set
+  `os.environ["_ARGCOMPLETE"] = "2"` before calling a sub-CLI's main, so the sub-parser sees
+  `["get","f"]` instead of `["ilo","get","f"]`.
 
-**12. Gen12+ `.json` sidecar is separate from `.fwpkg` (not embedded in ZIP)**
-- Gen11: everything bundled in one signed ZIP (`payload.json`, `.xml`, `readme.txt` + binary).
-- Gen12+: ZIP contains **only** the firmware binary. `{stem}.json` ships as a separate sidecar.
-- **Reason:** The `.fwpkg` is signed as a whole ZIP blob. Separating the metadata lets HPE update
-  supported-model lists, install notes, and release notes without re-signing the firmware binary.
-- SHA256 in SPP catalog covers only the `.fwpkg` — sidecar JSON has no checksum (fetch best-effort).
-- Gen11 `payload.json` uses **snake_case keys** and `{lang, x_late}` value entries.
-  Gen12 sidecar uses **CamelCase keys** and `{Lang, Value}` entries.
-- `sdr.py::_fetch_software_ids()` fetches sibling `.json` URL — already correct.
-- `proliant spp download` fetches both `{stem}.fwpkg` and `{stem}.json` for every package.
-- Never assume JSON is inside the fwpkg ZIP for Gen12.
+**12. COM firmware/servers APIs mix `/compute-ops/` (deprecated) and `/compute-ops-mgmt/` prefixes**
+- Firmware bundles: `/compute-ops-mgmt/v1beta2/firmware-bundles`.
+- Servers + inventory: `/compute-ops-mgmt/v1/servers[...]` — **v1 only**, the v1beta2 servers path
+  does not exist. `_servers_url()` in `com/inventory.py` builds v1 URLs explicitly.
 
-**13. Autocomplete delegation: set `_ARGCOMPLETE=2` before dispatching sub-CLIs**
-- `register-python-argcomplete proliant` sets `_ARGCOMPLETE=1`.
-- Top-level `cli.py` must set `os.environ["_ARGCOMPLETE"] = "2"` before calling ilo/com main.
-- With `=1`: argcomplete strips "proliant" only → sub-CLI parser gets `["ilo","get","f"]` (WRONG).
-- With `=2`: argcomplete strips "proliant ilo" → sub-CLI parser gets `["get","f"]` (CORRECT).
+**13. GLP API credential quota — `proliant com login` can silently store no GLP creds**
+- HPE caps API credentials per account (~7). If the quota is full, GLP credential creation fails
+  and every subsequent `compute-ops-mgmt` call 404s. `_cleanup_stale_proliant_credentials()` in
+  `com/login.py` removes old proliant-created credentials before creating a new one on each login
+  — keep this cleanup call in place when touching `login.py`.
 
-**14. COM firmware bundles API uses old `/compute-ops/` prefix**
-- Current working path: `/compute-ops/v1beta2/firmware-bundles`
-- `/compute-ops` deprecated April 2025 → should migrate to `/compute-ops-mgmt`
-- COM servers API: `/compute-ops-mgmt/v1/servers` (v1, NOT v1beta2)
-- COM inventory API: `/compute-ops-mgmt/v1/servers/{id}/inventory` (v1 only — v1beta2 path does not exist)
+**14. COM FirmwareInventory has no UpdatableBy field**
+- COM `firmwareInventory` on server objects is a plain list `[{name, version, deviceContext}]` — no
+  `UpdatableBy`. Must be inferred via `classify_update_method()` in `ilo/inventory.py`.
 
-**15. GLP API credential quota — login silently fails to store GLP creds if quota is full**
-- On `proliant com login`, `create_glp_api_credential()` auto-creates a temp GLP credential and stores `glp_client_id`/`glp_client_secret` in `token.json`.
-- HPE caps the number of credentials per account (~7). If the quota is full, creation returns `{"message":"Maximum number of tokens created."}` and the code silently stores no GLP creds.
-- Without GLP creds, all `compute-ops-mgmt` API calls return 404 (user tokens lack workspace routing context).
-- `_cleanup_stale_proliant_credentials()` in `login.py` deletes old credentials before creating a new one. It cleans all known prefixes: `GLP-proliant-com-temp-*`, `GLP-hpecom-cli-temp-*`, `GLP-pcli-com-temp-*`.
-- If `proliant com reports gpu` (or any COM API) returns 404 after login, check `token.json` for `glp_client_id`. If missing, credential quota was full — run `proliant com login` again after manually clearing stale credentials.
+**15. `proliant com login --password` uses undocumented internal HPE GreenLake endpoints**
+- Only the API-client-secret flow is documented by HPE; interactive email/password login
+  reverse-engineers the GreenLake web UI's internal Okta IDX flow and can break without notice
+  on an HPE-side change. Full flow + recovery notes: `~/work/work-notes/notes-proliant-cli.md` →
+  "Okta IDX Login Flows".
 
-**16. COM FirmwareInventory has no UpdatableBy field**
-- COM `firmwareInventory` field on server objects is a plain list `[{name, version, deviceContext}]`.
-- No `UpdatableBy` exposed — must be inferred from component name + context patterns.
-- `classify_update_method()` in `ilo/inventory.py` contains the classification rules.
+**16. `Accept` header on IDX introspect/identify decides whether password login works at all**
+- `password_login()` MUST send `Accept: application/json` (`CLASSIC_HEADERS` in `com/login.py`) on
+  `idp/idx/introspect` and `idp/idx/identify`. `okta_verify_login()` keeps `IDX_HEADERS` (ion+json).
+- Sending `application/ion+json` there instead routes external accounts through `redirect-idp` →
+  MTLS certificate auth, and the password authenticator is never offered — login becomes
+  impossible even though the rest of the request looks identical. Do not change this header
+  without re-testing password login end-to-end.
 
-**17. `proliant com login --password` uses undocumented internal HPE GreenLake endpoints**
-- The HPE developer portal ONLY documents the API-client-secret flow (personal API client). The
-  interactive email/password login is NOT a published API — it replicates what the GreenLake web UI
-  does internally. HPE can change these endpoints without notice.
-- Key undocumented pieces:
-  - `GET common.cloud.hpe.com/settings.json` → runtime config (`authorityURL`, `oktaURL`, `orgApiGw`, `client_id`)
-  - `GET {orgApiGw}/internal-identity/v1alpha2/sso-resolve?login_hint={email}&track-id={id}` — "Pavo SSO broker": when `/as/authorization.oauth2` lands on the `/sso/continue?track-id=` React SPA (no stateToken), this endpoint resolves the user's IdP and returns an Okta authorize page containing the stateToken.
-  - Client ID `aquila-user-auth` (PingFederate layer) + `0oae329tm8xw7nwZE357` (auth.hpe.com layer)
-- If `proliant com login --password` breaks after an HPE update: check `settings.json` for URL changes,
-  the `sso-resolve` path version (`v1alpha2` may bump), and the `challenge-authenticator` remediation name.
-- Full flow documented in `~/work/work-notes/notes-proliant-cli.md` → "Okta IDX Login Flows".
-
-**17b. `Accept` header on IDX introspect/identify decides whether password login works at all**
-- `password_login()` MUST send `Accept: application/json` (`CLASSIC_HEADERS` in `com/login.py`) on the
-  `idp/idx/introspect` and `idp/idx/identify` calls. `okta_verify_login()` keeps `IDX_HEADERS` (ion+json).
-- With `Accept: application/ion+json; okta-version=1.0.0` (OIE IDX v1), `auth.hpe.com` routes external
-  (non-`@hpe.com`) accounts through `redirect-idp` → `hpe-greenlake-hub.mtls.okta.com/sso/idps/MTLS`
-  (Certificate-based auth) — the password authenticator is NEVER offered, so CLI login is impossible.
-- With `Accept: application/json` (classic), identify returns `authenticators.value=[password]` +
-  `challenge-authenticator` href directly → password login works. Same stateToken/okta_base/payload —
-  ONLY the header differs, yet it flips the entire Okta sign-in policy.
-- Wrong password → HTTP 401 with `errors.E0000004` (or `E0000207`) → raise clean "Incorrect password".
-- This matches `HPECOMCmdlets`, which sets `-ContentType "application/json"` on all IDX calls.
-- DEBUG LESSON: when two flows produce identical-looking parsed JSON but diverge in behavior, diff the
-  full wire-level HTTP **request including headers** — not just the visible state/payload.
+**17. Inventory.ini parse errors must never raise a raw traceback**
+- All three parse sites (`ilo/config.py::load_hosts()`, `oneview/config.py::list_oneview_appliances()`,
+  `setup/wizard.py::_load_ini()`) delegate to `common/inventory_errors.py::format_inventory_parse_error()`
+  for a friendly `ValueError` message linking to `sample-inventory.ini`. Any new parse site must use
+  the same helper instead of calling `configparser` directly.
 
 ---
 
@@ -262,7 +246,7 @@ After iLO update, wait ~90s for iLO restart before continuing.
 | GLP global | `global.api.greenlake.hpe.com` | Bearer (GLP token) |
 | ui-doorway | `aquila-user-api.common.cloud.hpe.com` | Bearer + ccs-session cookie |
 
-Token storage: `~/.config/hpecom/token.json`
+Token storage: `~/.config/proliant-cli/com/token.json`
 
 ---
 
@@ -299,7 +283,7 @@ Token storage: `~/.config/hpecom/token.json`
 ## Coding conventions
 
 - Navigate URIs from Redfish root helpers (`get_system_uri`, `get_chassis_uri`) — never hardcode paths
-- Always run `pytest tests/ -q` before committing (40 tests, all must pass)
+- Always run `pytest tests/ -q` before committing — all tests must pass
 - Use `--dry-run` when testing upgrade paths against live servers
 - httpx timeout: connect=10s, read=60s
 

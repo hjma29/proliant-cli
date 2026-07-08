@@ -68,6 +68,3 @@ extra:
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/hjma29/proliant-cli
-
-copyright: >
-  Built with <a href="https://github.com/features/copilot">GitHub Copilot</a>.

@@ -12,9 +12,10 @@ browse **Service Pack for ProLiant (SPP)** contents — no Python or GUI
 required.
 
 !!! warning "Disclaimer"
-    This is a side project, not affiliated with or supported by HPE. Great for
-    exploring and gathering information; exercise the usual caution with any
-    change operations.
+    This is a side project, not affiliated with or supported by HPE. Code in
+    this repository was written with GitHub Copilot as an AI pair programmer.
+    Great for exploring and gathering information; exercise the usual caution
+    with any change operations.
 
 ## See it in action
 

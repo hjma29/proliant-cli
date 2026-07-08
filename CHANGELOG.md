@@ -7,7 +7,10 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 ## v1.0.26 — 2026-07-10
 
 ### New Features
-- `proliant com servers describe`: for OneView-managed servers, now shows a "Server Profile" panel (Status, Name, State, Serial Number (virtual), UUID (virtual)) plus a Connections table (ID, Name, Type, MAC/WWPN) — matching the GreenLake GUI's server detail page. COM itself doesn't expose profile connections, so this connects directly to the bridging OneView appliance using its inventory.ini credentials; silently omitted if no local OneView appliance is configured, unreachable, or the profile can't be matched.
+- `proliant com servers describe`: for OneView-managed servers, now shows a "Server Profile" panel (Status, Name, State, Serial Number (virtual), UUID (virtual)) plus a Connections table (ID, Name, Type, MAC/WWPN) — matching the GreenLake GUI's server detail page. COM itself doesn't expose profile connections, so this connects directly to the bridging OneView appliance using its inventory.ini credentials; silently omitted if no local OneView appliance is configured, unreachable, or no profile is assigned to the hardware. Matched by the server's hardware serial number (not COM's `oneview.name` field, which is actually the hardware's bay label, e.g. "MXQ713060B, bay 5", not the profile's own name, e.g. "HyperV-04" — matching by that field would silently find nothing).
+
+### Bug Fixes
+- Fixed a Windows-only crash (`OSError: [Errno 22] Invalid argument`) that could happen printing a sufficiently large table on a "legacy" console with no virtual-terminal support — Rich's fallback write path has no output-size guard. Startup now force-enables VT/ANSI processing on the console so Rich always takes its safe, chunked write path.
 
 ---
 

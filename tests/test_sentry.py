@@ -44,6 +44,24 @@ def test_sentry_keeps_and_scrubs_unexpected_bugs():
     assert event["exception"]["values"][0]["value"] == "failed on <ip> with password=<redacted>"
 
 
+def test_enable_windows_vt_mode_noop_without_real_console(monkeypatch):
+    """Regression test for a real Sentry-reported crash (PROLIANT-CLI-6).
+
+    On a "legacy" Windows console (no virtual-terminal support), Rich writes
+    styled table segments straight to stdout via the raw Win32 Console API
+    with no size guard, which can raise ``OSError: [Errno 22] Invalid
+    argument`` for a large enough table. ``_enable_windows_vt_mode()`` forces
+    VT mode on at startup so Rich always takes its chunk-safe ANSI write path
+    instead. It must never raise, including in the common case where
+    stdout/stderr aren't attached to a real console (piped/redirected output,
+    CI, non-interactive shells) and ``GetConsoleMode`` simply fails.
+    """
+    from proliant.cli import _enable_windows_vt_mode
+
+    # Should be a silent no-op everywhere it can't act, and never raise.
+    _enable_windows_vt_mode()
+
+
 def test_main_can_run_multiple_times_in_one_process_without_io_error(monkeypatch, capsys):
     """Regression test for a real Sentry-reported crash.
 

@@ -1147,6 +1147,47 @@ def _dispatch_setting(args: list[str]) -> None:
     setting_main()
 
 
+def _enable_windows_vt_mode() -> None:
+    """Enable ANSI/VT100 escape processing on the console (Windows only).
+
+    Rich auto-detects "legacy Windows" consoles (no virtual-terminal support)
+    and, for those, writes styled segments straight to stdout/stderr via the
+    raw Win32 Console API with no size guard (rich._win32_console.
+    LegacyWindowsTerm.write_text just does ``file.write(text)``). A wide
+    table with enough rows can then trip the long-standing Windows console
+    bug where a single large write raises OSError: [Errno 22] Invalid
+    argument (cpython gh-82052 / bpo-37871). Rich's *modern* ANSI write path
+    already chunks output to avoid this — it's only the legacy fallback that
+    doesn't — so forcing VT mode on here, once, at startup keeps every
+    later Console.print() on the safe path. Real crash: Sentry PROLIANT-CLI-6.
+
+    Best-effort: silently no-ops if stdout/stderr aren't attached to a real
+    console (piped/redirected output, CI, non-interactive shells).
+    """
+    import ctypes
+
+    STD_OUTPUT_HANDLE = -11
+    STD_ERROR_HANDLE = -12
+    ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+
+    try:
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+    except (AttributeError, OSError):
+        return
+
+    for std_handle in (STD_OUTPUT_HANDLE, STD_ERROR_HANDLE):
+        try:
+            handle = kernel32.GetStdHandle(std_handle)
+            if not handle or handle == -1:
+                continue
+            mode = ctypes.c_uint32()
+            if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+                continue  # not a real console handle (piped/redirected) — nothing to do
+            kernel32.SetConsoleMode(handle, mode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING)
+        except OSError:
+            pass
+
+
 def main(argv: list[str] | None = None) -> None:
     # On Windows, stdout/stderr may default to CP1252 when piped, which can't
     # encode Unicode chars used in Rich tables (✓, —, …).  Reconfigure to
@@ -1162,6 +1203,7 @@ def main(argv: list[str] | None = None) -> None:
                 _stream.reconfigure(encoding="utf-8", errors="replace")
             except (AttributeError, ValueError):
                 pass
+        _enable_windows_vt_mode()
 
     _init_sentry()
     _windows_first_run_check()

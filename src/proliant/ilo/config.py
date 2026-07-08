@@ -113,7 +113,15 @@ def load_hosts(name: str | None = None) -> list[dict]:
             f"  Check {HOSTS_FILE}"
         ) from exc
 
-    default_user = cfg.get("defaults", "username", fallback="")
+    # "Administrator" matches the fallback 'proliant setup' itself assumes
+    # (see wizard.py::_effective_username) and what it silently relies on: an
+    # entry's username is only ever written to disk when it differs from this
+    # same default, so a fresh inventory.ini with no [defaults] section at all
+    # (the common case -- nothing ever writes one) must resolve missing
+    # usernames to "Administrator" too, or every all-default-username entry
+    # sends an empty username and fails auth despite the wizard reporting
+    # "Reachable" moments earlier (it uses the same "Administrator" fallback).
+    default_user = cfg.get("defaults", "username", fallback="Administrator")
     default_pass = cfg.get("defaults", "password", fallback="")
 
     hosts: list[dict] = []

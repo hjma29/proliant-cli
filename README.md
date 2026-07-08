@@ -34,6 +34,10 @@ folder to your PATH, and creates an Add/Remove Programs entry.
 
 ![proliant demo](docs/assets/demo.svg)
 
+## Video walkthrough
+
+![Video walkthrough](docs/assets/walkthrough.gif)
+
 Full docs with per-page screenshots and videos:
 [hjma29.github.io/proliant-cli](https://hjma29.github.io/proliant-cli/)
 

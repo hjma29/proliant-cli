@@ -73,14 +73,7 @@ details.
 
 ## Video walkthrough
 
-<!--
-  HOW TO ADD A VIDEO (link a thumbnail image to the video URL):
-  1. Save a thumbnail into  docs/assets/  (e.g. getting-started-thumb.png)
-  2. Replace the line below with something like:
-     [![Watch: install & first server](assets/getting-started-thumb.png)](https://youtu.be/YOUR_VIDEO_ID)
--->
-
-_Coming soon._
+![Video walkthrough](assets/walkthrough.gif)
 
 ---
 

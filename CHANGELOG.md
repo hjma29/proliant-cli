@@ -4,6 +4,13 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ---
 
+## v1.0.34 — 2026-07-09
+
+### New Features
+- `proliant oneview mac describe` now supports `--vlan` and `--network-name` filters so MAC traces can be narrowed to specific VLANs or network-name matches.
+
+---
+
 ## v1.0.33 — 2026-07-08
 
 ### Enhancements

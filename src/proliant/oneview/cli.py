@@ -1180,18 +1180,56 @@ async def _async_describe_network(network_name: str) -> None:
     get_console().print(render_network_map_ascii(nm, color=True), markup=True, highlight=False)
 
 
-async def _async_describe_mac(mac: str) -> None:
+def _filter_mac_maps(
+    maps: list[dict],
+    vlan: int = 0,
+    network_name: str = "",
+) -> list[dict]:
+    """Filter MAC-trace maps by VLAN and/or network-name substring."""
+    filtered = maps
+    if vlan:
+        filtered = [
+            m for m in filtered
+            if (m.get("network") or {}).get("vlan") == vlan
+        ]
+    if network_name:
+        needle = network_name.lower()
+        filtered = [
+            m for m in filtered
+            if needle in ((m.get("network") or {}).get("name") or "").lower()
+        ]
+    return filtered
+
+
+async def _async_describe_mac(mac: str, vlan: int = 0, network_name: str = "") -> None:
     from proliant.oneview.topology import trace_mac, render_network_map_ascii
 
     async with _load_client() as client:
-        with get_console().status(f"[dim]Tracing MAC {mac} across the fabric…[/dim]"):
+        filter_desc = []
+        if vlan:
+            filter_desc.append(f"vlan={vlan}")
+        if network_name:
+            filter_desc.append(f"network={network_name}")
+        suffix = f" ({', '.join(filter_desc)})" if filter_desc else ""
+        with get_console().status(f"[dim]Tracing MAC {mac}{suffix} across the fabric…[/dim]"):
             maps = await trace_mac(client, mac)
+    maps = _filter_mac_maps(maps, vlan=vlan, network_name=network_name)
 
     if get_output_mode() == OutputMode.JSON:
         print_json(maps)
         return
     if not maps:
-        get_console().print(f"[yellow]MAC {mac} not found in any forwarding table.[/yellow]")
+        if vlan or network_name:
+            criteria = []
+            if vlan:
+                criteria.append(f"vlan={vlan}")
+            if network_name:
+                criteria.append(f"network={network_name}")
+            get_console().print(
+                f"[yellow]MAC {mac} had no trace paths matching {', '.join(criteria)}.[/yellow]"
+            )
+        else:
+            get_console().print(f"[yellow]MAC {mac} not found in any forwarding table.[/yellow]")
         return
     for i, nm in enumerate(maps):
         if i:
@@ -1204,7 +1242,11 @@ async def _cmd_network_describe(args: argparse.Namespace) -> None:
 
 
 async def _cmd_mac_describe(args: argparse.Namespace) -> None:
-    await _async_describe_mac(args.address)
+    await _async_describe_mac(
+        args.address,
+        vlan=args.vlan or 0,
+        network_name=getattr(args, "network_name", "") or "",
+    )
 
 
 # ── proliant oneview enclosures list ─────────────────────────────────────────
@@ -2120,6 +2162,8 @@ examples:
   proliant oneview mac list --address 00:11:22:33:44:55  MAC forwarding table by address
   proliant oneview mac list --vlan 100                   MAC forwarding table by VLAN
   proliant oneview mac describe 00:11:22:33:44:55        Trace a MAC end-to-end through the fabric
+  proliant oneview mac describe 00:11:22:33:44:55 --vlan 160
+  proliant oneview mac describe 00:11:22:33:44:55 --network-name VLAN-160
   proliant oneview enclosures list                       Physical enclosures
     proliant oneview enclosures describe Enclosure-01       Enclosure bay layout
   proliant oneview enclosure-groups list                 Enclosure groups
@@ -2255,6 +2299,12 @@ examples:
     mac_desc_address_arg = p_mac_desc.add_argument("address", metavar="MAC",
         help="MAC address to trace (e.g. 00:9C:02:73:33:6D)")
     mac_desc_address_arg.completer = suppress_file_completion()
+    mac_desc_vlan_arg = p_mac_desc.add_argument("--vlan", "-v", metavar="VLAN", type=int,
+        help="Filter traced paths by VLAN ID (e.g. 100)")
+    mac_desc_vlan_arg.completer = suppress_file_completion()
+    arg_mac_desc_nn = p_mac_desc.add_argument("--network-name", "-n", metavar="NAME", dest="network_name",
+        help="Filter traced paths by network name substring (e.g. ACI-Tunnel-Net)")
+    arg_mac_desc_nn.completer = _oneview_network_name_completer
     p_mac_desc.set_defaults(func=_cmd_mac_describe)
 
     # ── enclosures ────────────────────────────────────────────────────────

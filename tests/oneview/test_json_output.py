@@ -119,6 +119,16 @@ class TestOneviewParserJson:
         args = parser.parse_args(["firmware", "bundles"])
         assert args.func is _cmd_firmware_bundles_list
 
+    def test_parser_mac_describe_accepts_network_filters(self):
+        from proliant.oneview.cli import _build_parser, _cmd_mac_describe
+        parser = _build_parser()
+        args = parser.parse_args([
+            "mac", "describe", "00:11:22:33:44:55", "--vlan", "160", "--network-name", "VLAN-160",
+        ])
+        assert args.func is _cmd_mac_describe
+        assert args.vlan == 160
+        assert args.network_name == "VLAN-160"
+
     def test_parser_firmware_repository_list_parses(self):
         from proliant.oneview.cli import _build_parser, _cmd_firmware_repository_list
         parser = _build_parser()
@@ -263,6 +273,53 @@ class TestOneviewMacDescribe:
         assert "┌" in captured.out
         assert "├── ▲ Upstream uplinks" not in captured.out
         assert "└── ▼ Downlink servers" not in captured.out
+
+    def test_mac_describe_filters_by_vlan_in_json_output(self, capsys):
+        from proliant.oneview import cli
+
+        mac_maps = [
+            {
+                **FAKE_MAC_MAP[0],
+                "network": {**FAKE_MAC_MAP[0]["network"], "name": "VLAN-160", "vlan": 160},
+            },
+            {
+                **FAKE_MAC_MAP[0],
+                "network": {**FAKE_MAC_MAP[0]["network"], "name": "VLAN-170", "vlan": 170},
+            },
+        ]
+        with patch("proliant.oneview.cli._load_client", return_value=_make_mock_client()), \
+             patch("proliant.oneview.topology.trace_mac",
+                   new_callable=AsyncMock, return_value=mac_maps):
+            cli.main(["--json", "mac", "describe", "22:00:A3:E0:00:1E", "--vlan", "170"])
+
+        captured = capsys.readouterr()
+        result = json.loads(captured.out)
+        assert len(result) == 1
+        assert result[0]["network"]["vlan"] == 170
+        assert result[0]["network"]["name"] == "VLAN-170"
+
+    def test_mac_describe_filters_by_network_name_in_json_output(self, capsys):
+        from proliant.oneview import cli
+
+        mac_maps = [
+            {
+                **FAKE_MAC_MAP[0],
+                "network": {**FAKE_MAC_MAP[0]["network"], "name": "VLAN-160", "vlan": 160},
+            },
+            {
+                **FAKE_MAC_MAP[0],
+                "network": {**FAKE_MAC_MAP[0]["network"], "name": "ACI-Tunnel-Net", "vlan": 4094},
+            },
+        ]
+        with patch("proliant.oneview.cli._load_client", return_value=_make_mock_client()), \
+             patch("proliant.oneview.topology.trace_mac",
+                   new_callable=AsyncMock, return_value=mac_maps):
+            cli.main(["--json", "mac", "describe", "22:00:A3:E0:00:1E", "--network-name", "tunnel"])
+
+        captured = capsys.readouterr()
+        result = json.loads(captured.out)
+        assert len(result) == 1
+        assert result[0]["network"]["name"] == "ACI-Tunnel-Net"
 
 
 class TestOneviewMacList:

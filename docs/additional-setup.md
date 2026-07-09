@@ -76,10 +76,3 @@ switching it.
   ![proliant setup guided menu](assets/setup-menu.png)
 -->
 
-## Video walkthrough
-
-<!--
-  [![Watch: local inventory file setup walkthrough](assets/setup-demo-thumb.png)](https://youtu.be/YOUR_VIDEO_ID)
--->
-
-_Coming soon._

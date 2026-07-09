@@ -38,10 +38,3 @@ proliant oneview mac describe <mac>
   ![OneView fabric map with MAC tracing](assets/oneview-fabric-map.png)
 -->
 
-## Video walkthrough
-
-<!--
-  [![Watch: OneView upgrade readiness walkthrough](assets/oneview-demo-thumb.png)](https://youtu.be/YOUR_VIDEO_ID)
--->
-
-_Coming soon._

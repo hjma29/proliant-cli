@@ -28,10 +28,3 @@ proliant ilo servers describe <host>              # Full server details
   ![Firmware inventory across the fleet](assets/ilo-firmware-table.png)
 -->
 
-## Video walkthrough
-
-<!--
-  [![Watch: iLO firmware upgrade walkthrough](assets/ilo-demo-thumb.png)](https://youtu.be/YOUR_VIDEO_ID)
--->
-
-_Coming soon._

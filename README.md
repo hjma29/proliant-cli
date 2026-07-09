@@ -20,16 +20,17 @@ Whether you manage a handful of bare-metal servers or a large fleet across multi
 
 ### Windows
 
-Run the one-liner in PowerShell — it downloads and launches the GUI installer
-(accept the single UAC prompt):
+Download `setup.exe`:
+
+[![Download for Windows](https://img.shields.io/badge/Download-Windows-0078D6?style=for-the-badge&logo=windows)](https://github.com/hjma29/proliant-cli/releases/latest/download/proliant-cli-windows-setup.exe)
+
+
+Or run the one-liner installation script in Windows Terminal or PowerShell — it downloads and launches the GUI installer.
 
 ```powershell
 Invoke-RestMethod https://raw.githubusercontent.com/hjma29/proliant-cli/main/install.ps1 | Invoke-Expression
 ```
 
-Or grab `proliant-cli-windows-setup.exe` directly:
-
-[![Download for Windows](https://img.shields.io/badge/Download-Windows-0078D6?style=for-the-badge&logo=windows)](https://github.com/hjma29/proliant-cli/releases/latest/download/proliant-cli-windows-setup.exe)
 
 ### Linux / macOS
 
@@ -38,7 +39,7 @@ sh -c "$(curl -fsSL https://raw.githubusercontent.com/hjma29/proliant-cli/main/i
 ```
 
 
-## Video walkthrough for Windows .exe Download Wizard Installation
+## Video Walkthrough for Windows `setup.exe` Wizard Installation
 
 ![Video walkthrough](docs/assets/walkthrough.gif)
 
@@ -101,7 +102,7 @@ proliant oneview mac describe <mac>
 ```
 
 
-### SPP (Service Pack for ProLiant)
+### SPP
 
 ```bash
 proliant spp list                                
@@ -121,5 +122,6 @@ proliant version                                 # Show installed version; offer
 
 
 
-More information can be found at 
-[hjma29.github.io/proliant-cli](https://hjma29.github.io/proliant-cli/)
+## Full documentation
+
+[![View full docs](https://img.shields.io/badge/View%20full%20docs-hjma29.github.io%2Fproliant--cli-1f6feb?style=for-the-badge&logo=materialformkdocs&logoColor=white)](https://hjma29.github.io/proliant-cli/)

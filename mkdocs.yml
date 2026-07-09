@@ -12,7 +12,7 @@ extra_css:
   - stylesheets/extra.css
 
 nav:
-  - Getting Started: index.md
+  - Introduction: index.md
   - Installation: installation.md
   - iLO: ilo.md
   - COM: com.md

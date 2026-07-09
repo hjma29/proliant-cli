@@ -38,12 +38,6 @@ class TestParserWiring:
         assert args.func is _cmd_appliances_use
         assert args.name == "datacenter-b"
 
-    def test_parser_appliance_alias_works(self):
-        from proliant.oneview.cli import _build_parser, _cmd_appliances_list
-        parser = _build_parser()
-        args = parser.parse_args(["appliance", "list"])
-        assert args.func is _cmd_appliances_list
-
 
 class TestAppliancesList:
     def test_list_marks_active_appliance(self, capsys):

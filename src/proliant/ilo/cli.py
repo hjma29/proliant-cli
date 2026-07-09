@@ -577,8 +577,8 @@ def _build_parser() -> argparse.ArgumentParser:
     reports_p = subparsers.add_parser("reports", help="Fleet hardware reports")
     reports_sub = reports_p.add_subparsers(dest="what", metavar="REPORT")
     reports_sub.required = True
-    for report_name, aliases in (("memory", ["mem"]), ("cpu", []), ("gpu", [])):
-        report_p = reports_sub.add_parser(report_name, aliases=aliases, help=f"{report_name.title()} fleet report")
+    for report_name in ("memory", "cpu", "gpu"):
+        report_p = reports_sub.add_parser(report_name, help=f"{report_name.title()} fleet report")
         report_action = report_p.add_subparsers(dest="report_action", metavar="ACTION")
         report_action.required = True
         report_list = report_action.add_parser("list", help=f"List the {report_name} fleet report")

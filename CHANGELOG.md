@@ -4,6 +4,13 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ---
 
+## v1.0.35 — 2026-07-09
+
+### Enhancements
+- `proliant oneview` and `proliant ilo`: tab completion and `--help` now list each command only once. Removed the duplicate singular/plural and short-form aliases (e.g. `server`, `repo`, `repositories`, `mem`, `check`, `appliance`) that cluttered the completion menu — use the canonical command names shown in `--help`.
+
+---
+
 ## v1.0.34 — 2026-07-09
 
 ### New Features

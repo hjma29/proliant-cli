@@ -2186,7 +2186,7 @@ examples:
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
     sub.required = True
 
-    p_servers = sub.add_parser("servers", aliases=["server"], help="List managed servers")
+    p_servers = sub.add_parser("servers", help="List managed servers")
     s_servers = p_servers.add_subparsers(dest="what", metavar="ACTION")
     s_servers.required = True
     p_srv = s_servers.add_parser("list", help="List all managed servers")
@@ -2208,11 +2208,11 @@ examples:
     s_firmware = p_firmware.add_subparsers(dest="what", metavar="ACTION")
     s_firmware.required = True
 
-    p_fw_bundles = s_firmware.add_parser("bundles", aliases=["bundle"],
+    p_fw_bundles = s_firmware.add_parser("bundles",
         help="List registered firmware bundles (SPP/SSP)")
     p_fw_bundles.set_defaults(func=_cmd_firmware_bundles_list)
 
-    p_fw_repo = s_firmware.add_parser("repository", aliases=["repositories", "repo"],
+    p_fw_repo = s_firmware.add_parser("repository",
         help="List firmware repositories (Internal + external)")
     p_fw_repo.set_defaults(func=_cmd_firmware_repository_list)
 
@@ -2220,7 +2220,7 @@ examples:
         help="Firmware compliance vs newer candidate bundles (per server)")
     p_fw_compliance.set_defaults(func=_cmd_firmware_compliance_list)
 
-    p_networks = sub.add_parser("networks", aliases=["network"], help="List or describe ethernet networks")
+    p_networks = sub.add_parser("networks", help="List or describe ethernet networks")
     s_networks = p_networks.add_subparsers(dest="what", metavar="ACTION")
     s_networks.required = True
     p_net = s_networks.add_parser("list", help="List all ethernet networks")
@@ -2232,7 +2232,7 @@ examples:
     arg_net_name.completer = _oneview_network_name_completer
     p_net_desc.set_defaults(func=_cmd_network_describe)
 
-    p_networksets = sub.add_parser("networksets", aliases=["networkset"], help="List or describe network sets")
+    p_networksets = sub.add_parser("networksets", help="List or describe network sets")
     s_networksets = p_networksets.add_subparsers(dest="what", metavar="ACTION")
     s_networksets.required = True
     p_ns_list = s_networksets.add_parser("list", help="List all network sets")
@@ -2242,7 +2242,7 @@ examples:
     p_ns_desc_arg.completer = _oneview_networkset_name_completer
     p_ns_desc.set_defaults(func=_cmd_describe, resource="networkset")
 
-    p_uplinksets = sub.add_parser("uplinksets", aliases=["uplinkset"], help="List or describe uplink sets")
+    p_uplinksets = sub.add_parser("uplinksets", help="List or describe uplink sets")
     s_uplinksets = p_uplinksets.add_subparsers(dest="what", metavar="ACTION")
     s_uplinksets.required = True
     p_ul_list = s_uplinksets.add_parser("list", help="List all uplink sets")
@@ -2252,7 +2252,7 @@ examples:
     p_ul_desc_name.completer = _oneview_uplinkset_name_completer
     p_ul_desc.set_defaults(func=_cmd_describe, resource="uplinkset")
 
-    p_profiles = sub.add_parser("server-profiles", aliases=["server-profile"], help="List or describe server profiles")
+    p_profiles = sub.add_parser("server-profiles", help="List or describe server profiles")
     s_profiles = p_profiles.add_subparsers(dest="what", metavar="ACTION")
     s_profiles.required = True
     p_sp_list = s_profiles.add_parser("list", help="List all server profiles")
@@ -2273,7 +2273,7 @@ examples:
     s_lig.required = True
     s_lig.add_parser("list", help="List all logical interconnect groups").set_defaults(func=_cmd_lig_list)
 
-    p_ics = sub.add_parser("interconnects", aliases=["interconnect"], help="List interconnect hardware")
+    p_ics = sub.add_parser("interconnects", help="List interconnect hardware")
     s_ics = p_ics.add_subparsers(dest="what", metavar="ACTION")
     s_ics.required = True
     s_ics.add_parser("list", help="List all interconnect hardware").set_defaults(func=_cmd_interconnects_list)
@@ -2308,7 +2308,7 @@ examples:
     p_mac_desc.set_defaults(func=_cmd_mac_describe)
 
     # ── enclosures ────────────────────────────────────────────────────────
-    p_encs = sub.add_parser("enclosures", aliases=["enclosure"], help="List physical enclosures")
+    p_encs = sub.add_parser("enclosures", help="List physical enclosures")
     s_encs = p_encs.add_subparsers(dest="what", metavar="ACTION")
     s_encs.required = True
     s_encs.add_parser("list", help="List all enclosures").set_defaults(func=_cmd_enclosures_list)
@@ -2317,12 +2317,12 @@ examples:
     p_enc_desc_name.completer = _oneview_enclosure_name_completer
     p_enc_desc.set_defaults(func=_cmd_enclosures_describe)
 
-    p_egs = sub.add_parser("enclosure-groups", aliases=["enclosure-group"], help="List enclosure groups")
+    p_egs = sub.add_parser("enclosure-groups", help="List enclosure groups")
     s_egs = p_egs.add_subparsers(dest="what", metavar="ACTION")
     s_egs.required = True
     s_egs.add_parser("list", help="List all enclosure groups").set_defaults(func=_cmd_enclosure_groups_list)
 
-    p_les = sub.add_parser("logical-enclosures", aliases=["logical-enclosure"], help="List logical enclosures")
+    p_les = sub.add_parser("logical-enclosures", help="List logical enclosures")
     s_les = p_les.add_subparsers(dest="what", metavar="ACTION")
     s_les.required = True
     s_les.add_parser("list", help="List all logical enclosures").set_defaults(func=_cmd_logical_enclosures_list)
@@ -2331,14 +2331,14 @@ examples:
     p_reports = sub.add_parser("reports", help="Fleet hardware reports")
     s_reports = p_reports.add_subparsers(dest="what", metavar="REPORT")
     s_reports.required = True
-    p_rep_mem = s_reports.add_parser("memory", aliases=["mem"], help="Memory DIMM part-number breakdown")
+    p_rep_mem = s_reports.add_parser("memory", help="Memory DIMM part-number breakdown")
     p_rep_mem.set_defaults(func=_cmd_report_memory)
 
     # ── upgrade (readiness + disk cleanup) ────────────────────────────────
     p_upgrade = sub.add_parser("upgrade", help="Appliance upgrade readiness & disk cleanup")
     s_upgrade = p_upgrade.add_subparsers(dest="what", metavar="ACTION")
     s_upgrade.required = True
-    p_up_ready = s_upgrade.add_parser("readiness", aliases=["check"],
+    p_up_ready = s_upgrade.add_parser("readiness",
         help="Read-only pre-upgrade readiness report (version, health, path)")
     p_up_ready.set_defaults(func=_cmd_upgrade_readiness)
     p_up_clean = s_upgrade.add_parser("cleanup",
@@ -2352,7 +2352,7 @@ examples:
     # section with 'type = oneview') -- these commands mirror
     # 'proliant com workspaces list/use' so you can see and switch which one
     # every other 'proliant oneview' command targets.
-    p_appliances = sub.add_parser("appliances", aliases=["appliance"], help="List or switch OneView appliances")
+    p_appliances = sub.add_parser("appliances", help="List or switch OneView appliances")
     s_appliances = p_appliances.add_subparsers(dest="what", metavar="ACTION")
     s_appliances.required = True
     p_app_list = s_appliances.add_parser("list", help="List configured appliances (* = active)")

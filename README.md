@@ -27,8 +27,9 @@ Run the one-liner in PowerShell — it downloads and launches the GUI installer
 Invoke-RestMethod https://raw.githubusercontent.com/hjma29/proliant-cli/main/install.ps1 | Invoke-Expression
 ```
 
-Or download `proliant-cli-windows-setup.exe` from the
-[latest release](https://github.com/hjma29/proliant-cli/releases/latest) and run it directly.
+Or grab `proliant-cli-windows-setup.exe` directly:
+
+[![Download for Windows](https://img.shields.io/badge/Download-Windows-0078D6?style=for-the-badge&logo=windows)](https://github.com/hjma29/proliant-cli/releases/latest)
 
 ### Linux / macOS
 

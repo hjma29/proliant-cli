@@ -9,9 +9,7 @@ Whether you manage a handful of bare-metal servers or a large fleet across multi
 
 ## Screenshots
 
-![proliant demo](https://raw.githubusercontent.com/hjma29/proliant-cli/main/docs/assets/demo.gif)
-
-![proliant demo](https://raw.githubusercontent.com/hjma29/proliant-cli/main/docs/assets/demo.svg)
+![proliant demo](https://hjma29.github.io/proliant-cli/assets/demo.gif)
 
 ## Installation
 

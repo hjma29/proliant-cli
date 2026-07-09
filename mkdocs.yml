@@ -66,6 +66,7 @@ markdown_extensions:
 
 plugins:
   - search
+  - include-markdown
 
 extra:
   social:

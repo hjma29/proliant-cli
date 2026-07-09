@@ -5,43 +5,11 @@ description: Install proliant and connect it to your iLO, COM, or OneView enviro
 
 # Getting Started
 
-ProLiant CLI `proliant` is a cross-platform CLI for HPE ProLiant server environments. From a single
-terminal you can inspect server inventory and firmware across **iLO
-(Redfish)**, **Compute Ops Management (COM)**, and **Synergy OneView**, and
-browse **Service Pack for ProLiant (SPP)** contents.
-
-!!! warning "Disclaimer"
-    This is a side project, not affiliated with or supported by HPE. Code in
-    this repository was written with GitHub Copilot. Great for exploring and
-    gathering information; exercise the usual caution with any change
-    operations.
-
-## See it in action
-
-![proliant in action](assets/demo.gif)
-
-## Install
-
-=== "Windows"
-
-    Run the one-liner in PowerShell — it downloads and launches the GUI
-    installer:
-
-    ```powershell
-    Invoke-RestMethod https://raw.githubusercontent.com/hjma29/proliant-cli/main/install.ps1 | Invoke-Expression
-    ```
-
-    Or download `proliant-cli-windows-setup.exe` from the
-    [latest release](https://github.com/hjma29/proliant-cli/releases/latest)
-    and run it directly. It installs to `C:\Program Files\proliant-cli`, adds
-    that folder to your PATH, and creates an Add/Remove Programs entry.
-
-=== "Linux / macOS"
-
-    ```bash
-    sh -c "$(curl -fsSL https://raw.githubusercontent.com/hjma29/proliant-cli/main/install.sh)"
-    ```
-
+{%
+  include-markdown "../README.md"
+  start="<!--docs-sync:start-->"
+  end="<!--docs-sync:end-->"
+%}
 
 ```bash
 proliant --help

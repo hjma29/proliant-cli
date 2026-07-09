@@ -4,6 +4,13 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ---
 
+## v1.0.33 — 2026-07-08
+
+### Enhancements
+- GitHub Pages docs: added a dedicated Installation page with the full terminal walkthrough (moved out of Getting Started so that page stays focused), fixed a broken internal link to the inventory setup section, and refreshed the demo GIF/screenshots on both README and the docs site.
+
+---
+
 ## v1.0.32 — 2026-07-08
 
 ### New Features

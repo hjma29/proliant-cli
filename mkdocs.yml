@@ -13,6 +13,7 @@ extra_css:
 
 nav:
   - Getting Started: index.md
+  - Installation: installation.md
   - iLO: ilo.md
   - COM: com.md
   - OneView: oneview.md

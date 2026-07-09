@@ -29,7 +29,7 @@ Invoke-RestMethod https://raw.githubusercontent.com/hjma29/proliant-cli/main/ins
 
 Or grab `proliant-cli-windows-setup.exe` directly:
 
-[![Download for Windows](https://img.shields.io/badge/Download-Windows-0078D6?style=for-the-badge&logo=windows)](https://github.com/hjma29/proliant-cli/releases/latest)
+[![Download for Windows](https://img.shields.io/badge/Download-Windows-0078D6?style=for-the-badge&logo=windows)](https://github.com/hjma29/proliant-cli/releases/latest/download/proliant-cli-windows-setup.exe)
 
 ### Linux / macOS
 

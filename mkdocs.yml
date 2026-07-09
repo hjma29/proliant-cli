@@ -70,6 +70,7 @@ plugins:
   - include-markdown
 
 extra:
+  generator: false
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/hjma29/proliant-cli

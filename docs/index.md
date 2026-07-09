@@ -145,7 +145,7 @@ labuser@vm-ubuntu-413:~$ proliant oneview server-profiles list
   ocp-single-node          Enclosure-01, bay 6    Critical   Normal   —  
 ```
 
-## Video walkthrough for windows .exe Download Wizzard Installation
+## Video walkthrough for Windows .exe Download Wizard Installation
 
 ![Video walkthrough](assets/walkthrough.gif)
 

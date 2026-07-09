@@ -14,14 +14,6 @@ local inventory file with the server's iLO address and credentials; run
 ```bash
 proliant ilo servers list                        # List all configured hosts
 proliant ilo servers describe <host>              # Full server details
-proliant ilo firmware list                        # Firmware summary across all hosts
-proliant ilo firmware list <host>                  # Firmware for a specific host
-proliant ilo firmware list --fields bios,ilo,nic-fw
-proliant ilo nic list                             # NIC link state + MAC address
-proliant ilo storage list                         # Storage controllers + drives
-proliant ilo cpu list                              # CPU models + microcode
-proliant ilo memory list                           # DIMM details
-proliant ilo reports memory                        # Fleet memory report
 ```
 
 ## Screenshots

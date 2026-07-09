@@ -1,9 +1,9 @@
 ---
-title: Introduction
+title: Overview
 description: Install proliant and connect it to your iLO, COM, or OneView environment.
 ---
 
-# Introduction
+# Overview
 
 {%
   include-markdown "../README.md"

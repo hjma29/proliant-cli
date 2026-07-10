@@ -261,17 +261,6 @@ def print_nic_ilo_table(results: list[tuple[str, str | None, list]]) -> None:
         )
 
 
-def _print_raw_table(results: list[tuple[str, str | None, list]]) -> None:
-    for host_name, error, rows in sorted(results, key=lambda r: r[0]):
-        print(f"\n=== {host_name} ===")
-        if error:
-            print(f"ERROR: {error}")
-            continue
-        for uri, raw_json in rows:
-            print(f"\n--- {uri} ---")
-            print(raw_json)
-
-
 def print_disk_map_table(results: list[tuple[str, str | None, list]]) -> None:
     server_w = COL_SERVER_WIDTH
     vol_w = 52

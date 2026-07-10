@@ -34,19 +34,6 @@ def test_fetch_dispatch_all_callable():
         assert callable(fn), f"_FETCH_DISPATCH['{key}'] is not callable"
 
 
-def test_raw_dispatch_all_callable():
-    from proliant.ilo.cli import _RAW_DISPATCH
-    for key, fn in _RAW_DISPATCH.items():
-        assert callable(fn), f"_RAW_DISPATCH['{key}'] is not callable"
-
-
-def test_fetch_and_raw_dispatch_same_keys():
-    from proliant.ilo.cli import _FETCH_DISPATCH, _RAW_DISPATCH
-    assert set(_FETCH_DISPATCH) == set(_RAW_DISPATCH), (
-        "FETCH and RAW dispatch tables have different keys"
-    )
-
-
 # ---------------------------------------------------------------------------
 # Printer functions exist and are callable
 # ---------------------------------------------------------------------------
@@ -61,7 +48,6 @@ def test_all_printers_exist():
         "print_nic_ilo_table",
         "print_disk_map_table",
         "_print_component_table",
-        "_print_raw_table",
     ]
     for name in expected:
         fn = getattr(cli, name, None)
@@ -90,13 +76,6 @@ def test_parser_show_host_filter():
     parser = _build_parser()
     args = parser.parse_args(["nic-host", "list", "dl325-gen12"])
     assert args.host == "dl325-gen12"
-
-
-def test_parser_show_raw_flag():
-    from proliant.ilo.cli import _build_parser
-    parser = _build_parser()
-    args = parser.parse_args(["nic", "list", "--raw"])
-    assert args.raw is True
 
 
 def test_parser_upgrade_auto():

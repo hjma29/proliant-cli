@@ -7,7 +7,6 @@ Read-only async fetch functions for iLO Redfish inventory.
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 from typing import Any
 
@@ -268,22 +267,6 @@ async def fetch_disk_map(client: ILOClient) -> list[tuple[str, str]]:
     return found or _EMPTY
 
 
-async def fetch_disk_map_raw(client: ILOClient) -> list[tuple[str, str]]:
-    found = []
-    for storage in await _storage_members(client):
-        vol_uri = storage.get("Volumes", {}).get("@odata.id")
-        if vol_uri:
-            for vol_link in await _collection_members(client, vol_uri):
-                uri = vol_link.get("@odata.id")
-                if uri:
-                    found.append((uri, json.dumps(await client.get(uri), indent=2, default=str)))
-        for drive_link in storage.get("Drives", []):
-            uri = drive_link.get("@odata.id")
-            if uri:
-                found.append((uri, json.dumps(await client.get(uri), indent=2, default=str)))
-    return found or _EMPTY
-
-
 async def fetch_cpu_info(client: ILOClient) -> list[tuple[str, str]]:
     system = await client.get(await client.get_system_uri())
     proc_uri = system.get("Processors", {}).get("@odata.id")
@@ -510,49 +493,6 @@ async def fetch_nic_status(client: ILOClient) -> list[tuple[str, str]]:
     return found or _EMPTY
 
 
-async def _fetch_members_raw(client: ILOClient, collection_uri: str) -> list[tuple[str, str]]:
-    rows = []
-    for item in await _collection_members(client, collection_uri):
-        uri = item.get("@odata.id")
-        if uri:
-            rows.append((uri, json.dumps(await client.get(uri), indent=2, default=str)))
-    return rows or _EMPTY
-
-
-async def fetch_nic_raw(client: ILOClient) -> list[tuple[str, str]]:
-    system = await client.get(await client.get_system_uri())
-    uri = system.get("EthernetInterfaces", {}).get("@odata.id")
-    return await _fetch_members_raw(client, uri) if uri else _EMPTY
-
-
-async def fetch_network_raw(client: ILOClient) -> list[tuple[str, str]]:
-    chassis = await client.get(await client.get_chassis_uri())
-    uri = chassis.get("NetworkAdapters", {}).get("@odata.id")
-    return await _fetch_members_raw(client, uri) if uri else _EMPTY
-
-
-async def fetch_storage_raw(client: ILOClient) -> list[tuple[str, str]]:
-    system = await client.get(await client.get_system_uri())
-    uri = system.get("Storage", {}).get("@odata.id")
-    return await _fetch_members_raw(client, uri) if uri else _EMPTY
-
-
-async def fetch_cpu_raw(client: ILOClient) -> list[tuple[str, str]]:
-    system = await client.get(await client.get_system_uri())
-    uri = system.get("Processors", {}).get("@odata.id")
-    return await _fetch_members_raw(client, uri) if uri else _EMPTY
-
-
-async def fetch_memory_raw(client: ILOClient) -> list[tuple[str, str]]:
-    system = await client.get(await client.get_system_uri())
-    uri = system.get("Memory", {}).get("@odata.id")
-    return await _fetch_members_raw(client, uri) if uri else _EMPTY
-
-
-async def fetch_firmware_raw(client: ILOClient) -> list[tuple[str, str]]:
-    return await _fetch_members_raw(client, await client.get_firmware_inventory_uri())
-
-
 async def fetch_license_info(client: ILOClient) -> list[tuple[str, str]]:
     mgr = await client.get(await client.get_manager_uri())
     lic = mgr.get("Oem", {}).get("Hpe", {}).get("License", {})
@@ -693,12 +633,6 @@ async def fetch_firmware_update_method(client: ILOClient) -> list[dict]:
             "Context": ctx,
         })
     return result
-
-
-async def fetch_com_raw(client: ILOClient) -> list[tuple[str, str]]:
-    manager_uri = await client.get_manager_uri()
-    manager = await client.get(manager_uri)
-    return [(manager_uri, json.dumps(manager, indent=2, default=str))]
 
 
 async def fetch_com_status(client: ILOClient) -> list[tuple[str, str]]:
@@ -896,15 +830,6 @@ def _ipv4_entry(addresses: list[dict]) -> dict[str, str] | None:
                 "origin":  (a.get("AddressOrigin") or "").strip(),
             }
     return None
-
-
-async def fetch_ilo_nic_raw(client: ILOClient) -> list[tuple[str, str]]:
-    """Dump raw Redfish JSON for all Manager EthernetInterfaces."""
-    manager = await client.get(await client.get_manager_uri())
-    eth_col_uri = (manager.get("EthernetInterfaces") or {}).get("@odata.id")
-    if not eth_col_uri:
-        return _EMPTY
-    return await _fetch_members_raw(client, eth_col_uri)
 
 
 async def fetch_ilo_nic_details(client: ILOClient) -> dict[str, Any]:

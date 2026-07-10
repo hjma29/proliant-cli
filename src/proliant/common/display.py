@@ -91,12 +91,6 @@ def print_json(data: Any) -> None:
     print(json.dumps(data, indent=2, default=str))
 
 
-def print_raw_json(items: list, key: str = "raw") -> None:
-    """Print a list of objects as raw JSON (shared --raw handler)."""
-    raw_list = [getattr(i, key, i) if hasattr(i, key) else i for i in items]
-    print(json.dumps(raw_list, indent=2, default=str))
-
-
 def print_memory_report(rows: list[dict], source: str = "") -> None:
     """Shared memory part-number breakdown table (used by ilo, com, oneview).
 

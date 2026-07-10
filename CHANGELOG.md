@@ -19,6 +19,7 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 ### Enhancements
 - `proliant oneview upgrade run`: live progress display during long operations — a byte-level progress bar (size, speed, ETA) while the multi-GB image uploads, and a phase/percent bar while the appliance installs and reboots (e.g. "Swap active/standby nodes").
 - `proliant setup`: adding a OneView appliance now prompts for a friendly alias (like the iLO flow), defaulting to the auto-generated `oneview`/`oneview-2`/… name so pressing Enter keeps the previous behavior.
+- `proliant ilo`: removed the `--raw` flag (it had drifted inconsistent — a genuine unprocessed Redfish dump for some resources, but a no-op alias of the normal output for `servers`, `serial`, and `license`). `--json` is now the one consistent automation flag across `ilo`/`com`/`oneview`.
 
 ---
 

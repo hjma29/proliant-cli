@@ -71,7 +71,6 @@ from proliant.ilo.printers import (
     _print_component_table,
     print_network_table,
     print_nic_ilo_table,
-    _print_raw_table,
     print_disk_map_table,
     print_fleet_table,
     print_license_table,
@@ -107,23 +106,6 @@ _FETCH_DISPATCH: dict[str, FetchFn] = {
     "firmwares": inventory.fetch_fleet_summary,
     "serial": inventory.fetch_serial_info,
     "update_method": inventory.fetch_firmware_update_method,
-    "license": inventory.fetch_license_info,
-}
-
-_RAW_DISPATCH: dict[str, FetchFn] = {
-    "servers": inventory.fetch_server_list_info,
-    "nic_host": inventory.fetch_network_raw,
-    "nic_ilo":  inventory.fetch_ilo_nic_summary,
-    "nic": inventory.fetch_nic_raw,
-    "storage": inventory.fetch_storage_raw,
-    "cpu": inventory.fetch_cpu_raw,
-    "memory": inventory.fetch_memory_raw,
-    "com": inventory.fetch_com_raw,
-    "full": inventory.fetch_firmware_raw,
-    "disk_map": inventory.fetch_disk_map_raw,
-    "firmwares": inventory.fetch_firmware_raw,
-    "serial": inventory.fetch_serial_info,
-    "update_method": inventory.fetch_firmware_raw,
     "license": inventory.fetch_license_info,
 }
 
@@ -260,7 +242,6 @@ def _build_parser() -> argparse.ArgumentParser:
         list_p = action_sub.add_parser("list", **kwargs)
         list_p.set_defaults(command="list", what=fetch_key)
         _add_host_target(list_p, required=False, allow_hosts_from=True)
-        list_p.add_argument("--raw", action="store_true", help="Dump unprocessed Redfish API response (bypasses proliant field parsing)")
         return list_p
 
     subparsers = parser.add_subparsers(dest="resource", metavar="RESOURCE",
@@ -274,14 +255,11 @@ def _build_parser() -> argparse.ArgumentParser:
     servers_list = servers_sub.add_parser("list", help="List servers")
     servers_list.set_defaults(command="list", what="servers")
     _add_host_target(servers_list, required=False, allow_hosts_from=True)
-    servers_list.add_argument("--raw", action="store_true", help="Dump unprocessed Redfish API response (bypasses proliant field parsing)")
     servers_desc = servers_sub.add_parser("describe", help="Show full details for a single server")
     servers_desc.set_defaults(command="describe")
     _add_host_target(servers_desc, required=True, metavar="NAME")
     servers_desc.add_argument("--ilo-nic", action="store_true", dest="ilo_nic",
                               help="Show iLO dedicated NIC details (DHCP/static, IP, DNS, routes, LLDP, MAC)")
-    servers_desc.add_argument("--raw", action="store_true",
-                              help="With --ilo-nic: dump unprocessed Redfish JSON for Manager EthernetInterfaces")
     servers_desc.add_argument("--firmware-update", action="store_true", dest="firmware_update",
                               help="Show firmware update status: UpdateService state, last bundle report, component repository")
 
@@ -316,7 +294,6 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     firmware_list.set_defaults(command="list", what="firmwares")
     _add_host_target(firmware_list, required=False, allow_hosts_from=True)
-    firmware_list.add_argument("--raw", action="store_true", help="Dump unprocessed Redfish API response (bypasses proliant field parsing)")
     from proliant.ilo.inventory import FLEET_KEYS
     fields_arg = firmware_list.add_argument(
         "--fields",
@@ -398,7 +375,6 @@ def _build_parser() -> argparse.ArgumentParser:
     license_list = license_sub.add_parser("list", help="List iLO license info across fleet")
     license_list.set_defaults(command="list", what="license")
     _add_host_target(license_list, required=False, allow_hosts_from=True)
-    license_list.add_argument("--raw", action="store_true")
     license_describe = license_sub.add_parser("describe", help="Show license details for a single server")
     license_describe.set_defaults(command="list", what="license")
     _add_host_target(license_describe, required=True)
@@ -979,8 +955,7 @@ async def _run_report_gpu(args: argparse.Namespace) -> None:
 async def _run_get(args: argparse.Namespace) -> None:
     what = args.what.replace("-", "_")
     hosts = _load_hosts_or_exit(getattr(args, "host", None), getattr(args, "hosts_from", None))
-    raw = getattr(args, "raw", False)
-    fetch_fn = _RAW_DISPATCH[what] if raw else _FETCH_DISPATCH[what]
+    fetch_fn = _FETCH_DISPATCH[what]
     noun = "host" if len(hosts) == 1 else "hosts"
     with get_console().status(f"[dim]Querying {len(hosts)} {noun}…[/dim]"):
         results = await _run_parallel_async(hosts, fetch_fn)
@@ -988,10 +963,6 @@ async def _run_get(args: argparse.Namespace) -> None:
     # --json output mode: emit structured data and return
     if get_output_mode() == OutputMode.JSON:
         _print_json_results(what, results)
-        return
-
-    if raw:
-        _print_raw_table(results)
         return
 
     printers = {
@@ -1323,12 +1294,7 @@ async def _cmd_describe(args: argparse.Namespace) -> None:
         get_console().print("[red]No host found.[/red]")
         sys.exit(1)
     if getattr(args, "ilo_nic", False):
-        if getattr(args, "raw", False):
-            with get_console().status(f"[dim]Connecting to {hosts[0]['name']} ({hosts[0]['url']})…[/dim]"):
-                results = await _run_parallel_async(hosts[:1], inventory.fetch_ilo_nic_raw)
-            _print_raw_table(results)
-        else:
-            await run_describe_ilo_nic(hosts[0])
+        await run_describe_ilo_nic(hosts[0])
     elif getattr(args, "firmware_update", False):
         await run_describe_fw_update(hosts[0])
     else:

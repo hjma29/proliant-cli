@@ -502,7 +502,6 @@ _proliant__ilo_list_resource() {
   _arguments \
     '1: :(list)' \
     '2::server name:()' \
-    '--raw[show raw JSON]' \
     '--json[output as JSON]'
 }
 
@@ -510,7 +509,6 @@ _proliant__ilo_servers() {
   _arguments \
     '1: :(list describe)' \
     '2::server name:()' \
-    '--raw[raw JSON]' \
     '--json[JSON output]'
 }
 
@@ -522,7 +520,7 @@ _proliant__ilo_firmware() {
     args)
       case $line[1] in
         list)
-          _arguments '1::server name:()' '--raw[raw JSON]' '--json[JSON output]' ;;
+          _arguments '1::server name:()' '--json[JSON output]' ;;
         upgrade)
           _arguments \
             '1:server name:()' \
@@ -558,7 +556,6 @@ _proliant__ilo_license() {
   _arguments \
     '1: :(list describe set)' \
     '2::server name:()' \
-    '--raw[raw JSON]' \
     '--json[JSON output]'
 }
 

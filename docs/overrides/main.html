@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+
+{% block extrahead %}
+  {{ super() }}
+  <meta property="og:site_name" content="ProLiant CLI">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    "name": "ProLiant CLI",
+    "url": "https://hjma29.github.io/proliant-cli/"
+  }
+  </script>
+{% endblock %}

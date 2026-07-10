@@ -1,6 +1,6 @@
 ---
-title: Overview
-description: Install proliant and connect it to your iLO, COM, or OneView environment.
+title: ProLiant CLI
+description: Unified CLI for HPE ProLiant iLO, COM, and OneView management.
 ---
 
 # Overview

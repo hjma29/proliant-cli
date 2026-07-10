@@ -2519,6 +2519,20 @@ async def _async_firmware_apply(args: argparse.Namespace) -> None:
         console.print(f"\n[red]SSP apply failed[/red] on [bold]{last.get('name', '?')}[/bold] "
                       f"({last.get('status') or last.get('state') or 'error'}). "
                       "Check the OneView UI / 'proliant oneview reports'.")
+    elif status == "blocked":
+        done = result.get("results", [])
+        last = done[-1] if done else {}
+        reason = last.get("blocked_reason") or (
+            "OneView validated the update and refused to apply it, but did not "
+            "report a specific reason — check the OneView UI Activity log."
+        )
+        console.print(
+            f"\n[red]SSP apply BLOCKED[/red] on [bold]{last.get('name', '?')}[/bold] — "
+            "nothing was changed.\n"
+            f"[yellow]{reason}[/yellow]\n"
+            "Re-run with [bold]--force[/bold] to bypass this non-disruptive-validation "
+            "guard and apply anyway, or fix the reported redundancy issue first."
+        )
 
 
 async def _cmd_firmware_apply(args: argparse.Namespace) -> None:

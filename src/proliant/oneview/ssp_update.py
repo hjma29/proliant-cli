@@ -466,6 +466,35 @@ def is_task_failed(task: dict) -> bool:
     return (task.get("state") or "").lower() in _TASK_FAILURE
 
 
+def _resource_baseline_uri(resource: dict | None) -> str:
+    return ((resource or {}).get("firmware") or {}).get("firmwareBaselineUri", "") or ""
+
+
+async def _task_block_reason(client: "OneViewClient", task_uri: str) -> str:
+    """Best-effort human-readable reason a ``Warning`` task actually changed nothing.
+
+    OneView can report a parent task as ``Warning`` / 100% / "successful with
+    warning" for a firmware update that it silently validated-only and never
+    applied (e.g. blocked by a non-redundant-connectivity guard) -- the real
+    explanation lives on a child task's ``taskErrors``, found via
+    ``parentTaskUri``. Never raises: this is a diagnostic nicety layered on
+    top of the baseline-mismatch check that actually decides pass/fail.
+    """
+    try:
+        data = await client.get(
+            "/rest/tasks", params={"filter": f"parentTaskUri='{task_uri}'", "count": 50},
+        )
+    except Exception:  # noqa: BLE001 - best-effort; caller still reports "blocked"
+        return ""
+    reasons = []
+    for child in data.get("members", []) or []:
+        for err in child.get("taskErrors") or []:
+            detail = (err.get("details") or "").strip()
+            if detail and detail not in reasons:
+                reasons.append(detail)
+    return " ".join(reasons)
+
+
 async def poll_task(
     client: "OneViewClient",
     task_uri: str,
@@ -546,6 +575,10 @@ async def run_ssp_apply(
       ``aborted``        execute=True but the confirm callback returned False
       ``applied``        all targeted updates finished successfully
       ``failed``         a task reported failure (``results`` shows how far it got)
+      ``blocked``        OneView reported "Warning" but never actually changed the
+                          target's baseline (e.g. non-redundant-fabric guard) --
+                          the last ``results`` entry carries ``blocked_reason``.
+                          Re-run with ``force=True`` to bypass the guard.
     """
     import asyncio
 
@@ -576,7 +609,12 @@ async def run_ssp_apply(
         # (a) shared infrastructure first
         for le in changing_les:
             emit("applying", {"kind": "logical-enclosure", "name": le["name"]})
-            patch = build_le_firmware_patch(baseline_uri, scope=scope, force=force)
+            # --force also bypasses OneView's non-disruptive validation guard --
+            # otherwise a non-redundant fabric makes OneView silently no-op the
+            # update (see the "Warning" check below) rather than apply it.
+            patch = build_le_firmware_patch(
+                baseline_uri, scope=scope, force=force, validate_nondisruptive=not force,
+            )
             resp = await client.patch(le["uri"], patch, headers={"If-Match": "*"})
             task = await _await_task(
                 client, resp, emit, sleeper, poll_interval_s, task_timeout_s
@@ -585,6 +623,15 @@ async def run_ssp_apply(
             emit("applied", results[-1])
             if is_task_failed(task):
                 return {"status": "failed", "plan": plan, "results": results}
+            if (task.get("state") or "").lower() == "warning":
+                # OneView can report "Warning" / 100% for a task that only
+                # validated and never actually flashed anything (e.g. blocked
+                # because the fabric isn't redundant). Verify the LE's own
+                # baseline actually moved before trusting the task state.
+                current = await client.get(le["uri"])
+                if _resource_baseline_uri(current) != baseline_uri:
+                    results[-1]["blocked_reason"] = await _task_block_reason(client, task["uri"])
+                    return {"status": "blocked", "plan": plan, "results": results}
 
         # (b) compute (server profiles)
         for prof in changing_profs:
@@ -601,6 +648,11 @@ async def run_ssp_apply(
             emit("applied", results[-1])
             if is_task_failed(task):
                 return {"status": "failed", "plan": plan, "results": results}
+            if (task.get("state") or "").lower() == "warning":
+                current = await client.get(prof["uri"])
+                if _resource_baseline_uri(current) != baseline_uri:
+                    results[-1]["blocked_reason"] = await _task_block_reason(client, task["uri"])
+                    return {"status": "blocked", "plan": plan, "results": results}
 
     return {"status": "applied", "plan": plan, "results": results}
 

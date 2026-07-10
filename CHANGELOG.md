@@ -4,6 +4,14 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ---
 
+## v1.0.37 — 2026-07-10
+
+### Bug Fixes
+- `proliant oneview firmware apply --execute`: fixed a false "SSP apply complete. Updated N target(s)." reported for a logical-enclosure firmware update that OneView actually blocked and never applied. OneView reports this case as a `Warning` task at 100% ("firmware update was successful with warning") when a non-redundant fabric would be disrupted by the update — the CLI treated `Warning` as success unconditionally. It now re-checks the target's baseline actually changed before declaring success; when it didn't, it reports `SSP apply BLOCKED` with OneView's own explanation and points at `--force`.
+- `proliant oneview firmware apply --force`: fixed `--force` not actually bypassing OneView's non-disruptive-fabric validation guard as documented — it only set `forceInstallFirmware`, leaving `validateIfLIFirmwareUpdateIsNonDisruptive` always `true`, so a non-redundant fabric silently blocked the update even with `--force`.
+
+---
+
 ## v1.0.36 — 2026-07-10
 
 ### New Features

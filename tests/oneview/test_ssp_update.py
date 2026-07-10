@@ -337,9 +337,14 @@ async def test_await_task_polls_and_emits_initial_tick_for_task_uri():
 class FakeClient:
     """Async-context OneViewClient stand-in for the apply flow."""
 
-    def __init__(self, *, task_state="Completed", profile=None):
+    def __init__(
+        self, *, task_state="Completed", profile=None,
+        le_get_response=None, children_tasks=None,
+    ):
         self.task_state = task_state
         self._profile = profile or PROFILE_RAW
+        self._le_get_response = le_get_response
+        self._children_tasks = children_tasks or []
         self.calls: list[tuple] = []
         self.patch_headers: list = []
         self.patch_bodies: list = []
@@ -353,11 +358,15 @@ class FakeClient:
 
     async def get(self, uri, params=None):
         self.calls.append(("get", uri))
+        if uri == "/rest/tasks":
+            return {"members": self._children_tasks}
         if "/rest/tasks/" in uri:
             return {"uri": uri, "taskState": self.task_state,
                     "taskStatus": self.task_state, "percentComplete": 100}
         if uri.startswith("/rest/server-profiles/"):
             return dict(self._profile, uri=uri)
+        if self._le_get_response is not None:
+            return self._le_get_response
         return {}
 
     async def patch(self, uri, body, headers=None):
@@ -465,3 +474,68 @@ async def test_run_execute_reports_failure_and_stops():
     # failed on the first (shared-infra) target; compute never attempted
     assert [r["kind"] for r in res["results"]] == ["logical-enclosure"]
     assert "put" not in [m for m, _ in fake.calls]
+
+
+@pytest.mark.asyncio
+async def test_run_execute_force_bypasses_nondisruptive_validation():
+    """--force must also skip OneView's non-disruptive-fabric guard, not just
+    forceInstallFirmware -- otherwise a non-redundant fabric silently blocks
+    the update no matter what --force was documented to do."""
+    fake = FakeClient()
+    await run_ssp_apply(
+        lambda: fake, baseline=_newest(),
+        le_targets=[normalize_le(LE_RAW)], profile_targets=[],
+        execute=True, confirm=lambda plan: True, sleeper=_noop_sleep, force=True,
+    )
+    assert fake.patch_bodies[0][0]["value"]["validateIfLIFirmwareUpdateIsNonDisruptive"] is False
+
+
+@pytest.mark.asyncio
+async def test_run_execute_without_force_keeps_nondisruptive_validation():
+    fake = FakeClient()
+    await run_ssp_apply(
+        lambda: fake, baseline=_newest(),
+        le_targets=[normalize_le(LE_RAW)], profile_targets=[],
+        execute=True, confirm=lambda plan: True, sleeper=_noop_sleep,
+    )
+    assert fake.patch_bodies[0][0]["value"]["validateIfLIFirmwareUpdateIsNonDisruptive"] is True
+
+
+@pytest.mark.asyncio
+async def test_run_execute_warning_with_unchanged_baseline_reports_blocked():
+    """OneView can report a LE firmware task as 'Warning' / 100% complete
+    while never actually applying anything (e.g. a non-redundant-fabric
+    guard silently no-ops the update). Must not be reported as 'applied'."""
+    fake = FakeClient(
+        task_state="Warning",
+        le_get_response={"firmware": {"firmwareBaselineUri": "/rest/firmware-drivers/SSP_2023_05"}},
+        children_tasks=[{"taskErrors": [
+            {"details": "Non-redundant fabric; update would disrupt connectivity."}
+        ]}],
+    )
+    res = await run_ssp_apply(
+        lambda: fake, baseline=_newest(),
+        le_targets=[normalize_le(LE_RAW)], profile_targets=[normalize_profile(PROFILE_RAW)],
+        execute=True, confirm=lambda plan: True, sleeper=_noop_sleep,
+    )
+    assert res["status"] == "blocked"
+    assert "Non-redundant fabric" in res["results"][-1]["blocked_reason"]
+    # LE step stopped the run -- compute (profile) phase never attempted
+    assert [r["kind"] for r in res["results"]] == ["logical-enclosure"]
+    assert "put" not in [m for m, _ in fake.calls]
+
+
+@pytest.mark.asyncio
+async def test_run_execute_warning_with_baseline_changed_still_applied():
+    """A genuine 'completed with a minor warning' task (baseline did move)
+    must still report success, not be misclassified as blocked."""
+    fake = FakeClient(
+        task_state="Warning",
+        le_get_response={"firmware": {"firmwareBaselineUri": "/rest/firmware-drivers/SSP_2026_01"}},
+    )
+    res = await run_ssp_apply(
+        lambda: fake, baseline=_newest(),
+        le_targets=[normalize_le(LE_RAW)], profile_targets=[],
+        execute=True, confirm=lambda plan: True, sleeper=_noop_sleep,
+    )
+    assert res["status"] == "applied"

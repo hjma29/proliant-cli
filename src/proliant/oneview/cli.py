@@ -2483,13 +2483,35 @@ async def _async_firmware_apply(args: argparse.Namespace) -> None:
         ans = console.input(f'Type the baseline version "{token}" to proceed (or anything else to abort): ')
         return ans.strip() == token
 
+    def on_validation_blocked(info: dict) -> bool:
+        """Mirrors the OneView GUI's own validation-warning modal: OneView
+        rejected the update as potentially disruptive (e.g. a non-redundant
+        fabric) instead of applying it. Show its own reason and let the
+        operator decide whether to proceed anyway, same as clicking "OK to
+        proceed" in the GUI — no need to abort and re-run with --force."""
+        if getattr(args, "yes", False):
+            return True
+        if json_mode:
+            return False  # never silently proceed past a warning in scripted mode
+        _stop_bar()
+        reason = info.get("reason") or (
+            "OneView flagged this update as potentially disruptive and refused "
+            "to apply it, but did not report a specific reason."
+        )
+        console.print(Panel(
+            f"[yellow]{reason}[/yellow]",
+            title=f"⚠ Validation warning — {info.get('name')}", border_style="yellow"))
+        ans = console.input("Proceed anyway despite this warning? [y/N]: ")
+        return ans.strip().lower() in ("y", "yes")
+
     factory = _oneview_client_factory()
     try:
         result = await run_ssp_apply(
             factory,
             baseline=baseline, le_targets=les, profile_targets=profs,
             scope=LE_SCOPE_SHARED, install_type=install_type, force=bool(getattr(args, "force", False)),
-            execute=execute, confirm=confirm if execute else None, on_event=on_event,
+            execute=execute, confirm=confirm if execute else None,
+            on_validation_blocked=on_validation_blocked if execute else None, on_event=on_event,
             poll_interval_s=_SSP_POLL_S, task_timeout_s=_SSP_TASK_TIMEOUT_S,
             appliance_version=data.get("appliance_version", ""),
             baselines=data.get("baselines", []),
@@ -2527,11 +2549,12 @@ async def _async_firmware_apply(args: argparse.Namespace) -> None:
             "report a specific reason — check the OneView UI Activity log."
         )
         console.print(
-            f"\n[red]SSP apply BLOCKED[/red] on [bold]{last.get('name', '?')}[/bold] — "
+            f"\n[yellow]SSP apply not applied[/yellow] on [bold]{last.get('name', '?')}[/bold] — "
             "nothing was changed.\n"
-            f"[yellow]{reason}[/yellow]\n"
-            "Re-run with [bold]--force[/bold] to bypass this non-disruptive-validation "
-            "guard and apply anyway, or fix the reported redundancy issue first."
+            f"[dim]{reason}[/dim]\n"
+            "Re-run and answer 'y' at the validation-warning prompt to proceed anyway "
+            "(or pass [bold]--force[/bold]/[bold]--yes[/bold] to skip the prompt), or fix "
+            "the reported issue first."
         )
 
 

@@ -557,6 +557,7 @@ async def run_ssp_apply(
     force: bool = False,
     execute: bool = False,
     confirm: Callable[[dict], bool] | None = None,
+    on_validation_blocked: Callable[[dict], bool] | None = None,
     on_event: Callable[[str, dict], None] | None = None,
     sleeper: Callable[[float], Any] | None = None,
     poll_interval_s: float = 20.0,
@@ -575,10 +576,20 @@ async def run_ssp_apply(
       ``aborted``        execute=True but the confirm callback returned False
       ``applied``        all targeted updates finished successfully
       ``failed``         a task reported failure (``results`` shows how far it got)
-      ``blocked``        OneView reported "Warning" but never actually changed the
-                          target's baseline (e.g. non-redundant-fabric guard) --
-                          the last ``results`` entry carries ``blocked_reason``.
-                          Re-run with ``force=True`` to bypass the guard.
+      ``blocked``        OneView validated the update and refused to apply it
+                          (e.g. a non-redundant-fabric guard), and the operator
+                          declined to proceed anyway -- the last ``results``
+                          entry carries ``blocked_reason``.
+
+    Mirrors the OneView GUI's own "Review the warnings. If these conditions
+    are acceptable, click OK to proceed." flow: each target is first
+    attempted with OneView's non-disruptive validation guard on (unless
+    ``force`` is already set). If OneView blocks it -- reported as a
+    ``Warning`` task whose target baseline never actually moved -- the real
+    reason is surfaced via ``on_validation_blocked({"kind", "name", "reason"})``.
+    Returning ``True`` retries that *same* target with the guard bypassed
+    (no need to re-run the whole command with ``--force``); returning
+    ``False`` (or passing no callback) stops with ``status == "blocked"``.
     """
     import asyncio
 
@@ -606,53 +617,84 @@ async def run_ssp_apply(
     baseline_uri = baseline.get("uri", "")
 
     async with client_factory() as client:
+
+        async def _apply_with_retry(
+            kind: str, name: str, resource_uri: str, do_request: Callable[[bool], Any],
+        ) -> tuple[str | None, dict[str, Any]]:
+            """Run *do_request(force_flag)*, polling to completion.
+
+            On a "Warning" task whose target baseline never actually moved,
+            offers ``on_validation_blocked`` a chance to retry with the guard
+            bypassed -- exactly once, since a second block means forcing
+            didn't help. Returns ``(status, task)`` where *status* is
+            ``None`` (success), ``"failed"``, or ``"blocked"``.
+            """
+            force_this = force
+            already_offered = False
+            while True:
+                resp = await do_request(force_this)
+                task = await _await_task(
+                    client, resp, emit, sleeper, poll_interval_s, task_timeout_s
+                )
+                if is_task_failed(task):
+                    return "failed", task
+                if (task.get("state") or "").lower() == "warning":
+                    current = await client.get(resource_uri)
+                    if _resource_baseline_uri(current) != baseline_uri:
+                        reason = await _task_block_reason(client, task["uri"])
+                        if (
+                            not force_this and not already_offered
+                            and on_validation_blocked is not None
+                            and on_validation_blocked({"kind": kind, "name": name, "reason": reason})
+                        ):
+                            force_this = True
+                            already_offered = True
+                            emit("applying", {"kind": kind, "name": name, "retry": True})
+                            continue
+                        task["blocked_reason"] = reason
+                        return "blocked", task
+                return None, task
+
         # (a) shared infrastructure first
         for le in changing_les:
             emit("applying", {"kind": "logical-enclosure", "name": le["name"]})
-            # --force also bypasses OneView's non-disruptive validation guard --
-            # otherwise a non-redundant fabric makes OneView silently no-op the
-            # update (see the "Warning" check below) rather than apply it.
-            patch = build_le_firmware_patch(
-                baseline_uri, scope=scope, force=force, validate_nondisruptive=not force,
-            )
-            resp = await client.patch(le["uri"], patch, headers={"If-Match": "*"})
-            task = await _await_task(
-                client, resp, emit, sleeper, poll_interval_s, task_timeout_s
+
+            async def _le_request(force_flag: bool, le=le) -> dict[str, Any]:
+                # --force also bypasses OneView's non-disruptive validation
+                # guard -- otherwise a non-redundant fabric makes OneView
+                # silently no-op the update rather than apply it.
+                patch = build_le_firmware_patch(
+                    baseline_uri, scope=scope, force=force_flag,
+                    validate_nondisruptive=not force_flag,
+                )
+                return await client.patch(le["uri"], patch, headers={"If-Match": "*"})
+
+            status, task = await _apply_with_retry(
+                "logical-enclosure", le["name"], le["uri"], _le_request
             )
             results.append({"kind": "logical-enclosure", "name": le["name"], **task})
             emit("applied", results[-1])
-            if is_task_failed(task):
-                return {"status": "failed", "plan": plan, "results": results}
-            if (task.get("state") or "").lower() == "warning":
-                # OneView can report "Warning" / 100% for a task that only
-                # validated and never actually flashed anything (e.g. blocked
-                # because the fabric isn't redundant). Verify the LE's own
-                # baseline actually moved before trusting the task state.
-                current = await client.get(le["uri"])
-                if _resource_baseline_uri(current) != baseline_uri:
-                    results[-1]["blocked_reason"] = await _task_block_reason(client, task["uri"])
-                    return {"status": "blocked", "plan": plan, "results": results}
+            if status is not None:
+                return {"status": status, "plan": plan, "results": results}
 
         # (b) compute (server profiles)
         for prof in changing_profs:
             emit("applying", {"kind": "server-profile", "name": prof["name"]})
-            full = await client.get(prof["uri"])
-            body = build_profile_firmware_put(
-                full, baseline_uri, install_type=install_type, force=force
-            )
-            resp = await client.put(prof["uri"], body)
-            task = await _await_task(
-                client, resp, emit, sleeper, poll_interval_s, task_timeout_s
+
+            async def _profile_request(force_flag: bool, prof=prof) -> dict[str, Any]:
+                full = await client.get(prof["uri"])
+                body = build_profile_firmware_put(
+                    full, baseline_uri, install_type=install_type, force=force_flag
+                )
+                return await client.put(prof["uri"], body)
+
+            status, task = await _apply_with_retry(
+                "server-profile", prof["name"], prof["uri"], _profile_request
             )
             results.append({"kind": "server-profile", "name": prof["name"], **task})
             emit("applied", results[-1])
-            if is_task_failed(task):
-                return {"status": "failed", "plan": plan, "results": results}
-            if (task.get("state") or "").lower() == "warning":
-                current = await client.get(prof["uri"])
-                if _resource_baseline_uri(current) != baseline_uri:
-                    results[-1]["blocked_reason"] = await _task_block_reason(client, task["uri"])
-                    return {"status": "blocked", "plan": plan, "results": results}
+            if status is not None:
+                return {"status": status, "plan": plan, "results": results}
 
     return {"status": "applied", "plan": plan, "results": results}
 

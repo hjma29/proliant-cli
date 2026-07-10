@@ -339,12 +339,19 @@ class FakeClient:
 
     def __init__(
         self, *, task_state="Completed", profile=None,
-        le_get_response=None, children_tasks=None,
+        le_get_response=None, children_tasks=None, blocked_until_forced=False,
     ):
         self.task_state = task_state
         self._profile = profile or PROFILE_RAW
         self._le_get_response = le_get_response
         self._children_tasks = children_tasks or []
+        # When True: the first PATCH always comes back "Warning" with the
+        # baseline unchanged (simulating OneView's validation guard); a
+        # second PATCH (retried with force, i.e. validation bypassed) comes
+        # back "Completed" with the baseline actually moved -- lets tests
+        # exercise the interactive retry-after-confirm path end to end.
+        self._blocked_until_forced = blocked_until_forced
+        self._patch_count = 0
         self.calls: list[tuple] = []
         self.patch_headers: list = []
         self.patch_bodies: list = []
@@ -361,15 +368,24 @@ class FakeClient:
         if uri == "/rest/tasks":
             return {"members": self._children_tasks}
         if "/rest/tasks/" in uri:
-            return {"uri": uri, "taskState": self.task_state,
-                    "taskStatus": self.task_state, "percentComplete": 100}
+            if self._blocked_until_forced:
+                state = "Warning" if self._patch_count <= 1 else "Completed"
+            else:
+                state = self.task_state
+            return {"uri": uri, "taskState": state, "taskStatus": state, "percentComplete": 100}
         if uri.startswith("/rest/server-profiles/"):
             return dict(self._profile, uri=uri)
+        if self._blocked_until_forced:
+            if self._patch_count <= 1:
+                return self._le_get_response or {}
+            applied_uri = self.patch_bodies[-1][0]["value"]["firmwareBaselineUri"]
+            return {"firmware": {"firmwareBaselineUri": applied_uri}}
         if self._le_get_response is not None:
             return self._le_get_response
         return {}
 
     async def patch(self, uri, body, headers=None):
+        self._patch_count += 1
         self.calls.append(("patch", uri))
         self.patch_bodies.append(body)
         self.patch_headers.append(headers)
@@ -539,3 +555,75 @@ async def test_run_execute_warning_with_baseline_changed_still_applied():
         execute=True, confirm=lambda plan: True, sleeper=_noop_sleep,
     )
     assert res["status"] == "applied"
+
+
+@pytest.mark.asyncio
+async def test_run_execute_blocked_then_confirmed_retries_with_force():
+    """Mirrors the OneView GUI's own validation-warning modal ("Review the
+    warnings... click OK to proceed"): when on_validation_blocked confirms,
+    retry the *same* target once with force -- no need to abort and
+    re-invoke the whole command with --force."""
+    fake = FakeClient(
+        blocked_until_forced=True,
+        le_get_response={"firmware": {"firmwareBaselineUri": "/rest/firmware-drivers/SSP_2023_05"}},
+        children_tasks=[{"taskErrors": [
+            {"details": "Non-redundant fabric; update would disrupt connectivity."}
+        ]}],
+    )
+    seen = []
+
+    def on_validation_blocked(info):
+        seen.append(info)
+        return True  # operator confirms "proceed anyway"
+
+    res = await run_ssp_apply(
+        lambda: fake, baseline=_newest(),
+        le_targets=[normalize_le(LE_RAW)], profile_targets=[],
+        execute=True, confirm=lambda plan: True, sleeper=_noop_sleep,
+        on_validation_blocked=on_validation_blocked,
+    )
+    assert res["status"] == "applied"
+    assert len(seen) == 1
+    assert seen[0]["kind"] == "logical-enclosure"
+    assert "Non-redundant fabric" in seen[0]["reason"]
+    # first attempt kept validation on, retry bypassed it
+    assert fake.patch_bodies[0][0]["value"]["validateIfLIFirmwareUpdateIsNonDisruptive"] is True
+    assert fake.patch_bodies[1][0]["value"]["validateIfLIFirmwareUpdateIsNonDisruptive"] is False
+
+
+@pytest.mark.asyncio
+async def test_run_execute_blocked_declined_stays_blocked_no_retry():
+    """If the operator declines the validation-warning prompt, stop after a
+    single attempt -- do not silently retry with force."""
+    fake = FakeClient(
+        blocked_until_forced=True,
+        le_get_response={"firmware": {"firmwareBaselineUri": "/rest/firmware-drivers/SSP_2023_05"}},
+        children_tasks=[{"taskErrors": [{"details": "reason"}]}],
+    )
+    res = await run_ssp_apply(
+        lambda: fake, baseline=_newest(),
+        le_targets=[normalize_le(LE_RAW)], profile_targets=[],
+        execute=True, confirm=lambda plan: True, sleeper=_noop_sleep,
+        on_validation_blocked=lambda info: False,
+    )
+    assert res["status"] == "blocked"
+    assert len(fake.patch_bodies) == 1
+
+
+@pytest.mark.asyncio
+async def test_run_execute_blocked_without_callback_no_retry():
+    """No on_validation_blocked callback provided (e.g. --json / scripted
+    mode) -- behaves exactly like the flag-only design: blocked, no retry,
+    no prompt attempted."""
+    fake = FakeClient(
+        blocked_until_forced=True,
+        le_get_response={"firmware": {"firmwareBaselineUri": "/rest/firmware-drivers/SSP_2023_05"}},
+        children_tasks=[{"taskErrors": [{"details": "reason"}]}],
+    )
+    res = await run_ssp_apply(
+        lambda: fake, baseline=_newest(),
+        le_targets=[normalize_le(LE_RAW)], profile_targets=[],
+        execute=True, confirm=lambda plan: True, sleeper=_noop_sleep,
+    )
+    assert res["status"] == "blocked"
+    assert len(fake.patch_bodies) == 1

@@ -278,6 +278,60 @@ def test_normalize_task_and_state_predicates():
     assert not is_task_done(normalize_task({"taskState": "Running"}))
 
 
+def test_normalize_task_extracts_latest_stage_from_progress_updates():
+    t = normalize_task({
+        "uri": "/rest/tasks/1", "taskState": "Running", "percentComplete": 40,
+        "progressUpdates": [
+            {"id": 0, "statusUpdate": "Monitor"},
+            {"id": 1, "statusUpdate": "Update firmware"},
+            {"id": 2, "statusUpdate": "   "},  # blank — should be skipped
+        ],
+    })
+    assert t["stage"] == "Update firmware"
+    # No progressUpdates → empty stage, never raises.
+    assert normalize_task({"taskState": "Running"})["stage"] == ""
+
+
+@pytest.mark.asyncio
+async def test_await_task_treats_non_task_uri_as_synchronous_final():
+    from proliant.oneview.ssp_update import _await_task
+
+    class _NoGet:
+        async def get(self, uri, params=None):  # pragma: no cover - must not be called
+            raise AssertionError("synchronous op must not be polled")
+
+    # Body has the mutated resource's own (non-task) uri → no polling.
+    task = await _await_task(
+        _NoGet(), {"uri": "/rest/server-profiles/sp-1"},
+        emit=lambda k, d: None, sleeper=_noop_sleep, interval_s=1, timeout_s=10,
+    )
+    assert task["state"] == "Completed"
+
+
+@pytest.mark.asyncio
+async def test_await_task_polls_and_emits_initial_tick_for_task_uri():
+    from proliant.oneview.ssp_update import _await_task
+
+    class _C:
+        def __init__(self):
+            self.n = 0
+
+        async def get(self, uri, params=None):
+            self.n += 1
+            state = "Completed" if self.n >= 2 else "Running"
+            return {"uri": uri, "taskState": state, "percentComplete": self.n * 50}
+
+    seen: list = []
+    task = await _await_task(
+        _C(), {"uri": "/rest/tasks/le-task", "taskState": "Running", "percentComplete": 0},
+        emit=lambda k, d: seen.append((k, d.get("percent"))),
+        sleeper=_noop_sleep, interval_s=1, timeout_s=100,
+    )
+    assert is_task_done(task)
+    # First tick reflects the accepted task (0%), before any poll GET.
+    assert seen[0] == ("task-progress", 0.0)
+
+
 # ── fake client + orchestration ──────────────────────────────────────────────
 
 class FakeClient:

@@ -440,6 +440,13 @@ def _percent(value: Any) -> float | None:
 def normalize_task(data: dict | None) -> dict[str, Any]:
     """Compact an OneView task resource (or an async op's task body)."""
     d = data or {}
+    updates = d.get("progressUpdates") or []
+    stage = ""
+    for u in reversed(updates):
+        text = (u or {}).get("statusUpdate", "") or ""
+        if text.strip():
+            stage = text.strip()
+            break
     return {
         "uri": d.get("uri", "") or "",
         "name": d.get("name", "") or "",
@@ -447,6 +454,7 @@ def normalize_task(data: dict | None) -> dict[str, Any]:
         "status": d.get("taskStatus", "") or "",
         "percent": _percent(d.get("percentComplete")),
         "resource": (d.get("associatedResource") or {}).get("resourceName", "") or "",
+        "stage": stage,
     }
 
 
@@ -490,13 +498,17 @@ async def _await_task(
 ) -> dict[str, Any]:
     """Resolve an async op response to a terminal task.
 
-    OneView returns the task resource as the body of an async PATCH/PUT (HTTP
-    202); if a URI is present we poll it, otherwise the operation completed
-    synchronously and the body is treated as final.
+    OneView returns the monitoring task URI for an async PATCH/PUT (HTTP 202)
+    in the ``Location`` header, which the client promotes into the body's
+    ``uri``. When a task URI is present we poll it to completion; otherwise the
+    operation completed synchronously and the body is treated as final.
     """
     task = normalize_task(resp)
-    if not task["uri"]:
+    if "/rest/tasks/" not in task["uri"]:
         return {**task, "state": task["state"] or "Completed"}
+    # Surface an immediate first tick so the bar shows the task the moment it
+    # is accepted, rather than waiting a full poll interval at 0%.
+    emit("task-progress", task)
     return await poll_task(
         client, task["uri"], emit=emit, sleeper=sleeper,
         interval_s=interval_s, timeout_s=timeout_s,

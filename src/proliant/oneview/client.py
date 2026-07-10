@@ -186,6 +186,26 @@ class OneViewClient(BaseAsyncClient):
                 f"{method} {uri} failed — HTTP {resp.status_code}: {detail}"
             ) from exc
 
+    def _body_with_task_uri(self, resp: httpx.Response) -> dict[str, Any]:
+        """Return the JSON body, ensuring a OneView task ``uri`` is present.
+
+        Async OneView operations (firmware updates, etc.) reply HTTP 202 with
+        the monitoring task URI in the ``Location`` response header, while the
+        body is often empty or is the mutated resource (whose own ``uri`` is
+        NOT a task). Callers that poll the task read ``uri`` from this body, so
+        promote the ``Location`` task URI into ``uri`` whenever the body does
+        not already carry one that points at ``/rest/tasks/``. Synchronous
+        responses (no ``Location``) are returned unchanged.
+        """
+        body = self._safe_json(resp)
+        if "/rest/tasks/" in (body.get("uri", "") or ""):
+            return body
+        loc = resp.headers.get("Location", "") or ""
+        idx = loc.find("/rest/tasks/")
+        if idx != -1:
+            return {**body, "uri": loc[idx:]}
+        return body
+
     # ── CRUD ──────────────────────────────────────────────────────────────
 
     async def get(self, uri: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -231,14 +251,14 @@ class OneViewClient(BaseAsyncClient):
             req_headers = {**req_headers, **headers}
         resp = await self._ensure_http().patch(uri, json=body, headers=req_headers)
         self._raise_for_status(resp, "PATCH", uri)
-        return self._safe_json(resp)
+        return self._body_with_task_uri(resp)
 
     async def put(self, uri: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
         resp = await self._ensure_http().put(
             uri, json=(body if body is not None else {}), headers=self._headers
         )
         self._raise_for_status(resp, "PUT", uri)
-        return self._safe_json(resp)
+        return self._body_with_task_uri(resp)
 
     async def delete(self, uri: str) -> dict[str, Any]:
         """DELETE a resource. Returns the response body (often a task or empty).

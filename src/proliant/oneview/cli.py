@@ -2270,21 +2270,32 @@ async def _async_firmware_apply(args: argparse.Namespace) -> None:
                 TextColumn, TimeElapsedColumn,
             )
             label = "Shared infra" if payload.get("kind") == "logical-enclosure" else "Compute"
+            bars["label"] = f"{label}: {payload.get('name')}"
             p = Progress(
                 SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
                 BarColumn(), TaskProgressColumn(), TimeElapsedColumn(), console=console,
             )
             p.start()
             bars["bar"] = p
-            bars["task"] = p.add_task(f"[bold]{label}: {payload.get('name')}[/bold]", total=100)
+            bars["task"] = p.add_task(f"[bold]{bars['label']}[/bold]", total=100)
         elif kind == "task-progress":
             p = bars.get("bar")
             if p is None:
                 return
             pct = payload.get("percent")
-            state = payload.get("status") or payload.get("state") or "working…"
-            res = payload.get("resource")
-            desc = f"{state}  [dim]({res})[/dim]" if res else state
+            state = payload.get("state") or payload.get("status") or "working…"
+            stage = payload.get("stage") or ""
+            res = payload.get("resource") or ""
+            label = bars.get("label", "")
+            segs = []
+            if label:
+                segs.append(f"[bold]{label}[/bold]")
+            segs.append(f"[cyan]{stage}[/cyan]" if stage else state)
+            if stage and state:
+                segs.append(f"[dim]{state}[/dim]")
+            if res and res not in label:
+                segs.append(f"[dim]({res})[/dim]")
+            desc = "  ".join(segs)
             if isinstance(pct, (int, float)):
                 p.update(bars["task"], completed=pct, description=desc)
             else:

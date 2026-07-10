@@ -2157,6 +2157,11 @@ def _render_ssp_plan(console, plan: dict) -> None:
             f"\nOneView:   {appliance}"
             f"\nCompat:    [{_compat_style}]{compat.get('message', '')}[/{_compat_style}]"
         )
+        rec = compat.get("recommended")
+        if rec:
+            rec_date = compat.get("recommended_release_date")
+            rec_txt = f"SSP {rec}" + (f" (released {rec_date})" if rec_date else "")
+            compat_line += f"\nHPE recs:  [green]{rec_txt}[/green]"
     console.print(Panel(
         f"Baseline:  [bold]{b.get('name') or '—'}[/bold]"
         + (f"  ({b.get('version')})" if b.get("version") else "")
@@ -2165,9 +2170,14 @@ def _render_ssp_plan(console, plan: dict) -> None:
         + f"\nChanges:   [bold]{plan.get('changes', 0)}[/bold] target(s) would be updated",
         title="SSP Firmware Apply — Plan", border_style="cyan"))
     if compat.get("source_url"):
+        url = compat["source_url"]
         console.print(
-            f"[dim]Compatibility per HPE Synergy Software Releases "
-            f"(as of {compat.get('as_of', '')}): {compat['source_url']}[/dim]"
+            f"[dim]OneView↔SSP compatibility per HPE Synergy Software Releases "
+            f"(as of {compat.get('as_of', '')}) — double-check at:[/dim]"
+        )
+        console.print(
+            f"  [cyan underline][link={url}]{url}[/link][/cyan underline]",
+            soft_wrap=True, highlight=False,
         )
 
     rows = plan.get("logical_enclosures", []) + plan.get("server_profiles", [])
@@ -2314,6 +2324,7 @@ async def _async_firmware_apply(args: argparse.Namespace) -> None:
             execute=execute, confirm=confirm if execute else None, on_event=on_event,
             poll_interval_s=_SSP_POLL_S, task_timeout_s=_SSP_TASK_TIMEOUT_S,
             appliance_version=data.get("appliance_version", ""),
+            baselines=data.get("baselines", []),
         )
     finally:
         _stop_bar()

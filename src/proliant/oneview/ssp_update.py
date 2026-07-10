@@ -203,12 +203,28 @@ def _ssp_matches(ssp: str, listed: str) -> bool:
     return all(x == y or y.lower() == "xx" for x, y in zip(a, b))
 
 
-def compat_note(appliance_version: str, baseline: dict) -> dict[str, Any]:
+def recommended_release_date(rec_release: str, baselines: list[dict] | None) -> str:
+    """Release date (``YYYY-MM-DD``) of the recommended SSP, if it's registered.
+
+    Best-effort: the recommended SSP may not be imported on this appliance, in
+    which case there's no local date to show (returns ``""``).
+    """
+    for b in baselines or []:
+        if ssp_release(b) == rec_release:
+            return (b.get("release_date") or "")[:10]
+    return ""
+
+
+def compat_note(
+    appliance_version: str, baseline: dict, baselines: list[dict] | None = None
+) -> dict[str, Any]:
     """Classify *baseline* against *appliance_version* using the HPE matrix.
 
     ``status`` is one of ``recommended`` / ``supported`` / ``unsupported`` /
     ``unknown`` (no published data for that OneView track). Always includes the
-    source URL + snapshot date so the plan can cite it.
+    source URL + snapshot date so the plan can cite it. When *baselines* (the
+    registered SSPs) is given, the recommended SSP's release date is resolved
+    best-effort for display.
     """
     track = oneview_track(appliance_version)
     ssp = ssp_release(baseline)
@@ -217,6 +233,7 @@ def compat_note(appliance_version: str, baseline: dict) -> dict[str, Any]:
         "appliance_track": track,
         "ssp": ssp,
         "recommended": None,
+        "recommended_release_date": "",
         "supported": [],
         "source_url": SSP_COMPAT_SOURCE_URL,
         "as_of": SSP_COMPAT_AS_OF,
@@ -232,6 +249,7 @@ def compat_note(appliance_version: str, baseline: dict) -> dict[str, Any]:
     recommended = entry["recommended"]
     supported = list(entry.get("supported", []))
     note["recommended"] = recommended
+    note["recommended_release_date"] = recommended_release_date(recommended, baselines)
     note["supported"] = supported
     if _ssp_matches(ssp, recommended):
         note["status"] = "recommended"
@@ -294,14 +312,15 @@ def resolve_targets(
 
 def build_plan(
     baseline: dict, le_targets: list[dict], profile_targets: list[dict],
-    *, appliance_version: str = "",
+    *, appliance_version: str = "", baselines: list[dict] | None = None,
 ) -> dict[str, Any]:
     """A non-destructive summary of what an apply *would* change.
 
     Each target is annotated with whether the requested baseline differs from
     what it currently has (``will_change``) plus a short human ``detail``. When
     *appliance_version* is given, a source-backed ``compat`` note pairs the
-    running OneView version with the chosen SSP (see :func:`compat_note`).
+    running OneView version with the chosen SSP (see :func:`compat_note`);
+    *baselines* lets it resolve the recommended SSP's release date.
     """
     target_uri = baseline.get("uri", "")
 
@@ -344,7 +363,9 @@ def build_plan(
         "logical_enclosures": le_plans,
         "server_profiles": prof_plans,
         "changes": changes,
-        "compat": compat_note(appliance_version, baseline) if appliance_version else None,
+        "compat": (
+            compat_note(appliance_version, baseline, baselines) if appliance_version else None
+        ),
     }
 
 
@@ -500,6 +521,7 @@ async def run_ssp_apply(
     poll_interval_s: float = 20.0,
     task_timeout_s: float = 90 * 60,
     appliance_version: str = "",
+    baselines: list[dict] | None = None,
 ) -> dict[str, Any]:
     """Plan (and optionally apply) an SSP firmware baseline rollout.
 
@@ -518,7 +540,10 @@ async def run_ssp_apply(
     sleeper = sleeper or asyncio.sleep
     emit = on_event or (lambda kind, data: None)
 
-    plan = build_plan(baseline, le_targets, profile_targets, appliance_version=appliance_version)
+    plan = build_plan(
+        baseline, le_targets, profile_targets,
+        appliance_version=appliance_version, baselines=baselines,
+    )
     emit("plan", plan)
 
     if not execute:

@@ -189,6 +189,24 @@ def test_compat_note_recommended_for_10_0():
     assert "recommended" in note["message"]
 
 
+def test_compat_note_resolves_recommended_release_date():
+    from proliant.oneview.ssp_update import compat_note
+    baselines = service_pack_baselines(RAW_DRIVERS)  # normalized (release_date)
+    note = compat_note("10.00.00-0507518", {"version": "SY-2025.07.03"}, baselines)
+    # recommended 2026.01.02 is registered in RAW_DRIVERS (dated 2026-03-05)
+    assert note["recommended"] == "2026.01.02"
+    assert note["recommended_release_date"] == "2026-03-05"
+
+
+def test_compat_note_recommended_date_blank_when_not_registered():
+    from proliant.oneview.ssp_update import compat_note
+    only_old = [d for d in RAW_DRIVERS if "2026" not in (d.get("version") or "")]
+    note = compat_note("10.00.00-0507518", {"version": "SY-2023.05.01"},
+                       service_pack_baselines(only_old))
+    assert note["recommended"] == "2026.01.02"
+    assert note["recommended_release_date"] == ""
+
+
 def test_compat_note_supported_but_not_recommended():
     from proliant.oneview.ssp_update import compat_note
     note = compat_note("10.00.00-0507518", {"version": "SY-2025.07.03"})

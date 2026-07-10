@@ -20,6 +20,7 @@ The client is used as an async context manager::
 
 from __future__ import annotations
 
+import os
 import warnings
 from typing import Any
 
@@ -183,6 +184,13 @@ class OneViewClient(BaseAsyncClient):
         self._raise_for_status(resp, "PATCH", uri)
         return self._safe_json(resp)
 
+    async def put(self, uri: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        resp = await self._ensure_http().put(
+            uri, json=(body if body is not None else {}), headers=self._headers
+        )
+        self._raise_for_status(resp, "PUT", uri)
+        return self._safe_json(resp)
+
     async def delete(self, uri: str) -> dict[str, Any]:
         """DELETE a resource. Returns the response body (often a task or empty).
 
@@ -192,4 +200,48 @@ class OneViewClient(BaseAsyncClient):
         """
         resp = await self._ensure_http().delete(uri, headers=self._headers)
         self._raise_for_status(resp, "DELETE", uri)
+        return self._safe_json(resp)
+
+    # ── Streaming multipart upload ────────────────────────────────────────
+
+    async def upload_file(
+        self,
+        uri: str,
+        file_path: str,
+        *,
+        filename: str | None = None,
+        timeout: httpx.Timeout | None = None,
+    ) -> dict[str, Any]:
+        """Stream a local file to *uri* as multipart/form-data (field name ``file``).
+
+        Used for the appliance firmware image upload
+        (``POST /rest/appliance/firmware/image``), which OneView requires as a
+        streamed ``multipart/form-data`` body with an ``uploadfilename`` header.
+
+        The file is streamed from disk in chunks (httpx reads the open handle
+        lazily), so a multi-GB update image never has to be buffered in memory.
+        A fresh short-lived httpx client is used so the appliance sets the
+        multipart boundary itself instead of inheriting the JSON
+        ``Content-Type`` default carried by the session client. The same
+        session token is reused via the ``auth`` header.
+        """
+        filename = filename or os.path.basename(file_path)
+        headers = {
+            "X-API-Version": str(self._api_version),
+            "uploadfilename": filename,
+        }
+        if self._token:
+            headers["auth"] = self._token
+
+        # No read/write/pool limit — a large image upload can legitimately take
+        # much longer than a normal request; only the initial connect is bounded.
+        upload_timeout = timeout or httpx.Timeout(None, connect=10.0)
+
+        with open(file_path, "rb") as fh:
+            files = {"file": (filename, fh, "application/octet-stream")}
+            async with httpx.AsyncClient(
+                base_url=self._base_url, verify=False, timeout=upload_timeout
+            ) as up:
+                resp = await up.post(uri, files=files, headers=headers)
+        self._raise_for_status(resp, "POST", uri)
         return self._safe_json(resp)

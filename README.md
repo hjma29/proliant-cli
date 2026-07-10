@@ -101,6 +101,10 @@ proliant oneview server-profiles describe <name>
 proliant oneview mac list --address <mac>
 proliant oneview mac list --network-name <name>
 proliant oneview mac describe <mac>
+proliant oneview upgrade readiness                       # pre-upgrade readiness report
+proliant oneview upgrade run --from-dir <dir>            # pick + stage an appliance software update
+proliant oneview upgrade run --image <file> --execute   # stage + install (reboots the appliance)
+proliant oneview upgrade pending                         # show the currently staged update
 [snip]
 ```
 

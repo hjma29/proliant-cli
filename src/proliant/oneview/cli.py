@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import re
 import sys
 from contextlib import asynccontextmanager
@@ -2138,6 +2139,298 @@ async def _cmd_upgrade_cleanup(args: argparse.Namespace) -> None:
     await _async_upgrade_cleanup(do_delete=bool(getattr(args, "yes", False)))
 
 
+# ── proliant oneview upgrade run / pending / cancel ───────────────────────────
+# Appliance SOFTWARE upgrade: upload an update .bin -> stage it -> (guarded)
+# install -> monitor the reboot. The staging half is safe/read-mostly; the
+# install half reboots the appliance, so it is gated behind --execute plus a
+# typed confirmation. See proliant.oneview.appliance_update for the REST flow.
+
+_REBOOT_WAIT_TIMEOUT_S = 40 * 60
+_REBOOT_POLL_S = 20
+
+
+def _oneview_client_factory():
+    """Return a zero-arg factory that builds a fresh (unconnected) OneViewClient.
+
+    Used for the install/reboot polling loop, which must reconnect across the
+    appliance restart. A plain factory (no 'Connecting…' status spinner) keeps
+    the progress display clean.
+    """
+    from proliant.oneview.client import OneViewClient
+    from proliant.oneview.config import load_oneview_config
+
+    cfg = load_oneview_config()
+
+    def factory():
+        return OneViewClient(cfg["host"], cfg["username"], cfg["password"])
+
+    return factory
+
+
+def _print_pending_panel(console, pending: dict) -> None:
+    lines = [
+        f"Staged image:  [bold]{pending.get('file_name') or '—'}[/bold]",
+        f"Version:       [bold]{pending.get('version') or '—'}[/bold]",
+    ]
+    est = pending.get("estimated_upgrade_minutes")
+    if est:
+        lines.append(f"Est. duration: ~{est} min")
+    reboot = pending.get("reboot_required", True)
+    lines.append(f"Reboot:        {'required' if reboot else 'not required'}")
+    console.print(Panel("\n".join(lines), title="Staged Appliance Update", border_style="cyan"))
+
+
+async def _async_upgrade_pending() -> None:
+    from proliant.oneview.appliance_update import read_pending
+
+    async with _load_client() as client:
+        with get_console().status("[dim]Reading staged appliance update…[/dim]"):
+            pending = await read_pending(client)
+
+    if get_output_mode() == OutputMode.JSON:
+        print_json(pending or {})
+        return
+
+    console = get_console()
+    if not pending:
+        console.print("[green]No appliance update is currently staged.[/green]")
+        return
+    _print_pending_panel(console, pending)
+
+
+async def _cmd_upgrade_pending(args: argparse.Namespace) -> None:
+    await _async_upgrade_pending()
+
+
+async def _async_upgrade_cancel(do: bool) -> None:
+    from proliant.oneview.appliance_update import clear_pending, read_pending
+
+    console = get_console()
+    async with _load_client() as client:
+        pending = await read_pending(client)
+        if not pending:
+            if get_output_mode() == OutputMode.JSON:
+                print_json({"removed": False, "reason": "nothing staged"})
+            else:
+                console.print("[green]Nothing staged — no pending update to cancel.[/green]")
+            return
+        if not do:
+            if get_output_mode() == OutputMode.JSON:
+                print_json({"removed": False, "pending": pending})
+            else:
+                _print_pending_panel(console, pending)
+                console.print("\n[yellow]Dry run.[/yellow] Re-run with [bold]--yes[/bold] "
+                              "to remove this staged update.")
+            return
+        with console.status("[dim]Removing staged update…[/dim]"):
+            await clear_pending(client)
+
+    if get_output_mode() == OutputMode.JSON:
+        print_json({"removed": True, "pending": pending})
+    else:
+        console.print("[green]Staged appliance update removed.[/green]")
+
+
+async def _cmd_upgrade_cancel(args: argparse.Namespace) -> None:
+    await _async_upgrade_cancel(do=bool(getattr(args, "yes", False)))
+
+
+def _resolve_upgrade_image(args: argparse.Namespace, platform: str, console, json_mode: bool):
+    """Resolve the update image from --image or --from-dir. Returns ApplianceImage or None."""
+    from proliant.oneview.appliance_update import discover_images, parse_image_filename
+
+    image_path = getattr(args, "image", None)
+    from_dir = getattr(args, "from_dir", None)
+
+    if image_path:
+        if not os.path.isfile(image_path):
+            console.print(f"[red]Image not found:[/red] {image_path}")
+            return None
+        name = os.path.basename(image_path)
+        size = os.path.getsize(image_path)
+        img = parse_image_filename(name, path=image_path, size_bytes=size)
+        if img is None:
+            # Unrecognized name — allow it, but we can't infer version/platform.
+            from proliant.oneview.appliance_update import ApplianceImage
+            console.print(f"[yellow]Warning:[/yellow] '{name}' doesn't match the expected "
+                          "appliance-update naming; proceeding but version can't be verified.")
+            img = ApplianceImage(path=image_path, filename=name, platform="unknown",
+                                 family_label="", version="", version_tuple=(0, 0, 0),
+                                 size_bytes=size)
+        return img
+
+    if from_dir:
+        try:
+            images = discover_images(from_dir, platform=platform)
+        except OSError as exc:
+            console.print(f"[red]Cannot read image directory:[/red] {exc}")
+            return None
+        if not images:
+            console.print(f"[yellow]No {platform} appliance update images found in[/yellow] {from_dir}")
+            return None
+        if len(images) == 1:
+            return images[0]
+        if json_mode:
+            console.print("[red]Multiple images found; specify one with --image in JSON mode.[/red]")
+            return None
+        # Interactive picker (newest last).
+        table = make_table(
+            f"Available {platform} appliance updates in {from_dir}",
+            ("#", {"justify": "right", "no_wrap": True}),
+            ("Version", {"no_wrap": True}),
+            ("File", {"no_wrap": True}),
+            ("Size", {"justify": "right", "no_wrap": True}),
+        )
+        for i, im in enumerate(images, 1):
+            table.add_row(str(i), im.version, im.filename, f"{im.as_dict()['size_gb']:.2f} GB")
+        console.print(table)
+        try:
+            choice = console.input(f"Select image [1-{len(images)}] (default {len(images)} = newest): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[yellow]Cancelled.[/yellow]")
+            return None
+        if not choice:
+            return images[-1]
+        if not choice.isdigit() or not (1 <= int(choice) <= len(images)):
+            console.print("[red]Invalid selection.[/red]")
+            return None
+        return images[int(choice) - 1]
+
+    console.print("[red]Provide an image with[/red] --image <path> [red]or[/red] --from-dir <dir>.")
+    return None
+
+
+async def _async_upgrade_run(args: argparse.Namespace) -> None:
+    from proliant.oneview.appliance_update import (
+        platform_for_appliance,
+        read_pending,
+        run_appliance_upgrade,
+    )
+    from proliant.oneview.upgrade import gather_readiness
+
+    console = get_console()
+    json_mode = get_output_mode() == OutputMode.JSON
+
+    # 1. Connect once for the readiness gate + platform/version detection.
+    async with _load_client() as client:
+        with console.status("[dim]Assessing OneView upgrade readiness…[/dim]"):
+            report = await gather_readiness(client)
+        existing = await read_pending(client)
+
+    app = report["appliance"]
+    verdict = report["verdict"]
+    platform = platform_for_appliance(app.get("model") or app.get("family") or "")
+
+    if not json_mode:
+        vstyle = _VERDICT_STYLE.get(verdict, "white")
+        console.print(Panel(
+            f"[bold]{app.get('model') or 'OneView appliance'}[/bold]  "
+            f"({app.get('family') or '—'})\n"
+            f"Current version:  [bold]{app.get('software_version') or '—'}[/bold]\n"
+            f"Readiness verdict: [bold {vstyle}]{verdict}[/bold {vstyle}]",
+            title="Appliance Upgrade", border_style=vstyle))
+
+    if verdict == "FAIL" and not getattr(args, "force", False):
+        msg = "Readiness verdict is FAIL. Resolve the failing checks (see " \
+              "'proliant oneview upgrade readiness') or re-run with --force."
+        if json_mode:
+            print_json({"status": "aborted", "reason": "readiness FAIL", "verdict": verdict})
+        else:
+            console.print(f"[red]{msg}[/red]")
+        return
+
+    # 2. Resolve the update image.
+    img = _resolve_upgrade_image(args, platform, console, json_mode)
+    if img is None:
+        return
+
+    if not json_mode:
+        console.print(f"Selected image: [bold]{img.filename}[/bold]"
+                      + (f"  (version {img.version})" if img.version else ""))
+
+    # 3. Build a reconnect-capable factory and run the staged/guarded flow.
+    factory = _oneview_client_factory()
+    execute = bool(getattr(args, "execute", False))
+
+    def on_event(kind: str, data: dict) -> None:
+        if json_mode:
+            return
+        if kind == "clearing":
+            console.print("[dim]Clearing previously staged update…[/dim]")
+        elif kind == "already-staged":
+            console.print("[dim]Requested image is already staged — skipping upload.[/dim]")
+        elif kind == "uploading":
+            gb = (data.get("size_bytes") or 0) / (1024 ** 3)
+            console.print(f"[dim]Uploading {data.get('filename')} ({gb:.2f} GB) — "
+                          "this can take several minutes…[/dim]")
+        elif kind == "staged":
+            _print_pending_panel(console, data)
+        elif kind == "installing":
+            console.print("[yellow]Starting appliance install — do NOT power-cycle the "
+                          "appliance until it completes.[/yellow]")
+        elif kind == "progress":
+            pct = data.get("percent")
+            pct_s = f"{pct:.0f}%" if isinstance(pct, (int, float)) else "?"
+            console.print(f"[dim]  install: {pct_s}  {data.get('task_step') or ''} "
+                          f"{data.get('status') or ''}[/dim]", highlight=False)
+        elif kind == "rebooting":
+            console.print("[dim]  appliance unreachable (rebooting) — waiting…[/dim]")
+
+    def confirm(staged: dict) -> bool:
+        if getattr(args, "yes", False):
+            return True
+        if json_mode:
+            return False  # never silently execute a reboot in scripted mode
+        console.print(Panel(
+            f"About to INSTALL [bold]{staged.get('version') or staged.get('file_name')}[/bold] "
+            f"on [bold]{app.get('model')}[/bold] ({app.get('software_version')}).\n"
+            "[red]The appliance will REBOOT and be offline for the duration.[/red]\n"
+            "Ensure you have a current backup before proceeding.",
+            title="Confirm appliance install", border_style="red"))
+        token = app.get("software_version") or "upgrade"
+        ans = console.input(f'Type the CURRENT version "{token}" to proceed (or anything else to abort): ')
+        return ans.strip() == token
+
+    result = await run_appliance_upgrade(
+        factory, img,
+        execute=execute,
+        confirm=confirm if execute else None,
+        on_event=on_event,
+        clear_existing=bool(getattr(args, "clear_pending", False)),
+        poll_interval_s=_REBOOT_POLL_S,
+        reboot_timeout_s=_REBOOT_WAIT_TIMEOUT_S,
+    )
+
+    if json_mode:
+        print_json(result)
+        return
+
+    status = result.get("status")
+    if status == "staged":
+        console.print("\n[green]Image staged.[/green] Re-run with [bold]--execute[/bold] "
+                      "to install and reboot the appliance.")
+    elif status == "conflict":
+        console.print("\n[yellow]A different update is already staged.[/yellow] "
+                      "Re-run with [bold]--clear-pending[/bold] to replace it, or "
+                      "[bold]proliant oneview upgrade cancel --yes[/bold] to remove it.")
+    elif status == "aborted":
+        console.print("\n[yellow]Aborted — appliance not modified.[/yellow]")
+    elif status == "completed":
+        ver = (result.get("version") or {}).get("software_version", "")
+        console.print(f"\n[green]Upgrade complete.[/green] Appliance now on "
+                      f"[bold]{ver or 'the new version'}[/bold].")
+    elif status == "failed":
+        console.print("\n[red]Install failed.[/red] Check the appliance console / "
+                      "'proliant oneview upgrade pending' and the OneView UI.")
+    elif status == "timeout":
+        console.print("\n[yellow]Timed out waiting for the appliance to return.[/yellow] "
+                      "It may still be completing — check the OneView UI.")
+
+
+async def _cmd_upgrade_run(args: argparse.Namespace) -> None:
+    await _async_upgrade_run(args)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="proliant oneview",
@@ -2175,6 +2468,11 @@ examples:
   proliant oneview upgrade readiness                     Pre-upgrade readiness report
   proliant oneview upgrade cleanup                       Preview unused firmware baselines
   proliant oneview upgrade cleanup --yes                 Delete unused baselines (free disk)
+  proliant oneview upgrade run --from-dir "\\\\srv\\iso\\Composer BIN"   Pick + stage an update image
+  proliant oneview upgrade run --image update.bin        Stage a specific update image
+  proliant oneview upgrade run --image update.bin --execute   Stage + install (reboots appliance)
+  proliant oneview upgrade pending                       Show the currently staged update
+  proliant oneview upgrade cancel --yes                  Remove a stuck staged update
   proliant oneview appliances list                       List configured appliances (* = active)
   proliant oneview appliances use datacenter-b           Switch which appliance commands target
 """,
@@ -2335,7 +2633,7 @@ examples:
     p_rep_mem.set_defaults(func=_cmd_report_memory)
 
     # ── upgrade (readiness + disk cleanup) ────────────────────────────────
-    p_upgrade = sub.add_parser("upgrade", help="Appliance upgrade readiness & disk cleanup")
+    p_upgrade = sub.add_parser("upgrade", help="Appliance software upgrade, readiness & disk cleanup")
     s_upgrade = p_upgrade.add_subparsers(dest="what", metavar="ACTION")
     s_upgrade.required = True
     p_up_ready = s_upgrade.add_parser("readiness",
@@ -2346,6 +2644,35 @@ examples:
     p_up_clean.add_argument("--yes", "-y", action="store_true",
         help="Actually delete the unused baselines (default is a dry-run preview)")
     p_up_clean.set_defaults(func=_cmd_upgrade_cleanup)
+
+    p_up_run = s_upgrade.add_parser("run",
+        help="Upload + stage an appliance software update (guarded --execute installs it)")
+    g_up_src = p_up_run.add_mutually_exclusive_group()
+    up_image_arg = g_up_src.add_argument("--image", metavar="PATH",
+        help="Path to the appliance update .bin (local or UNC)")
+    up_image_arg.completer = suppress_file_completion()
+    up_dir_arg = g_up_src.add_argument("--from-dir", metavar="DIR", dest="from_dir",
+        help="Directory of update images to pick from (e.g. a network share)")
+    up_dir_arg.completer = suppress_file_completion()
+    p_up_run.add_argument("--execute", action="store_true",
+        help="Actually install after staging (reboots the appliance). Default: stage only")
+    p_up_run.add_argument("--yes", "-y", action="store_true",
+        help="Skip the typed confirmation for --execute")
+    p_up_run.add_argument("--force", action="store_true",
+        help="Proceed even if the readiness verdict is FAIL")
+    p_up_run.add_argument("--clear-pending", action="store_true", dest="clear_pending",
+        help="Replace a different already-staged update instead of aborting")
+    p_up_run.set_defaults(func=_cmd_upgrade_run)
+
+    p_up_pending = s_upgrade.add_parser("pending",
+        help="Show the currently staged appliance update (read-only)")
+    p_up_pending.set_defaults(func=_cmd_upgrade_pending)
+
+    p_up_cancel = s_upgrade.add_parser("cancel",
+        help="Remove a stuck/aborted staged appliance update")
+    p_up_cancel.add_argument("--yes", "-y", action="store_true",
+        help="Actually remove the staged update (default is a dry-run preview)")
+    p_up_cancel.set_defaults(func=_cmd_upgrade_cancel)
 
     # ── appliances (multi-appliance switching) ────────────────────────────
     # inventory.ini can hold more than one OneView appliance (each its own

@@ -2154,20 +2154,20 @@ def _render_ssp_plan(console, plan: dict) -> None:
     if compat:
         appliance = compat.get("appliance_version") or "unknown"
         compat_line = (
-            f"\nOneView:   {appliance}"
-            f"\nCompat:    [{_compat_style}]{compat.get('message', '')}[/{_compat_style}]"
+            f"\nOneView:         {appliance}"
+            f"\nCompatibility:   [{_compat_style}]{compat.get('message', '')}[/{_compat_style}]"
         )
         rec = compat.get("recommended")
         if rec:
             rec_date = compat.get("recommended_release_date")
             rec_txt = f"SSP {rec}" + (f" (released {rec_date})" if rec_date else "")
-            compat_line += f"\nHPE recs:  [green]{rec_txt}[/green]"
+            compat_line += f"\nHPE recommends:  [green]{rec_txt}[/green]"
     console.print(Panel(
-        f"Baseline:  [bold]{b.get('name') or '—'}[/bold]"
+        f"Baseline:        [bold]{b.get('name') or '—'}[/bold]"
         + (f"  ({b.get('version')})" if b.get("version") else "")
-        + (f"\nReleased:  {released}" if released else "")
+        + (f"\nReleased:        {released}" if released else "")
         + compat_line
-        + f"\nChanges:   [bold]{plan.get('changes', 0)}[/bold] target(s) would be updated",
+        + f"\nChanges:         [bold]{plan.get('changes', 0)}[/bold] target(s) would be updated",
         title="SSP Firmware Apply — Plan", border_style="cyan"))
     if compat.get("source_url"):
         url = compat["source_url"]
@@ -2305,11 +2305,25 @@ async def _async_firmware_apply(args: argparse.Namespace) -> None:
                 f"\n[red]⚠ {compat.get('message', '')}[/red] "
                 "Verify the SSP release notes before proceeding."
             )
+        infra_ct = sum(1 for r in plan.get("logical_enclosures", []) if r.get("will_change"))
+        compute_ct = sum(1 for r in plan.get("server_profiles", []) if r.get("will_change"))
+        impact = []
+        if infra_ct:
+            impact.append("[red]Interconnects will reboot (one redundant side at a time).[/red]")
+        if compute_ct:
+            impact.append(
+                f"[red]{compute_ct} compute module(s) will power-cycle — ensure hosts are ready "
+                "for their servers to reboot.[/red]"
+            )
+        else:
+            impact.append(
+                "[green]No server profiles are in this plan — compute modules will NOT be "
+                "power-cycled and running servers stay up.[/green]"
+            )
         console.print(Panel(
             f"About to APPLY SSP [bold]{baseline.get('name')} ({baseline.get('version')})[/bold] to "
             f"[bold]{plan.get('changes', 0)}[/bold] target(s).\n"
-            "[red]Interconnects will reboot (one redundant side at a time) and compute "
-            "modules will power-cycle.[/red] Ensure hosts are ready for their servers to reboot."
+            + " ".join(impact)
             + compat_warn,
             title="Confirm SSP firmware apply", border_style="red"))
         ans = console.input(f'Type the baseline version "{token}" to proceed (or anything else to abort): ')

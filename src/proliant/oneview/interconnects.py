@@ -428,13 +428,23 @@ def format_adapter_port(port_id: str) -> str:
 
 
 def _connected_to(neighbor: dict | None) -> str:
+    """Neighbor label for Link/Uplink port rows.
+
+    Prefers the LLDP System Name TLV (``remoteSystemName``) -- the remote
+    switch's actual hostname (e.g. ``'hst-acileaf-01'``, ``'SN3420M-01'``) --
+    over its chassis ID, which OneView's own GUI shows and is usually just a
+    MAC address. Falls back to ``remoteChassisId`` when the neighbor doesn't
+    advertise a system name (e.g. Synergy-internal stacking links, which
+    report ``remoteType == "internal"`` and a serial-number chassis ID with
+    no system name at all).
+    """
     if not neighbor:
         return "none"
-    chassis = neighbor.get("remoteChassisId") or neighbor.get("remoteSystemName") or ""
+    host = neighbor.get("remoteSystemName") or neighbor.get("remoteChassisId") or ""
     port = neighbor.get("remotePortId") or neighbor.get("remotePortDescription") or ""
-    if chassis and port:
-        return f"{chassis} ({port})"
-    return chassis or port or "none"
+    if host and port:
+        return f"{host} ({port})"
+    return host or port or "none"
 
 
 def _uplink_port_visible(port: dict) -> bool:

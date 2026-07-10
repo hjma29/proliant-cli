@@ -33,9 +33,28 @@ def test_format_adapter_port(raw, expected):
     assert ic.format_adapter_port(raw) == expected
 
 
-def test_connected_to_prefers_chassis_and_port():
+def test_connected_to_falls_back_to_chassis_and_port():
+    # No LLDP system-name TLV advertised (e.g. plain switch/NIC) -- chassis ID stands in.
     neighbor = {"remoteChassisId": "b8:e9:24:8f:2c:62", "remotePortId": "swp1"}
     assert ic._connected_to(neighbor) == "b8:e9:24:8f:2c:62 (swp1)"
+
+
+def test_connected_to_prefers_system_name_over_chassis_mac():
+    # Real switch hostname (LLDP System Name) beats the chassis MAC OneView's GUI shows.
+    neighbor = {
+        "remoteChassisId": "78:0c:f0:7d:8a:c3",
+        "remoteSystemName": "hst-acileaf-01",
+        "remotePortId": "Eth1/5",
+        "remotePortDescription": "topology/pod-1/protpaths-101-102/pathep-[leaf12-eth5_PolGrp]",
+    }
+    assert ic._connected_to(neighbor) == "hst-acileaf-01 (Eth1/5)"
+
+
+def test_connected_to_empty_system_name_falls_back_to_chassis():
+    # OneView returns "" (not absent) for neighbors with no system-name TLV
+    # (e.g. Synergy-internal stacking links) -- must fall back, not show blank.
+    neighbor = {"remoteChassisId": "7C9M3700FM", "remoteSystemName": "", "remotePortId": "Q7"}
+    assert ic._connected_to(neighbor) == "7C9M3700FM (Q7)"
 
 
 def test_connected_to_none_neighbor():

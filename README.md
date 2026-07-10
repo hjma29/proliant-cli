@@ -15,7 +15,7 @@ Whether you manage a handful of bare-metal servers or a large fleet across multi
 ![proliant demo](https://hjma29.github.io/proliant-cli/assets/demo.gif)
 
 
-> **Disclaimer:** This is an independent project — not affiliated with, endorsed by, or supported by HPE. The code in this repository was written with GitHub Copilot. Provided as-is with no warranty; you're responsible for any impact to your hardware. Safe for read-only exploration — use normal caution with any change operation.
+> **Note:** An independent project (not an official HPE tool), built with GitHub Copilot. Read-only commands are safe to explore — use caution with real hardware state change.
 
 ## Installation
 

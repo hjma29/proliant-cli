@@ -4,7 +4,7 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ---
 
-## v1.0.36 — 2026-07-09
+## v1.0.36 — 2026-07-10
 
 ### New Features
 - `proliant oneview upgrade run`: upload and stage an appliance software update image (`.bin`), then optionally install it. Pick an image interactively from a directory/share with `--from-dir`, or point at one with `--image`. Staging is the default; the reboot-inducing install is gated behind `--execute` plus a typed confirmation, and blocked when the readiness verdict is FAIL (override with `--force`).

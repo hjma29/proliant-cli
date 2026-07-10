@@ -107,6 +107,7 @@ proliant oneview firmware bundles                        # registered SPP/SSP ba
 proliant oneview firmware compliance                     # per-server compliance vs newer baselines
 proliant oneview firmware apply --baseline <ssp>         # plan an SSP rollout (shared infra + compute)
 proliant oneview firmware apply --all-enclosures --all-profiles --execute   # apply it (reboots HW)
+#   The plan shows an OneView<->SSP compatibility note (per HPE's Synergy Software Releases matrix).
 proliant oneview upgrade readiness                       # pre-upgrade readiness report
 proliant oneview upgrade run --from-dir <dir>            # pick + stage an appliance software update
 proliant oneview upgrade run --image <file> --execute   # stage + install (reboots the appliance)

@@ -146,6 +146,77 @@ def test_build_plan_unmanaged_profile_always_changes():
     assert "managed firmware" in plan["server_profiles"][0]["detail"]
 
 
+def test_build_plan_compat_absent_without_appliance_version():
+    plan = build_plan(_newest(), [normalize_le(LE_RAW)], [])
+    assert plan["compat"] is None
+
+
+def test_build_plan_attaches_compat_when_appliance_version_given():
+    plan = build_plan(_newest(), [normalize_le(LE_RAW)], [], appliance_version="10.00.00-0507518")
+    assert plan["compat"]["status"] == "recommended"
+    assert plan["compat"]["appliance_track"] == "10.0"
+    assert plan["compat"]["source_url"].startswith("https://support.hpe.com/")
+
+
+# ── OneView ↔ SSP compatibility ───────────────────────────────────────────────
+
+@pytest.mark.parametrize("version, track", [
+    ("10.00.00-0507518", "10.0"),
+    ("9.20.00-0500184", "9.2"),
+    ("10.10.00", "10.1"),
+    ("11.30.00-1", "11.3"),
+    ("10.20.00", "10.2"),
+    ("", ""),
+    ("garbage", ""),
+])
+def test_oneview_track(version, track):
+    from proliant.oneview.ssp_update import oneview_track
+    assert oneview_track(version) == track
+
+
+def test_ssp_release_strips_prefix():
+    from proliant.oneview.ssp_update import ssp_release
+    assert ssp_release({"version": "SY-2026.01.02"}) == "2026.01.02"
+    assert ssp_release({"version": "2025.10.02"}) == "2025.10.02"
+    assert ssp_release({}) == ""
+
+
+def test_compat_note_recommended_for_10_0():
+    from proliant.oneview.ssp_update import compat_note
+    note = compat_note("10.00.00-0507518", {"version": "SY-2026.01.02"})
+    assert note["status"] == "recommended"
+    assert note["recommended"] == "2026.01.02"
+    assert "recommended" in note["message"]
+
+
+def test_compat_note_supported_but_not_recommended():
+    from proliant.oneview.ssp_update import compat_note
+    note = compat_note("10.00.00-0507518", {"version": "SY-2025.07.03"})
+    assert note["status"] == "supported"
+    assert "recommended is 2026.01.02" in note["message"]
+
+
+def test_compat_note_family_wildcard_match():
+    from proliant.oneview.ssp_update import compat_note
+    # 10.0 lists 2025.05.01 concretely, but 10.1 lists the 2025.05.xx family
+    note = compat_note("10.10.00", {"version": "SY-2025.05.07"})
+    assert note["status"] == "supported"
+
+
+def test_compat_note_unsupported_when_ssp_too_new_for_track():
+    from proliant.oneview.ssp_update import compat_note
+    note = compat_note("10.00.00-0507518", {"version": "SY-2026.04.01"})
+    assert note["status"] == "unsupported"
+    assert "not listed" in note["message"]
+
+
+def test_compat_note_unknown_track():
+    from proliant.oneview.ssp_update import compat_note
+    note = compat_note("8.50.00", {"version": "SY-2026.01.02"})
+    assert note["status"] == "unknown"
+    assert note["recommended"] is None
+
+
 # ── payload construction ──────────────────────────────────────────────────────
 
 def test_build_le_firmware_patch_shape():

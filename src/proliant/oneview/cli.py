@@ -2145,12 +2145,30 @@ def _render_ssp_plan(console, plan: dict) -> None:
     """Render the non-destructive apply plan (baseline + per-target changes)."""
     b = plan.get("baseline") or {}
     released = (b.get("release_date") or "")[:10]
+    compat = plan.get("compat") or {}
+    _compat_style = {
+        "recommended": "green", "supported": "green",
+        "unsupported": "red", "unknown": "yellow",
+    }.get(compat.get("status"), "dim")
+    compat_line = ""
+    if compat:
+        appliance = compat.get("appliance_version") or "unknown"
+        compat_line = (
+            f"\nOneView:   {appliance}"
+            f"\nCompat:    [{_compat_style}]{compat.get('message', '')}[/{_compat_style}]"
+        )
     console.print(Panel(
         f"Baseline:  [bold]{b.get('name') or '—'}[/bold]"
         + (f"  ({b.get('version')})" if b.get("version") else "")
         + (f"\nReleased:  {released}" if released else "")
+        + compat_line
         + f"\nChanges:   [bold]{plan.get('changes', 0)}[/bold] target(s) would be updated",
         title="SSP Firmware Apply — Plan", border_style="cyan"))
+    if compat.get("source_url"):
+        console.print(
+            f"[dim]Compatibility per HPE Synergy Software Releases "
+            f"(as of {compat.get('as_of', '')}): {compat['source_url']}[/dim]"
+        )
 
     rows = plan.get("logical_enclosures", []) + plan.get("server_profiles", [])
     if not rows:
@@ -2270,11 +2288,19 @@ async def _async_firmware_apply(args: argparse.Namespace) -> None:
         if json_mode:
             return False  # never silently flash hardware in scripted mode
         token = baseline.get("version") or baseline.get("name") or "apply"
+        compat = plan.get("compat") or {}
+        compat_warn = ""
+        if compat.get("status") == "unsupported":
+            compat_warn = (
+                f"\n[red]⚠ {compat.get('message', '')}[/red] "
+                "Verify the SSP release notes before proceeding."
+            )
         console.print(Panel(
             f"About to APPLY SSP [bold]{baseline.get('name')} ({baseline.get('version')})[/bold] to "
             f"[bold]{plan.get('changes', 0)}[/bold] target(s).\n"
             "[red]Interconnects will reboot (one redundant side at a time) and compute "
-            "modules will power-cycle.[/red] Ensure hosts are ready for their servers to reboot.",
+            "modules will power-cycle.[/red] Ensure hosts are ready for their servers to reboot."
+            + compat_warn,
             title="Confirm SSP firmware apply", border_style="red"))
         ans = console.input(f'Type the baseline version "{token}" to proceed (or anything else to abort): ')
         return ans.strip() == token
@@ -2287,6 +2313,7 @@ async def _async_firmware_apply(args: argparse.Namespace) -> None:
             scope=LE_SCOPE_SHARED, install_type=install_type, force=bool(getattr(args, "force", False)),
             execute=execute, confirm=confirm if execute else None, on_event=on_event,
             poll_interval_s=_SSP_POLL_S, task_timeout_s=_SSP_TASK_TIMEOUT_S,
+            appliance_version=data.get("appliance_version", ""),
         )
     finally:
         _stop_bar()

@@ -125,6 +125,132 @@ def select_baseline(baselines: list[dict], query: str | None) -> dict[str, Any] 
     return None
 
 
+# ── OneView ↔ SSP compatibility (advisory) ─────────────────────────────────────
+#
+# OneView and SSPs ship as matched HPE Synergy Software Releases; an SSP is only
+# validated against specific appliance versions. The appliance's firmware-drivers
+# API exposes NO minimum-OneView field, so this pairing can't be read live — it
+# lives only in HPE's published matrix. The map below is a snapshot of that table
+# (keyed by OneView "track" — e.g. 10.0), used to surface a source-backed note in
+# the plan. It is advisory: always confirm against the SSP release notes.
+#
+#   Source: HPE Synergy Software Releases — Overview
+#   https://support.hpe.com/docs/display/public/synergy-sw-release/index.html
+#
+# "xx" in a supported entry is a wildcard for the trailing component (a whole
+# point-release family, e.g. 2025.05.xx). Tracks whose appliance version string
+# is ambiguous to parse (11.01, 9.10.01) are intentionally omitted → "unknown".
+SSP_COMPAT_SOURCE_URL = "https://support.hpe.com/docs/display/public/synergy-sw-release/index.html"
+SSP_COMPAT_AS_OF = "2026-07"
+
+SSP_COMPAT: dict[str, dict[str, Any]] = {
+    "11.3": {"recommended": "2026.04.01",
+             "supported": ["2026.01.02", "2025.10.02", "2025.07.03", "2025.05.xx"]},
+    "11.2": {"recommended": "2026.04.01", "supported": ["2026.01.02"]},
+    "11.1": {"recommended": "2026.04.01", "supported": ["2026.01.02", "2025.10.02"]},
+    "10.2": {"recommended": "2025.10.02", "supported": ["2025.07.03", "2025.05.xx"]},
+    "10.1": {"recommended": "2025.07.03", "supported": ["2025.05.xx"]},
+    "10.0": {"recommended": "2026.01.02",
+             "supported": ["2025.10.02", "2025.07.03", "2025.05.01"]},
+    "9.4": {"recommended": "2025.05.01", "supported": []},
+    "9.3": {"recommended": "2025.05.01", "supported": []},
+    "9.2": {"recommended": "2024.11.02", "supported": []},
+    "9.0": {"recommended": "2024.11.02", "supported": []},
+}
+
+
+def oneview_track(version: str) -> str:
+    """Reduce a OneView ``softwareVersion`` to its HPE matrix "track" label.
+
+    HPE zero-pads the minor field to two digits (``9.20``, ``10.00``, ``10.10``)
+    while the release matrix labels drop the trailing zero (``9.2``, ``10.0``,
+    ``10.1``). Examples::
+
+        "10.00.00-0507518" -> "10.0"
+        "9.20.00-0500184"  -> "9.2"
+        "10.10.00"         -> "10.1"
+
+    Returns ``""`` when *version* isn't a recognizable ``MAJOR.MINOR…`` string.
+    """
+    head = (version or "").strip().split("-", 1)[0].split(" ", 1)[0]
+    parts = head.split(".")
+    if not parts or not parts[0].isdigit():
+        return ""
+    major = int(parts[0])
+    minor_field = parts[1] if len(parts) > 1 and parts[1].isdigit() else "0"
+    n = int(minor_field)
+    minor = n // 10 if n >= 10 and n % 10 == 0 else n
+    return f"{major}.{minor}"
+
+
+def ssp_release(baseline: dict) -> str:
+    """The bare SSP release id from a baseline (``SY-2026.01.02`` -> ``2026.01.02``)."""
+    v = (baseline.get("version") or "").strip()
+    if "-" in v:
+        v = v.split("-", 1)[1]
+    return v
+
+
+def _ssp_matches(ssp: str, listed: str) -> bool:
+    """Compare an SSP release id to a matrix entry, treating ``xx`` as a wildcard."""
+    if not ssp or not listed:
+        return False
+    if ssp == listed:
+        return True
+    a, b = ssp.split("."), listed.split(".")
+    if len(a) != len(b):
+        return False
+    return all(x == y or y.lower() == "xx" for x, y in zip(a, b))
+
+
+def compat_note(appliance_version: str, baseline: dict) -> dict[str, Any]:
+    """Classify *baseline* against *appliance_version* using the HPE matrix.
+
+    ``status`` is one of ``recommended`` / ``supported`` / ``unsupported`` /
+    ``unknown`` (no published data for that OneView track). Always includes the
+    source URL + snapshot date so the plan can cite it.
+    """
+    track = oneview_track(appliance_version)
+    ssp = ssp_release(baseline)
+    note: dict[str, Any] = {
+        "appliance_version": appliance_version,
+        "appliance_track": track,
+        "ssp": ssp,
+        "recommended": None,
+        "supported": [],
+        "source_url": SSP_COMPAT_SOURCE_URL,
+        "as_of": SSP_COMPAT_AS_OF,
+    }
+    entry = SSP_COMPAT.get(track)
+    if not entry:
+        note["status"] = "unknown"
+        note["message"] = (
+            f"No published SSP compatibility data for OneView "
+            f"{track or appliance_version or 'this appliance'}."
+        )
+        return note
+    recommended = entry["recommended"]
+    supported = list(entry.get("supported", []))
+    note["recommended"] = recommended
+    note["supported"] = supported
+    if _ssp_matches(ssp, recommended):
+        note["status"] = "recommended"
+        note["message"] = f"SSP {ssp} is HPE's recommended baseline for OneView {track}."
+    elif any(_ssp_matches(ssp, s) for s in supported):
+        note["status"] = "supported"
+        note["message"] = (
+            f"SSP {ssp} is supported on OneView {track} "
+            f"(recommended is {recommended})."
+        )
+    else:
+        allowed = ", ".join([recommended, *supported]) if supported else recommended
+        note["status"] = "unsupported"
+        note["message"] = (
+            f"SSP {ssp} is not listed for OneView {track} — HPE lists: {allowed}."
+        )
+    return note
+
+
 # ── target normalization / resolution ──────────────────────────────────────────
 
 def normalize_le(le: dict) -> dict[str, Any]:
@@ -167,12 +293,15 @@ def resolve_targets(
 # ── plan building ──────────────────────────────────────────────────────────────
 
 def build_plan(
-    baseline: dict, le_targets: list[dict], profile_targets: list[dict]
+    baseline: dict, le_targets: list[dict], profile_targets: list[dict],
+    *, appliance_version: str = "",
 ) -> dict[str, Any]:
     """A non-destructive summary of what an apply *would* change.
 
     Each target is annotated with whether the requested baseline differs from
-    what it currently has (``will_change``) plus a short human ``detail``.
+    what it currently has (``will_change``) plus a short human ``detail``. When
+    *appliance_version* is given, a source-backed ``compat`` note pairs the
+    running OneView version with the chosen SSP (see :func:`compat_note`).
     """
     target_uri = baseline.get("uri", "")
 
@@ -215,6 +344,7 @@ def build_plan(
         "logical_enclosures": le_plans,
         "server_profiles": prof_plans,
         "changes": changes,
+        "compat": compat_note(appliance_version, baseline) if appliance_version else None,
     }
 
 
@@ -369,6 +499,7 @@ async def run_ssp_apply(
     sleeper: Callable[[float], Any] | None = None,
     poll_interval_s: float = 20.0,
     task_timeout_s: float = 90 * 60,
+    appliance_version: str = "",
 ) -> dict[str, Any]:
     """Plan (and optionally apply) an SSP firmware baseline rollout.
 
@@ -387,7 +518,7 @@ async def run_ssp_apply(
     sleeper = sleeper or asyncio.sleep
     emit = on_event or (lambda kind, data: None)
 
-    plan = build_plan(baseline, le_targets, profile_targets)
+    plan = build_plan(baseline, le_targets, profile_targets, appliance_version=appliance_version)
     emit("plan", plan)
 
     if not execute:
@@ -442,8 +573,14 @@ async def fetch_apply_targets(client: "OneViewClient") -> dict[str, Any]:
     raw_drivers = await client.get_all(FW_DRIVERS_URI)
     les = await client.get_all(LE_URI)
     profiles = await client.get_all(PROFILES_URI)
+    try:
+        ver = await client.get("/rest/appliance/nodeinfo/version")
+        appliance_version = (ver or {}).get("softwareVersion", "")
+    except Exception:  # noqa: BLE001 — version is advisory; never fail the whole apply on it
+        appliance_version = ""
     return {
         "baselines": service_pack_baselines(raw_drivers),
         "logical_enclosures": [normalize_le(le) for le in les],
         "server_profiles": [normalize_profile(p) for p in profiles],
+        "appliance_version": appliance_version,
     }

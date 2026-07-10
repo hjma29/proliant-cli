@@ -9,6 +9,26 @@ server-firmware bundle. Appliance software is **upload only** — the appliance
 cannot pull it from a URL — so the image must be a local/UNC file path that is
 streamed to the appliance.
 
+There are two very different "upgrades" in the Synergy/OneView world; this module
+only implements the first:
+
+  (1) **Appliance software upgrade** (this module — 9.20 -> 10.0, ``update.bin``):
+      fully **self-managed**. A single ``PUT .../firmware/pending?file=`` hands the
+      whole job to Composer2's two-node active/standby HA pair, which upgrades the
+      standby node, does *"Prepare for active/standby node swap"* (~55%) ->
+      *"Swap active/standby nodes"* (~60%, brief mgmt-plane outage) -> reboots and
+      upgrades the other node -> reconverges on the new version. There is **no REST
+      knob** to drive the failover manually; the caller only stages + confirms.
+
+  (2) **SSP (Synergy Service Pack) server/infrastructure firmware** (NOT here):
+      applied as a firmware **baseline** to managed hardware (compute modules,
+      interconnects, frames) via a Logical Enclosure / Server Profile firmware
+      update. OneView still drives the per-component flashing, but the operator
+      chooses the baseline, scope, and activation timing, and it is **disruptive**
+      (interconnect reboots, compute-module power cycles). The appliance must be on
+      a compatible software version (1) *before* applying a newer SSP baseline.
+      Our CLI only exposes this read-only (``oneview firmware ...``).
+
 REST flow (verified against a live Synergy Composer2, cross-checked with HPE's
 POSH-HPEOneView module and oneview-python SDK):
 
@@ -16,10 +36,15 @@ POSH-HPEOneView module and oneview-python SDK):
   DELETE /rest/appliance/firmware/pending            -> clear a stuck/aborted staged update
   POST   /rest/appliance/firmware/image (multipart)  -> upload + stage an update .bin
   PUT    /rest/appliance/firmware/pending?file=<name>-> START the install
-  GET    /cgi-bin/status/update-status.cgi           -> live install progress (phase/percent)
-  GET    /rest/appliance/progress                    -> numeric percentComplete (fallback)
-  GET    /rest/appliance/nodeinfo/version            -> confirm version (post-reboot)
+  GET    /cgi-bin/status/update-status.cgi           -> live install progress (phase/percent) — AUTHORITATIVE
+  GET    /rest/appliance/nodeinfo/version            -> confirm version (post-reboot); gates "completed"
   GET    /rest/appliance/firmware/notification       -> final upgrade result
+
+  NOTE: ``/rest/appliance/progress`` reports *firmware component* progress (e.g.
+  60/60 SSP components = 100%) that is left stale from prior tasks and is NOT the
+  appliance-software progress. Relying on it caused a false "upgrade complete" the
+  instant install started, so ``read_progress`` is CGI-only and completion is gated
+  on the version endpoint actually flipping to the target build.
 
 The write/reboot half of this flow cannot be exercised against anything but a
 live production appliance, so callers must gate real execution behind an
@@ -263,11 +288,19 @@ async def clear_pending(client: "OneViewClient") -> None:
 
 
 async def upload_image(
-    client: "OneViewClient", image_path: str, *, filename: str | None = None
+    client: "OneViewClient",
+    image_path: str,
+    *,
+    filename: str | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> dict[str, Any] | None:
-    """Stream an update image to the appliance and return the staged summary."""
+    """Stream an update image to the appliance and return the staged summary.
+
+    *on_progress* (if given) is forwarded to the client so a byte-level upload
+    progress bar can be shown for the multi-GB image.
+    """
     fn = filename or os.path.basename(image_path)
-    resp = await client.upload_file(PENDING_URI, image_path, filename=fn)
+    resp = await client.upload_file(PENDING_URI, image_path, filename=fn, on_progress=on_progress)
     # The POST response is itself the pending object; fall back to a re-read if
     # the appliance returned an empty/opaque body.
     pending = normalize_pending(resp)
@@ -283,15 +316,19 @@ async def start_install(client: "OneViewClient", file_name: str) -> dict[str, An
 
 
 async def read_progress(client: "OneViewClient") -> dict[str, Any]:
-    """Read live install progress, preferring the cgi phase view."""
+    """Read live appliance-update progress from the update-status CGI.
+
+    Only the appliance's own ``update-status.cgi`` is authoritative for a
+    *software* upgrade — it reports the real phase (``step``/``status``) and
+    ``percentageCompletion``. The generic ``/rest/appliance/progress`` endpoint
+    reports firmware *component* progress and can read back a stale ``100%``
+    left over from a prior task; trusting it made the monitor declare an upgrade
+    "complete" the instant it started, so it is deliberately not used here.
+    """
     try:
         data = await client.get(PROGRESS_CGI)
-        prog = normalize_progress(data)
-        if prog.get("task_step") or prog.get("status"):
-            return prog
-    except Exception:  # noqa: BLE001 — fall back to the REST progress endpoint
-        pass
-    data = await client.get(PROGRESS_URI)
+    except Exception:  # noqa: BLE001 — the CGI is briefly unavailable as the update spins up
+        data = {}
     return normalize_progress(data)
 
 
@@ -320,36 +357,90 @@ def _same_image(staged_file: str, image_filename: str) -> bool:
     return os.path.basename(staged_file).lower() == os.path.basename(image_filename).lower()
 
 
+def _version_tuple(raw: str) -> tuple[int, int, int]:
+    """Numeric (major, minor, revision) of a version/build string.
+
+    Tolerates a trailing build suffix, e.g. ``'10.00.00-0507518'`` -> ``(10, 0, 0)``.
+    """
+    return _norm_version(raw or "0")[1]
+
+
+def _progress_active(prog: dict[str, Any]) -> bool:
+    """True when the payload shows the install is genuinely underway.
+
+    Used so a stale/initial ``100%`` (before the install has begun) can't be
+    mistaken for completion — we only accept a "complete" signal once we've
+    actually observed the update running or the appliance rebooting.
+    """
+    pct = prog.get("percent")
+    if isinstance(pct, (int, float)) and 0.0 < pct < 100.0:
+        return True
+    blobs = (
+        (prog.get("status") or "").upper(),
+        (prog.get("task_step") or "").upper(),
+        (prog.get("step") or "").upper(),
+    )
+    keys = ("INSTALL", "UPDATE", "REBOOT", "PROGRESS", "SWAP", "PREPARE", "STAGE")
+    return any(k in b for b in blobs for k in keys)
+
+
 async def _poll_install(
     client_factory: Callable[[], Any],
     emit: Callable[[str, dict[str, Any]], None],
     sleeper: Callable[[float], Any],
     poll_interval_s: float,
     timeout_s: float,
+    target_version: str | None = None,
 ) -> dict[str, Any]:
-    """Poll install progress, tolerating the reboot outage, until done/failed."""
+    """Poll install progress, tolerating the reboot outage, until done/failed.
+
+    Completion is confirmed by the appliance actually reaching *target_version*
+    (its node-version endpoint flipping to the new build) rather than by a
+    progress percentage alone, which can read a stale ``100%`` before the
+    install has really begun. When *target_version* is unknown, an explicit
+    "complete" progress signal is accepted, but only once the install has been
+    observed running.
+    """
     elapsed = 0.0
     last: dict[str, Any] = {}
+    started = False
+    target_vt = _version_tuple(target_version) if target_version else None
+
     while elapsed <= timeout_s:
+        prog: dict[str, Any] = {}
+        version: dict[str, Any] = {}
+        reachable = True
         try:
             async with client_factory() as client:
                 prog = await read_progress(client)
-            last = prog
+                try:
+                    version = await read_version(client)
+                except Exception:  # noqa: BLE001 — version read is best-effort mid-update
+                    version = {}
+        except Exception as exc:  # noqa: BLE001 — appliance unreachable (rebooting)
+            reachable = False
+            started = True  # an unreachable appliance means the install is underway
+            emit("rebooting", {"detail": str(exc)})
+
+        if reachable:
+            last = prog or last
             emit("progress", prog)
             if is_progress_failed(prog):
-                return {"status": "failed", "progress": prog}
-            if is_progress_complete(prog):
-                version: dict[str, Any] = {}
-                try:
-                    async with client_factory() as client:
-                        version = await read_version(client)
-                except Exception:  # noqa: BLE001 — version read is best-effort
-                    version = {}
+                return {"status": "failed", "progress": prog, "version": version}
+            if _progress_active(prog):
+                started = True
+
+            sv = (version or {}).get("software_version") or ""
+            if target_vt is not None:
+                # Authoritative success: the box actually came up on the target.
+                if sv and _version_tuple(sv) >= target_vt:
+                    return {"status": "completed", "progress": prog, "version": version}
+            elif started and is_progress_complete(prog):
                 return {"status": "completed", "progress": prog, "version": version}
-        except Exception as exc:  # noqa: BLE001 — appliance unreachable (rebooting)
-            emit("rebooting", {"detail": str(exc)})
+
         await sleeper(poll_interval_s)
         elapsed += poll_interval_s
+
     return {"status": "timeout", "progress": last}
 
 
@@ -393,7 +484,13 @@ async def run_appliance_upgrade(
                 emit("clearing", existing)
                 await clear_pending(client)
             emit("uploading", {"filename": image.filename, "size_bytes": image.size_bytes})
-            staged = await upload_image(client, image.path, filename=image.filename)
+
+            def _upload_cb(sent: int, total: int) -> None:
+                emit("upload-progress", {"completed": sent, "total": total})
+
+            staged = await upload_image(
+                client, image.path, filename=image.filename, on_progress=_upload_cb
+            )
             staged = await read_pending(client) or staged
         emit("staged", staged or {})
 
@@ -412,7 +509,11 @@ async def run_appliance_upgrade(
         await start_install(client, staged["file_name"])
 
     # ── phase 3: monitor to completion/reboot ─────────────────────────────
+    target_version = (
+        (staged.get("version") if isinstance(staged, dict) else "") or image.version
+    )
     result = await _poll_install(
-        client_factory, emit, sleeper, poll_interval_s, reboot_timeout_s
+        client_factory, emit, sleeper, poll_interval_s, reboot_timeout_s,
+        target_version=target_version,
     )
     return {"pending": staged, **result}

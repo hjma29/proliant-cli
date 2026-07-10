@@ -11,7 +11,11 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 - `proliant oneview upgrade pending`: show the currently staged appliance update.
 - `proliant oneview upgrade cancel`: remove a stuck or aborted staged update.
 
+### Bug Fixes
+- `proliant oneview upgrade run --execute`: fixed a false "Upgrade complete" that printed immediately when an install started. Progress is now read only from the appliance's own update-status feed, and completion is confirmed by the appliance actually rebooting onto the target build — not by a stale `100%` left over from a prior firmware task.
+
 ### Enhancements
+- `proliant oneview upgrade run`: live progress display during long operations — a byte-level progress bar (size, speed, ETA) while the multi-GB image uploads, and a phase/percent bar while the appliance installs and reboots (e.g. "Swap active/standby nodes").
 - `proliant setup`: adding a OneView appliance now prompts for a friendly alias (like the iLO flow), defaulting to the auto-generated `oneview`/`oneview-2`/… name so pressing Enter keeps the previous behavior.
 
 ---

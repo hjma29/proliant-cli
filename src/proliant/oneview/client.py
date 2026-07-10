@@ -22,11 +22,48 @@ from __future__ import annotations
 
 import os
 import warnings
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
 from proliant.common.http import BaseAsyncClient
+
+
+class _ProgressFile:
+    """Wrap a binary file handle to report bytes read during a streamed upload.
+
+    httpx builds the multipart body by calling ``read(CHUNK_SIZE)`` in a loop and
+    determines the content length separately via ``fileno()``/``fstat`` (so the
+    callback only fires for actual body streaming, never for length probing).
+    Every other attribute (``seek``/``tell``/``fileno``/``close`` …) is delegated
+    to the underlying handle. ``on_progress`` is throttled so a multi-GB upload
+    emits a manageable number of updates rather than one per 64 KB chunk.
+    """
+
+    def __init__(self, fh, on_progress: Callable[[int, int], None], total: int):
+        self._fh = fh
+        self._cb = on_progress
+        self._total = total
+        self._read = 0
+        # Emit at most ~500 updates across the whole file (min 4 MB apart).
+        self._step = max(4 * 1024 * 1024, total // 500) if total else 4 * 1024 * 1024
+        self._since = 0
+
+    def read(self, size: int = -1) -> bytes:
+        chunk = self._fh.read(size)
+        if chunk:
+            self._read += len(chunk)
+            self._since += len(chunk)
+            if self._since >= self._step or self._read >= self._total:
+                self._since = 0
+                try:
+                    self._cb(self._read, self._total)
+                except Exception:  # noqa: BLE001 — progress must never break the upload
+                    pass
+        return chunk
+
+    def __getattr__(self, name):  # delegate seek/tell/fileno/close/etc.
+        return getattr(self._fh, name)
 
 _TIMEOUT = httpx.Timeout(timeout=60.0, connect=10.0)
 # Tighter timeout used only for the initial handshake (version check + login)
@@ -211,6 +248,7 @@ class OneViewClient(BaseAsyncClient):
         *,
         filename: str | None = None,
         timeout: httpx.Timeout | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
     ) -> dict[str, Any]:
         """Stream a local file to *uri* as multipart/form-data (field name ``file``).
 
@@ -224,6 +262,10 @@ class OneViewClient(BaseAsyncClient):
         multipart boundary itself instead of inheriting the JSON
         ``Content-Type`` default carried by the session client. The same
         session token is reused via the ``auth`` header.
+
+        If *on_progress* is given it is called as ``on_progress(bytes_sent,
+        total_bytes)`` (throttled) as the body streams, enabling an upload
+        progress bar for the large image.
         """
         filename = filename or os.path.basename(file_path)
         headers = {
@@ -237,8 +279,10 @@ class OneViewClient(BaseAsyncClient):
         # much longer than a normal request; only the initial connect is bounded.
         upload_timeout = timeout or httpx.Timeout(None, connect=10.0)
 
+        total = os.path.getsize(file_path)
         with open(file_path, "rb") as fh:
-            files = {"file": (filename, fh, "application/octet-stream")}
+            source = _ProgressFile(fh, on_progress, total) if on_progress else fh
+            files = {"file": (filename, source, "application/octet-stream")}
             async with httpx.AsyncClient(
                 base_url=self._base_url, verify=False, timeout=upload_timeout
             ) as up:

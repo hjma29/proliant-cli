@@ -170,10 +170,14 @@ def test_is_reboot_phase():
 class FakeClient:
     """Async-context OneViewClient stand-in that records calls."""
 
-    def __init__(self, *, pending=None, progress_script=None, version=None):
+    def __init__(self, *, pending=None, progress_script=None, version=None,
+                 version_script=None):
         self.pending = pending           # raw GET /pending payload (or None/{})
         self.progress_script = list(progress_script or [])
         self.version = version or {}
+        # Optional per-read version payloads (popped on each version GET) to
+        # simulate the software_version flipping only after the reboot.
+        self.version_script = list(version_script) if version_script is not None else None
         self.calls: list[tuple] = []
 
     async def __aenter__(self):
@@ -191,6 +195,8 @@ class FakeClient:
         if uri == PROGRESS_URI:
             return {}
         if uri == NODE_VERSION_URI:
+            if self.version_script:
+                self.version = self.version_script.pop(0)
             return self.version
         return {}
 
@@ -203,8 +209,11 @@ class FakeClient:
         self.calls.append(("put", uri))
         return {}
 
-    async def upload_file(self, uri, path, filename=None):
+    async def upload_file(self, uri, path, filename=None, on_progress=None):
         self.calls.append(("upload", filename or os.path.basename(path)))
+        if on_progress is not None:
+            on_progress(512, 1024)
+            on_progress(1024, 1024)
         self.pending = {
             "fileName": filename or os.path.basename(path),
             "version": "10.00.00",
@@ -315,3 +324,83 @@ async def test_run_execute_times_out():
         sleeper=_noop_sleep, poll_interval_s=1, reboot_timeout_s=2,
     )
     assert result["status"] == "timeout"
+
+
+# ── version-gated completion + no false-complete (regression) ─────────────────
+#
+# The original bug: a stale ``100%`` (left over from a prior firmware task) made
+# the poller declare the upgrade "complete" the instant install started. The fix
+# gates completion on the appliance version endpoint actually flipping to the
+# target build, so a would-be-complete progress payload can't short-circuit it.
+
+_OLD_VER = {"softwareVersion": "9.20.00-0500184", "modelNumber": "Synergy Composer2"}
+_NEW_VER = {"softwareVersion": "10.00.00-0507518", "modelNumber": "Synergy Composer2"}
+
+
+@pytest.mark.asyncio
+async def test_stale_100_percent_does_not_false_complete():
+    """A CGI payload already reading 100%/Completed must NOT be accepted as done
+    while the appliance is still on the old build — completion is gated on the
+    version endpoint flipping to the target."""
+    fake = FakeClient(
+        pending=None,
+        progress_script=[
+            {"percentageCompletion": "100%", "taskStep": "TS_COMPLETED", "status": "Completed"},
+            {"percentageCompletion": "100%", "taskStep": "TS_COMPLETED", "status": "Completed"},
+            {"percentageCompletion": "100%", "taskStep": "TS_COMPLETED", "status": "Completed"},
+        ],
+        version_script=[_OLD_VER, _OLD_VER, _NEW_VER],
+    )
+    result = await run_appliance_upgrade(
+        lambda: fake, _image(), execute=True, confirm=lambda staged: True,
+        sleeper=_noop_sleep, poll_interval_s=1, reboot_timeout_s=100,
+    )
+    assert result["status"] == "completed"
+    # Proves it waited for the real version flip instead of trusting the stale 100%.
+    assert result["version"]["software_version"] == "10.00.00-0507518"
+    version_reads = [c for c in fake.calls if c == ("get", NODE_VERSION_URI)]
+    assert len(version_reads) >= 3
+
+
+@pytest.mark.asyncio
+async def test_completion_gated_on_version_not_progress():
+    """Progress never reports 'complete' (stuck mid node-swap), but the appliance
+    comes back on the target version — the run still completes, proving success is
+    version-gated rather than percentage-gated."""
+    fake = FakeClient(
+        pending=None,
+        progress_script=[
+            {"percentageCompletion": "55%", "step": "Prepare for active/standby node swap",
+             "status": "Updating"},
+            {"percentageCompletion": "60%", "step": "Swap active/standby nodes",
+             "status": "Updating"},
+        ],
+        version_script=[_OLD_VER, _OLD_VER, _NEW_VER],
+    )
+    result = await run_appliance_upgrade(
+        lambda: fake, _image(), execute=True, confirm=lambda staged: True,
+        sleeper=_noop_sleep, poll_interval_s=1, reboot_timeout_s=100,
+    )
+    assert result["status"] == "completed"
+    assert result["version"]["software_version"] == "10.00.00-0507518"
+    assert "put" in fake.methods()  # install was actually started
+
+
+@pytest.mark.asyncio
+async def test_upload_progress_callback_emits_events():
+    """The byte-level upload callback surfaces as 'upload-progress' events so the
+    CLI can render a progress bar for the multi-GB image upload."""
+    fake = FakeClient(pending=None)
+    events: list[tuple[str, dict]] = []
+    result = await run_appliance_upgrade(
+        lambda: fake, _image(), execute=False,
+        on_event=lambda kind, data: events.append((kind, data)),
+    )
+    assert result["status"] == "staged"
+    kinds = [k for k, _ in events]
+    assert "uploading" in kinds
+    assert "staged" in kinds
+    prog_events = [d for k, d in events if k == "upload-progress"]
+    assert prog_events, "expected at least one upload-progress event"
+    assert prog_events[-1]["total"] == 1024
+    assert prog_events[-1]["completed"] == 1024

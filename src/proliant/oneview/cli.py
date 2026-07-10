@@ -2352,6 +2352,33 @@ async def _async_upgrade_run(args: argparse.Namespace) -> None:
     factory = _oneview_client_factory()
     execute = bool(getattr(args, "execute", False))
 
+    # Live progress bars: a byte bar for the multi-GB upload and a phase/percent
+    # bar for the install. Rich only allows one live display at a time, but the
+    # upload bar is always stopped (on 'staged') before the install bar starts
+    # and before any confirm prompt, so they never overlap.
+    from rich.progress import (
+        BarColumn,
+        DownloadColumn,
+        Progress,
+        SpinnerColumn,
+        TaskProgressColumn,
+        TextColumn,
+        TimeElapsedColumn,
+        TimeRemainingColumn,
+        TransferSpeedColumn,
+    )
+
+    bars: dict = {}
+
+    def _stop_bar(key: str) -> None:
+        p = bars.pop(key, None)
+        bars.pop(key + "_task", None)
+        if p is not None:
+            try:
+                p.stop()
+            except Exception:  # noqa: BLE001 — never let display teardown mask the result
+                pass
+
     def on_event(kind: str, data: dict) -> None:
         if json_mode:
             return
@@ -2360,21 +2387,63 @@ async def _async_upgrade_run(args: argparse.Namespace) -> None:
         elif kind == "already-staged":
             console.print("[dim]Requested image is already staged — skipping upload.[/dim]")
         elif kind == "uploading":
-            gb = (data.get("size_bytes") or 0) / (1024 ** 3)
-            console.print(f"[dim]Uploading {data.get('filename')} ({gb:.2f} GB) — "
-                          "this can take several minutes…[/dim]")
+            total = data.get("size_bytes") or 0
+            p = Progress(
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                DownloadColumn(),
+                TransferSpeedColumn(),
+                TimeRemainingColumn(),
+                console=console,
+            )
+            p.start()
+            bars["upload"] = p
+            bars["upload_task"] = p.add_task(
+                f"[bold]Uploading {data.get('filename')}", total=total or None
+            )
+        elif kind == "upload-progress":
+            p = bars.get("upload")
+            if p is not None:
+                p.update(
+                    bars["upload_task"],
+                    completed=data.get("completed") or 0,
+                    total=data.get("total") or None,
+                )
         elif kind == "staged":
+            _stop_bar("upload")
             _print_pending_panel(console, data)
         elif kind == "installing":
             console.print("[yellow]Starting appliance install — do NOT power-cycle the "
                           "appliance until it completes.[/yellow]")
+            p = Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                TimeElapsedColumn(),
+                console=console,
+            )
+            p.start()
+            bars["install"] = p
+            bars["install_task"] = p.add_task("Starting install…", total=100)
         elif kind == "progress":
+            p = bars.get("install")
+            if p is None:
+                return
             pct = data.get("percent")
-            pct_s = f"{pct:.0f}%" if isinstance(pct, (int, float)) else "?"
-            console.print(f"[dim]  install: {pct_s}  {data.get('task_step') or ''} "
-                          f"{data.get('status') or ''}[/dim]", highlight=False)
+            step = data.get("step") or data.get("status") or "working…"
+            status = data.get("status") or ""
+            desc = step if (not status or status.lower() in step.lower()) \
+                else f"{step}  [dim]({status})[/dim]"
+            if isinstance(pct, (int, float)):
+                p.update(bars["install_task"], completed=pct, description=desc)
+            else:
+                p.update(bars["install_task"], description=desc)
         elif kind == "rebooting":
-            console.print("[dim]  appliance unreachable (rebooting) — waiting…[/dim]")
+            p = bars.get("install")
+            if p is not None:
+                p.update(bars["install_task"],
+                         description="[dim]appliance rebooting — waiting for it to come back…[/dim]")
 
     def confirm(staged: dict) -> bool:
         if getattr(args, "yes", False):
@@ -2391,15 +2460,19 @@ async def _async_upgrade_run(args: argparse.Namespace) -> None:
         ans = console.input(f'Type the CURRENT version "{token}" to proceed (or anything else to abort): ')
         return ans.strip() == token
 
-    result = await run_appliance_upgrade(
-        factory, img,
-        execute=execute,
-        confirm=confirm if execute else None,
-        on_event=on_event,
-        clear_existing=bool(getattr(args, "clear_pending", False)),
-        poll_interval_s=_REBOOT_POLL_S,
-        reboot_timeout_s=_REBOOT_WAIT_TIMEOUT_S,
-    )
+    try:
+        result = await run_appliance_upgrade(
+            factory, img,
+            execute=execute,
+            confirm=confirm if execute else None,
+            on_event=on_event,
+            clear_existing=bool(getattr(args, "clear_pending", False)),
+            poll_interval_s=_REBOOT_POLL_S,
+            reboot_timeout_s=_REBOOT_WAIT_TIMEOUT_S,
+        )
+    finally:
+        _stop_bar("upload")
+        _stop_bar("install")
 
     if json_mode:
         print_json(result)

@@ -46,19 +46,22 @@ def _short_server_name(name: str) -> str:
     return (name or "").replace("Enclosure", "Enc")
 
 
-def _load_client():
+def _load_client(name: str | None = None):
     """Yield a connected OneViewClient, showing a "Connecting..." hint.
 
     A wrong/unreachable appliance host previously left the terminal looking
     frozen with zero feedback until the login handshake finally timed out.
     Print a status hint for the duration of the connect/login only -- it
     disappears the moment we get a real response (success or failure).
+
+    *name* targets a specific configured appliance (by inventory section name);
+    omitted, it uses the active appliance.
     """
     from proliant.oneview.config import list_oneview_appliances, load_oneview_config
     from proliant.oneview.client import OneViewClient
 
     appliances = list_oneview_appliances()
-    cfg = load_oneview_config()
+    cfg = load_oneview_config(name)
     client = OneViewClient(cfg["host"], cfg["username"], cfg["password"])
 
     # With only one appliance configured, keep the status line as-is (no
@@ -151,6 +154,123 @@ async def _cmd_appliances_use(args: argparse.Namespace) -> None:
     except ValueError as e:
         get_console().print(f"[red]Error:[/red] {e}")
         sys.exit(1)
+
+
+async def _cmd_appliances_describe(args: argparse.Namespace) -> None:
+    """Show the appliance General page: HA nodes, memory, uptime, firmware."""
+    from proliant.oneview.appliance_info import fetch_appliance_info
+
+    name = getattr(args, "name", None)
+    async with _load_client(name) as client:
+        info = await fetch_appliance_info(client)
+
+    if getattr(args, "json_output", False) or get_output_mode() == OutputMode.JSON:
+        print_json(info)
+        return
+
+    _render_appliance_describe(info)
+
+
+def _local_timestamp(raw: str) -> str:
+    """Format an ISO timestamp in the CLI machine's local time, OneView-style."""
+    from proliant.oneview.appliance_info import _parse_iso, fmt_timestamp
+
+    dt = _parse_iso(raw)
+    return fmt_timestamp(dt.astimezone() if dt is not None else None)
+
+
+def _appliance_node_tile(node: dict) -> Panel:
+    role = (node.get("role") or "").lower()
+    state = (node.get("state") or "").upper()
+    dot = "[green]●[/green]" if state == "OK" else "[yellow]●[/yellow]"
+    body = f"[bold]{node.get('name') or '—'}[/bold]\n{dot} [dim]{role or 'unknown'}[/dim]"
+    return Panel(body, box=box.SQUARE, padding=(0, 1), border_style="cyan", expand=True)
+
+
+def _render_appliance_describe(info: dict) -> None:
+    from rich.console import Group
+
+    console = get_console()
+
+    # ── update-task banner ────────────────────────────────────────────────
+    lu = info.get("last_update")
+    if lu:
+        state = lu.get("state") or ""
+        dur = lu.get("duration") or ""
+        owner = lu.get("owner") or ""
+        when = _local_timestamp(lu.get("finished_raw") or "")
+        meta = "  ".join(x for x in (owner, when) if x and x != "—")
+        console.print(
+            f"[green]●[/green] [bold]{lu.get('name')}[/bold]  "
+            f"[green]{state}[/green] {dur}" + (f"    [dim]{meta}[/dim]" if meta else ""),
+            highlight=False,
+        )
+
+    nodes = info.get("nodes") or []
+
+    # ── node topology: active  —Connected—  standby ───────────────────────
+    topo = Table.grid(expand=True, padding=(0, 1))
+    if len(nodes) >= 2:
+        topo.add_column(ratio=1)
+        topo.add_column(justify="center", vertical="middle", no_wrap=True)
+        topo.add_column(ratio=1)
+        link = ("[green]✓ Connected[/green]" if info.get("connected")
+                else "[yellow]Not connected[/yellow]")
+        topo.add_row(_appliance_node_tile(nodes[0]), link, _appliance_node_tile(nodes[1]))
+    else:
+        topo.add_column(ratio=1)
+        topo.add_row(_appliance_node_tile(nodes[0]) if nodes else "[dim]No HA nodes reported.[/dim]")
+
+    # ── general details ───────────────────────────────────────────────────
+    details = Table.grid(padding=(0, 3))
+    details.add_column(style="dim", no_wrap=True)
+    details.add_column()
+    details.add_row("Model", info.get("model") or "—")
+    details.add_row("Memory", info.get("memory") or "—")
+
+    by_role = {(n.get("role") or "").lower(): n for n in nodes}
+    active = by_role.get("active")
+    standby = by_role.get("standby")
+
+    st_lines = []
+    for n, tag in ((active, "active"), (standby, "standby")):
+        if n and n.get("start_time"):
+            st_lines.append(f"{_local_timestamp(n['start_time'])} [dim italic]{tag}[/dim italic]")
+    details.add_row("Start time", "\n".join(st_lines) if st_lines else "—")
+
+    from proliant.oneview.appliance_info import fmt_uptime
+    up_lines = []
+    for n, tag in ((active, "active"), (standby, "standby")):
+        if n and n.get("uptime"):
+            up_lines.append(f"{fmt_uptime(n['uptime'])} [dim italic]{tag}[/dim italic]")
+    details.add_row("Uptime", "\n".join(up_lines) if up_lines else "—")
+
+    # ── firmware ──────────────────────────────────────────────────────────
+    fw = info.get("firmware") or {}
+    fw_grid = Table.grid(padding=(0, 3))
+    fw_grid.add_column(style="dim", no_wrap=True)
+    fw_grid.add_column()
+    fw_grid.add_row("Version", fw.get("version") or "—")
+    from proliant.oneview.appliance_info import fmt_fw_date
+    fw_grid.add_row("Date", fmt_fw_date(fw.get("date_raw") or "") or "—")
+
+    general = Group(
+        topo, "", details, "", "[bold]Firmware[/bold]", fw_grid,
+    )
+    console.print(Panel(general, title="General", title_align="left", border_style="cyan"))
+
+    # ── Composable Infrastructure Appliances ──────────────────────────────
+    if nodes:
+        table = make_table(
+            "Composable Infrastructure Appliances",
+            ("Name", {"style": "bold cyan", "no_wrap": True}),
+            ("Model", {"style": "white"}),
+            ("iLO Address", {"style": "dim"}),
+            box_style=box.SIMPLE_HEAD,
+        )
+        for n in sorted(nodes, key=lambda x: x.get("bay") or 0, reverse=True):
+            table.add_row(n.get("name") or "—", n.get("model") or "—", n.get("ilo_address") or "not set")
+        console.print(table)
 
 
 def _oneview_network_name_completer(prefix: str, **kwargs) -> list[str]:
@@ -2547,6 +2667,7 @@ examples:
   proliant oneview upgrade pending                       Show the currently staged update
   proliant oneview upgrade cancel --yes                  Remove a stuck staged update
   proliant oneview appliances list                       List configured appliances (* = active)
+  proliant oneview appliances describe                   Show the active appliance's General page
   proliant oneview appliances use datacenter-b           Switch which appliance commands target
 """,
     )
@@ -2762,6 +2883,14 @@ examples:
         "name", metavar="NAME", help="Appliance section name (see 'appliances list')"
     ).completer = _oneview_appliance_name_completer  # type: ignore[attr-defined]
     p_app_use.set_defaults(func=_cmd_appliances_use)
+    p_app_describe = s_appliances.add_parser(
+        "describe", help="Show an appliance's General page (HA nodes, memory, uptime, firmware)"
+    )
+    p_app_describe.add_argument(
+        "name", metavar="NAME", nargs="?",
+        help="Appliance section name (see 'appliances list'); defaults to the active appliance",
+    ).completer = _oneview_appliance_name_completer  # type: ignore[attr-defined]
+    p_app_describe.set_defaults(func=_cmd_appliances_describe)
 
     return parser
 

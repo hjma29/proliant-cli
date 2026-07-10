@@ -38,6 +38,20 @@ class TestParserWiring:
         assert args.func is _cmd_appliances_use
         assert args.name == "datacenter-b"
 
+    def test_parser_appliances_describe_parses(self):
+        from proliant.oneview.cli import _build_parser, _cmd_appliances_describe
+        parser = _build_parser()
+        args = parser.parse_args(["appliances", "describe", "datacenter-b"])
+        assert args.func is _cmd_appliances_describe
+        assert args.name == "datacenter-b"
+
+    def test_parser_appliances_describe_name_optional(self):
+        from proliant.oneview.cli import _build_parser, _cmd_appliances_describe
+        parser = _build_parser()
+        args = parser.parse_args(["appliances", "describe"])
+        assert args.func is _cmd_appliances_describe
+        assert args.name is None
+
 
 class TestAppliancesList:
     def test_list_marks_active_appliance(self, capsys):
@@ -105,3 +119,77 @@ class TestAppliancesUse:
         assert excinfo.value.code == 1
         out = capsys.readouterr().out
         assert "not found" in out
+
+
+class _FakeCM:
+    """Async context manager yielding a dummy client for _load_client patches."""
+
+    def __init__(self, client):
+        self._client = client
+
+    async def __aenter__(self):
+        return self._client
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+def _sample_info():
+    from proliant.oneview.appliance_info import build_appliance_info
+    from tests.oneview.test_appliance_info import HA_NODES, STATUS, TASKS, VERSION
+    return build_appliance_info(HA_NODES, STATUS, VERSION, TASKS)
+
+
+class TestAppliancesDescribe:
+    def test_describe_renders_general_page(self, capsys):
+        from proliant.oneview import cli
+
+        async def _fake_fetch(_client):
+            return _sample_info()
+
+        with patch.object(cli, "_load_client", lambda name=None: _FakeCM(object())), \
+             patch("proliant.oneview.appliance_info.fetch_appliance_info", _fake_fetch):
+            cli.main(["appliances", "describe"])
+
+        out = capsys.readouterr().out
+        assert "General" in out
+        assert "Synergy Composer2" in out
+        assert "64 GB" in out
+        assert "10.00.00-0507518" in out
+        assert "Apr 21, 2025" in out
+        assert "Connected" in out
+        assert "Composable Infrastructure Appliances" in out
+        assert "appliance bay 2" in out
+
+    def test_describe_json_output(self, capsys):
+        from proliant.oneview import cli
+
+        async def _fake_fetch(_client):
+            return _sample_info()
+
+        with patch.object(cli, "_load_client", lambda name=None: _FakeCM(object())), \
+             patch("proliant.oneview.appliance_info.fetch_appliance_info", _fake_fetch):
+            cli.main(["--json", "appliances", "describe"])
+
+        result = json.loads(capsys.readouterr().out)
+        assert result["model"] == "Synergy Composer2"
+        assert result["connected"] is True
+        assert result["firmware"]["version"] == "10.00.00-0507518"
+
+    def test_describe_passes_name_to_load_client(self, capsys):
+        from proliant.oneview import cli
+
+        seen = {}
+
+        def _fake_load(name=None):
+            seen["name"] = name
+            return _FakeCM(object())
+
+        async def _fake_fetch(_client):
+            return _sample_info()
+
+        with patch.object(cli, "_load_client", _fake_load), \
+             patch("proliant.oneview.appliance_info.fetch_appliance_info", _fake_fetch):
+            cli.main(["appliances", "describe", "datacenter-b"])
+
+        assert seen["name"] == "datacenter-b"

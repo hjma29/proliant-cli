@@ -62,7 +62,7 @@ def patched_load_client(monkeypatch):
     """Patch the config + client lookups _load_client() does internally."""
     monkeypatch.setattr(
         "proliant.oneview.config.load_oneview_config",
-        lambda: {"name": "oneview", "host": "10.0.0.99", "url": "https://10.0.0.99", "username": "u", "password": "p"},
+        lambda name=None: {"name": "oneview", "host": "10.0.0.99", "url": "https://10.0.0.99", "username": "u", "password": "p"},
     )
     # Single-appliance case (the common one) -- keeps the "Connecting..."
     # hint free of the appliance name, matching today's single-appliance UX.
@@ -103,7 +103,7 @@ async def test_load_client_names_appliance_in_hint_when_multiple_configured(monk
     which one a command is actually talking to."""
     monkeypatch.setattr(
         "proliant.oneview.config.load_oneview_config",
-        lambda: {"name": "datacenter-b", "host": "10.0.0.55", "url": "https://10.0.0.55", "username": "u", "password": "p"},
+        lambda name=None: {"name": "datacenter-b", "host": "10.0.0.55", "url": "https://10.0.0.55", "username": "u", "password": "p"},
     )
     monkeypatch.setattr(
         "proliant.oneview.config.list_oneview_appliances",

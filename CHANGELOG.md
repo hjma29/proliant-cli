@@ -10,6 +10,7 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 - `proliant oneview upgrade run`: upload and stage an appliance software update image (`.bin`), then optionally install it. Pick an image interactively from a directory/share with `--from-dir`, or point at one with `--image`. Staging is the default; the reboot-inducing install is gated behind `--execute` plus a typed confirmation, and blocked when the readiness verdict is FAIL (override with `--force`).
 - `proliant oneview upgrade pending`: show the currently staged appliance update.
 - `proliant oneview upgrade cancel`: remove a stuck or aborted staged update.
+- `proliant oneview appliances describe [NAME]`: show an appliance's General page — the active/standby Composer HA pair and their connection state, model, memory, per-node start time and uptime, firmware version/date, and the Composable Infrastructure Appliances inventory. Defaults to the active appliance; `--json` for scripting.
 
 ### Bug Fixes
 - `proliant oneview upgrade run --execute`: fixed a false "Upgrade complete" that printed immediately when an install started. Progress is now read only from the appliance's own update-status feed, and completion is confirmed by the appliance actually rebooting onto the target build — not by a stale `100%` left over from a prior firmware task.

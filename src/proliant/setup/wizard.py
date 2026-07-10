@@ -458,15 +458,14 @@ async def _add_ilo_server(
 
 
 def _next_oneview_name(existing: set[str]) -> str:
-    """Auto-generate an inventory.ini section name for a new OneView entry.
+    """Suggest a default inventory.ini section name for a new OneView entry.
 
-    Not prompted for -- the section name is an internal inventory.ini detail
-    ('proliant oneview appliances use <name>' is the only place it's ever
-    typed, and only needed once there's more than one appliance to pick
-    between). Defaults to 'oneview', then 'oneview-2', 'oneview-3', ... for
-    additional appliances. Users who want something more descriptive (e.g.
-    a real appliance hostname) can still rename it afterwards via the
-    wizard's Edit flow, which does prompt for the section name.
+    Used as the pre-filled default for the appliance-alias prompt (users can
+    accept it or type something more descriptive like a real appliance
+    hostname). The section name is what 'proliant oneview appliances use
+    <name>' expects, and only matters once there's more than one appliance to
+    pick between. Defaults to 'oneview', then 'oneview-2', 'oneview-3', ... for
+    additional appliances.
     """
     if "oneview" not in existing:
         return "oneview"
@@ -484,7 +483,13 @@ async def _add_oneview(
 ) -> bool:
     """Prompt for a OneView appliance, test it, and save. Returns True if added."""
     console.print("\n[bold cyan]Add a OneView appliance[/bold cyan]")
-    name = _next_oneview_name(existing)
+    name = _prompt_name(
+        existing,
+        "Appliance alias (friendly label)",
+        default=_next_oneview_name(existing),
+        hint="A short label you choose, e.g. 'aci-oneview' or 'datacenter-a'. "
+        "Used with 'proliant oneview appliances use <name>'.",
+    )
     host = Prompt.ask("  OneView appliance IP / hostname").strip()
     if not host:
         console.print("  [red]Host cannot be empty -- skipping.[/red]")

@@ -11,6 +11,9 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 - `proliant oneview upgrade pending`: show the currently staged appliance update.
 - `proliant oneview upgrade cancel`: remove a stuck or aborted staged update.
 
+### Enhancements
+- `proliant setup`: adding a OneView appliance now prompts for a friendly alias (like the iLO flow), defaulting to the auto-generated `oneview`/`oneview-2`/… name so pressing Enter keeps the previous behavior.
+
 ---
 
 ## v1.0.35 — 2026-07-09

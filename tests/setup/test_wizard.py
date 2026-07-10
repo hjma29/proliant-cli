@@ -264,8 +264,9 @@ async def test_add_oneview_success_saves_entry_with_type(tmp_path):
     cfg = configparser.ConfigParser(interpolation=None)
     existing: set[str] = set()
 
-    # No name prompt -- section name is auto-generated, not asked for.
-    prompt_answers = iter(["10.0.0.100", "Administrator"])
+    # Name is now prompted (defaults to the auto-generated 'oneview'); here the
+    # user types an explicit friendly alias.
+    prompt_answers = iter(["aci-ov", "10.0.0.100", "Administrator"])
     with patch("rich.prompt.Prompt.ask", side_effect=lambda *a, **kw: next(prompt_answers)), \
          patch.object(wiz, "prompt_password_async", AsyncMock(return_value="ovpass")), \
          patch.object(wiz, "_test_oneview", AsyncMock(return_value=(True, "Connected successfully."))):
@@ -273,8 +274,8 @@ async def test_add_oneview_success_saves_entry_with_type(tmp_path):
 
     assert added is True
     saved = _read_cfg(dest)
-    assert saved.get("oneview", "host") == "10.0.0.100"
-    assert saved.get("oneview", "type") == "oneview"
+    assert saved.get("aci-ov", "host") == "10.0.0.100"
+    assert saved.get("aci-ov", "type") == "oneview"
 
 
 def test_next_oneview_name_defaults_to_oneview_when_none_exist():
@@ -289,9 +290,9 @@ def test_next_oneview_name_increments_past_taken_names():
 
 
 @pytest.mark.asyncio
-async def test_add_second_oneview_auto_names_without_prompting(tmp_path):
-    """A second OneView appliance must not collide with the first, and the
-    user is never asked to name it -- only host/username/password."""
+async def test_add_second_oneview_defaults_to_incremented_name(tmp_path):
+    """A second OneView appliance suggests 'oneview-2' as the alias default;
+    pressing Enter accepts it and must not collide with the first."""
     dest = tmp_path / "inventory.ini"
     cfg = configparser.ConfigParser(interpolation=None)
     cfg.add_section("oneview")
@@ -299,8 +300,14 @@ async def test_add_second_oneview_auto_names_without_prompting(tmp_path):
     cfg.set("oneview", "type", "oneview")
     existing = {"oneview"}
 
-    prompt_answers = iter(["10.0.0.200", "Administrator"])
-    with patch("rich.prompt.Prompt.ask", side_effect=lambda *a, **kw: next(prompt_answers)), \
+    # An empty name answer stands in for pressing Enter, so the mock returns the
+    # prompt's suggested default ('oneview-2').
+    def _answer(*a, **kw):
+        val = next(prompt_answers)
+        return val if val else kw.get("default", "")
+
+    prompt_answers = iter(["", "10.0.0.200", "Administrator"])
+    with patch("rich.prompt.Prompt.ask", side_effect=_answer), \
          patch.object(wiz, "prompt_password_async", AsyncMock(return_value="ovpass")), \
          patch.object(wiz, "_test_oneview", AsyncMock(return_value=(True, "Connected successfully."))):
         added = await wiz._add_oneview(cfg, existing, dest)

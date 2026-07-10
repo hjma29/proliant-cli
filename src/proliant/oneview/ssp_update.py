@@ -6,8 +6,8 @@ hardware, driven by HPE OneView / Synergy Composer. This is the *second* half
 of a Synergy software release, applied only **after** the appliance software
 itself has been upgraded (see ``appliance_update.py``):
 
-  1. Appliance software upgrade (``update.bin``) — ``oneview upgrade run``.
-  2. SSP hardware firmware baseline (this module) — ``oneview firmware apply``:
+  1. Appliance software upgrade (``update.bin``) — ``oneview update appliance run``.
+  2. SSP hardware firmware baseline (this module) — ``oneview update enclosure``:
      bring frames / interconnects / compute modules in line with a chosen SSP.
 
 OneView orchestrates the redundant, per-component flashing itself; the operator
@@ -57,6 +57,7 @@ if TYPE_CHECKING:
 LE_URI = "/rest/logical-enclosures"
 PROFILES_URI = "/rest/server-profiles"
 FW_DRIVERS_URI = "/rest/firmware-drivers"
+HARDWARE_URI = "/rest/server-hardware"
 
 
 # ── firmwareUpdateOn scope (logical-enclosure firmware directive) ──────────────
@@ -280,6 +281,7 @@ def normalize_le(le: dict) -> dict[str, Any]:
         "etag": le.get("eTag", "") or "",
         "current_baseline_uri": fw.get("firmwareBaselineUri", "") or "",
         "status": le.get("status", "") or "",
+        "enclosure_uris": list(le.get("enclosureUris") or []),
     }
 
 
@@ -296,16 +298,46 @@ def normalize_profile(p: dict) -> dict[str, Any]:
     }
 
 
-def resolve_targets(
-    items: list[dict], names: list[str] | None, all_flag: bool
+def hardware_enclosure_map(raw_hardware: list[dict]) -> dict[str, str]:
+    """Map each ``/rest/server-hardware`` member's own uri to its enclosure's uri.
+
+    Same field fallback as ``oneview.enclosures._server_enclosure_uri``: Synergy
+    compute modules carry their enclosure under ``locationUri`` (occasionally
+    ``enclosureUri``/``serverGroupUri`` on older payload shapes).
+    """
+    out = {}
+    for hw in raw_hardware:
+        uri = hw.get("uri", "")
+        if uri:
+            out[uri] = hw.get("locationUri") or hw.get("enclosureUri") or hw.get("serverGroupUri") or ""
+    return out
+
+
+def find_le_by_name(les: list[dict], name: str) -> dict[str, Any] | None:
+    """Case-insensitive exact-name lookup among normalized logical enclosures."""
+    q = (name or "").strip().lower()
+    for le in les:
+        if (le.get("name", "") or "").lower() == q:
+            return le
+    return None
+
+
+def profiles_under_le(
+    le: dict, profiles: list[dict], hw_enclosure_map: dict[str, str]
 ) -> list[dict[str, Any]]:
-    """Select targets by case-insensitive ``name`` match, or all when *all_flag*."""
-    if all_flag:
-        return list(items)
-    if not names:
+    """Server profiles whose compute module lives in one of *le*'s enclosures.
+
+    Mirrors the OneView GUI's "Update firmware for: Shared infrastructure and
+    profiles" scope, which auto-selects every profile in the logical
+    enclosure's frames rather than requiring them to be named individually.
+    """
+    encs = set(le.get("enclosure_uris") or [])
+    if not encs:
         return []
-    wanted = {n.strip().lower() for n in names if n.strip()}
-    return [it for it in items if (it.get("name", "") or "").lower() in wanted]
+    return [
+        p for p in profiles
+        if hw_enclosure_map.get(p.get("server_hardware_uri", ""), "") in encs
+    ]
 
 
 # ── plan building ──────────────────────────────────────────────────────────────
@@ -704,6 +736,7 @@ async def fetch_apply_targets(client: "OneViewClient") -> dict[str, Any]:
     raw_drivers = await client.get_all(FW_DRIVERS_URI)
     les = await client.get_all(LE_URI)
     profiles = await client.get_all(PROFILES_URI)
+    raw_hardware = await client.get_all(HARDWARE_URI)
     try:
         ver = await client.get("/rest/appliance/nodeinfo/version")
         appliance_version = (ver or {}).get("softwareVersion", "")
@@ -713,5 +746,6 @@ async def fetch_apply_targets(client: "OneViewClient") -> dict[str, Any]:
         "baselines": service_pack_baselines(raw_drivers),
         "logical_enclosures": [normalize_le(le) for le in les],
         "server_profiles": [normalize_profile(p) for p in profiles],
+        "hardware_enclosure_map": hardware_enclosure_map(raw_hardware),
         "appliance_version": appliance_version,
     }

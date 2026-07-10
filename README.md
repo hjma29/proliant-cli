@@ -107,14 +107,18 @@ proliant oneview appliances list                        # list configured applia
 proliant oneview appliances describe [name]             # appliance General page (HA nodes, memory, uptime, firmware)
 proliant oneview firmware bundles                        # registered SPP/SSP baselines
 proliant oneview firmware compliance                     # per-server compliance vs newer baselines
-proliant oneview firmware apply --baseline <ssp>         # plan an SSP rollout (shared infra + compute)
-proliant oneview firmware apply --all-enclosures --all-profiles --execute   # apply it (reboots HW)
+proliant oneview update enclosure <LE-name>              # plan an SSP rollout to one logical enclosure (shared infra only)
+proliant oneview update enclosure <LE-name> --baseline <ssp> --scope shared-infra-and-profiles
+#   --scope shared-infra            updates frame link modules + interconnects only (default)
+#   --scope shared-infra-and-profiles   also updates every server profile in this enclosure's compute modules
+proliant oneview update enclosure <LE-name> --execute    # apply it (reboots interconnects, and compute if selected)
 #   The plan shows an OneView<->SSP compatibility note (per HPE's Synergy Software Releases matrix).
-proliant oneview upgrade readiness                       # pre-upgrade readiness report
-proliant oneview upgrade run --from-dir <dir>            # pick + stage an appliance software update
-proliant oneview upgrade run --image <file> --execute   # stage + install (reboots the appliance)
-proliant oneview upgrade pending                         # show the currently staged update
-[snip]
+proliant oneview update appliance readiness              # pre-upgrade readiness report
+proliant oneview update appliance run --from-dir <dir>   # pick + stage an appliance software update
+proliant oneview update appliance run --image <file> --execute   # stage + install (reboots the appliance)
+proliant oneview update appliance pending                # show the currently staged update
+proliant oneview update appliance cancel --yes           # remove a stuck staged update
+proliant oneview update appliance cleanup                # preview unused firmware baselines to free disk
 ```
 
 

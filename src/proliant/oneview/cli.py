@@ -327,6 +327,15 @@ def _oneview_enclosure_name_completer(prefix: str, **kwargs) -> list[str]:
         return []
 
 
+def _oneview_logical_enclosure_name_completer(prefix: str, **kwargs) -> list[str]:
+    """Tab-complete logical enclosure names by querying OneView."""
+    try:
+        names = _oneview_cached_object_names("logical-enclosures", "/rest/logical-enclosures")
+        return [n for n in names if n.lower().startswith(prefix.lower())]
+    except Exception:
+        return []
+
+
 def _oneview_interconnect_name_completer(prefix: str, **kwargs) -> list[str]:
     """Tab-complete interconnect names by querying OneView."""
     try:
@@ -2075,7 +2084,7 @@ async def _cmd_logical_enclosures_list(args: argparse.Namespace) -> None:
     await _async_logical_enclosures_list()
 
 
-# ── proliant oneview upgrade readiness / cleanup ──────────────────────────────
+# ── proliant oneview update appliance readiness / cleanup ─────────────────────
 
 _VERDICT_STYLE = {"PASS": "green", "WARN": "yellow", "FAIL": "red"}
 _STATUS_STYLE = {"PASS": "[green]PASS[/green]", "WARN": "[yellow]WARN[/yellow]",
@@ -2128,14 +2137,14 @@ async def _async_upgrade_readiness() -> None:
         console.print(
             f"[dim]Tip:[/dim] {stale['count']} unused firmware baseline(s) using "
             f"[bold]{stale['reclaimable_gb']:.1f} GB[/bold] can be freed with "
-            f"[bold]proliant oneview upgrade cleanup[/bold].",
+            f"[bold]proliant oneview update appliance cleanup[/bold].",
             highlight=False,
         )
     if stale.get("external_unused"):
         console.print(
             f"[dim]Note:[/dim] {stale['external_unused']} additional unused baseline(s) exist "
             f"only in an external repository and are not deletable via OneView — see "
-            f"[bold]proliant oneview upgrade cleanup[/bold] for details.",
+            f"[bold]proliant oneview update appliance cleanup[/bold] for details.",
             highlight=False,
         )
     console.print(f"[dim]Upgrade-path source: {up.get('source_url', '')}[/dim]", highlight=False)
@@ -2266,7 +2275,7 @@ async def _async_firmware_compliance_list() -> None:
     console.print(table)
     console.print(
         "[dim]Each row checks a server against one candidate bundle — a registered baseline newer "
-        "than what's currently assigned anywhere (see 'oneview upgrade cleanup'). 'Components' is the "
+        "than what's currently assigned anywhere (see 'oneview update appliance cleanup'). 'Components' is the "
         "real count of firmware/software components needing an update out of those evaluated, from "
         "OneView's own compliance engine. The GUI's Update Category (Recommended/Optional) and "
         "Estimated Update Time are computed internally and aren't exposed via the REST API.[/dim]",
@@ -2278,7 +2287,7 @@ async def _cmd_firmware_compliance_list(args: argparse.Namespace) -> None:
     await _async_firmware_compliance_list()
 
 
-# ── proliant oneview firmware apply (SSP baseline rollout) ────────────────────
+# ── proliant oneview update enclosure (SSP baseline rollout) ──────────────────
 
 _SSP_POLL_S = 20
 _SSP_TASK_TIMEOUT_S = 90 * 60
@@ -2340,12 +2349,13 @@ def _render_ssp_plan(console, plan: dict) -> None:
     console.print(table)
 
 
-async def _async_firmware_apply(args: argparse.Namespace) -> None:
+async def _async_update_enclosure(args: argparse.Namespace) -> None:
     from proliant.oneview.ssp_update import (
         INSTALL_TYPES,
         LE_SCOPE_SHARED,
         fetch_apply_targets,
-        resolve_targets,
+        find_le_by_name,
+        profiles_under_le,
         run_ssp_apply,
         select_baseline,
     )
@@ -2356,6 +2366,16 @@ async def _async_firmware_apply(args: argparse.Namespace) -> None:
     async with _load_client() as client:
         with console.status("[dim]Fetching SSP baselines and rollout targets…[/dim]"):
             data = await fetch_apply_targets(client)
+
+    le = find_le_by_name(data["logical_enclosures"], args.name)
+    if le is None:
+        known = ", ".join(x["name"] for x in data["logical_enclosures"]) or "none found"
+        if json_mode:
+            print_json({"status": "error", "reason": "logical enclosure not found", "query": args.name})
+        else:
+            console.print(f"[red]Logical enclosure '{args.name}' not found.[/red]")
+            console.print(f"[dim]Known: {known}[/dim]")
+        return
 
     baseline = select_baseline(data["baselines"], getattr(args, "baseline", None))
     if baseline is None:
@@ -2370,23 +2390,12 @@ async def _async_firmware_apply(args: argparse.Namespace) -> None:
             console.print(f"[dim]Available: {names}[/dim]")
         return
 
-    les = resolve_targets(data["logical_enclosures"],
-                          getattr(args, "logical_enclosure", None), getattr(args, "all_enclosures", False))
-    profs = resolve_targets(data["server_profiles"],
-                            getattr(args, "server_profile", None), getattr(args, "all_profiles", False))
-
-    if not les and not profs:
-        msg = ("Select a scope: [bold]--logical-enclosure NAME[/bold] / [bold]--all-enclosures[/bold] "
-               "for shared infrastructure, and/or [bold]--server-profile NAME[/bold] / "
-               "[bold]--all-profiles[/bold] for compute.")
-        if json_mode:
-            print_json({"status": "error", "reason": "no targets selected"})
-        else:
-            console.print(f"[yellow]{msg}[/yellow]")
-            le_names = ", ".join(le["name"] for le in data["logical_enclosures"]) or "—"
-            console.print(f"[dim]Logical enclosures: {le_names}[/dim]")
-            console.print(f"[dim]Server profiles: {len(data['server_profiles'])} available[/dim]")
-        return
+    les = [le]
+    scope = getattr(args, "scope", None) or "shared-infra"
+    profs = (
+        profiles_under_le(le, data["server_profiles"], data["hardware_enclosure_map"])
+        if scope == "shared-infra-and-profiles" else []
+    )
 
     install_type = INSTALL_TYPES.get(getattr(args, "install_type", None) or "")
     execute = bool(getattr(args, "execute", False))
@@ -2558,8 +2567,8 @@ async def _async_firmware_apply(args: argparse.Namespace) -> None:
         )
 
 
-async def _cmd_firmware_apply(args: argparse.Namespace) -> None:
-    await _async_firmware_apply(args)
+async def _cmd_update_enclosure(args: argparse.Namespace) -> None:
+    await _async_update_enclosure(args)
 
 
 async def _async_upgrade_cleanup(do_delete: bool) -> None:
@@ -2686,7 +2695,7 @@ async def _cmd_upgrade_cleanup(args: argparse.Namespace) -> None:
     await _async_upgrade_cleanup(do_delete=bool(getattr(args, "yes", False)))
 
 
-# ── proliant oneview upgrade run / pending / cancel ───────────────────────────
+# ── proliant oneview update appliance run / pending / cancel ──────────────────
 # Appliance SOFTWARE upgrade: upload an update .bin -> stage it -> (guarded)
 # install -> monitor the reboot. The staging half is safe/read-mostly; the
 # install half reboots the appliance, so it is gated behind --execute plus a
@@ -2879,7 +2888,7 @@ async def _async_upgrade_run(args: argparse.Namespace) -> None:
 
     if verdict == "FAIL" and not getattr(args, "force", False):
         msg = "Readiness verdict is FAIL. Resolve the failing checks (see " \
-              "'proliant oneview upgrade readiness') or re-run with --force."
+              "'proliant oneview update appliance readiness') or re-run with --force."
         if json_mode:
             print_json({"status": "aborted", "reason": "readiness FAIL", "verdict": verdict})
         else:
@@ -3032,7 +3041,7 @@ async def _async_upgrade_run(args: argparse.Namespace) -> None:
     elif status == "conflict":
         console.print("\n[yellow]A different update is already staged.[/yellow] "
                       "Re-run with [bold]--clear-pending[/bold] to replace it, or "
-                      "[bold]proliant oneview upgrade cancel --yes[/bold] to remove it.")
+                      "[bold]proliant oneview update appliance cancel --yes[/bold] to remove it.")
     elif status == "aborted":
         console.print("\n[yellow]Aborted — appliance not modified.[/yellow]")
     elif status == "completed":
@@ -3041,7 +3050,7 @@ async def _async_upgrade_run(args: argparse.Namespace) -> None:
                       f"[bold]{ver or 'the new version'}[/bold].")
     elif status == "failed":
         console.print("\n[red]Install failed.[/red] Check the appliance console / "
-                      "'proliant oneview upgrade pending' and the OneView UI.")
+                      "'proliant oneview update appliance pending' and the OneView UI.")
     elif status == "timeout":
         console.print("\n[yellow]Timed out waiting for the appliance to return.[/yellow] "
                       "It may still be completing — check the OneView UI.")
@@ -3087,14 +3096,18 @@ examples:
   proliant oneview networksets describe "network-set-for-FM"
   proliant oneview server-profiles describe "ocp-single-node"
   proliant oneview reports memory
-  proliant oneview upgrade readiness                     Pre-upgrade readiness report
-  proliant oneview upgrade cleanup                       Preview unused firmware baselines
-  proliant oneview upgrade cleanup --yes                 Delete unused baselines (free disk)
-  proliant oneview upgrade run --from-dir "\\\\srv\\iso\\Composer BIN"   Pick + stage an update image
-  proliant oneview upgrade run --image update.bin        Stage a specific update image
-  proliant oneview upgrade run --image update.bin --execute   Stage + install (reboots appliance)
-  proliant oneview upgrade pending                       Show the currently staged update
-  proliant oneview upgrade cancel --yes                  Remove a stuck staged update
+  proliant oneview update enclosure LE01                 Plan an SSP rollout (shared infra only)
+  proliant oneview update enclosure LE01 --baseline SY-2026.01.02 --scope shared-infra-and-profiles
+                                                          Plan shared infra + every profile in LE01
+  proliant oneview update enclosure LE01 --execute        Apply it (reboots interconnects/compute)
+  proliant oneview update appliance readiness             Pre-upgrade readiness report
+  proliant oneview update appliance cleanup                Preview unused firmware baselines
+  proliant oneview update appliance cleanup --yes           Delete unused baselines (free disk)
+  proliant oneview update appliance run --from-dir "\\\\srv\\iso\\Composer BIN"   Pick + stage an update image
+  proliant oneview update appliance run --image update.bin        Stage a specific update image
+  proliant oneview update appliance run --image update.bin --execute   Stage + install (reboots appliance)
+  proliant oneview update appliance pending                Show the currently staged update
+  proliant oneview update appliance cancel --yes           Remove a stuck staged update
   proliant oneview appliances list                       List configured appliances (* = active)
   proliant oneview appliances describe                   Show the active appliance's General page
   proliant oneview appliances use datacenter-b           Switch which appliance commands target
@@ -3140,34 +3153,6 @@ examples:
     p_fw_compliance = s_firmware.add_parser("compliance",
         help="Firmware compliance vs newer candidate bundles (per server)")
     p_fw_compliance.set_defaults(func=_cmd_firmware_compliance_list)
-
-    p_fw_apply = s_firmware.add_parser("apply",
-        help="Apply an SSP firmware baseline to shared infra and/or compute",
-        description="Roll out an SSP (Synergy Service Pack) firmware baseline that OneView "
-                    "orchestrates. Default is a non-destructive plan; add --execute to apply "
-                    "(shared infrastructure first, then compute).")
-    fw_apply_baseline = p_fw_apply.add_argument("--baseline", metavar="NAME|VERSION",
-        help="SSP bundle to apply (version / short name / uri id). Defaults to the newest registered SSP.")
-    fw_apply_le = p_fw_apply.add_argument("--logical-enclosure", metavar="NAME", action="append",
-        help="Shared-infra scope: logical enclosure to update (repeatable).")
-    p_fw_apply.add_argument("--all-enclosures", action="store_true",
-        help="Shared-infra scope: update every logical enclosure.")
-    fw_apply_sp = p_fw_apply.add_argument("--server-profile", metavar="NAME", action="append",
-        help="Compute scope: server profile to update (repeatable).")
-    p_fw_apply.add_argument("--all-profiles", action="store_true",
-        help="Compute scope: update every managed server profile.")
-    p_fw_apply.add_argument("--install-type", choices=("firmware-only", "firmware-and-drivers", "firmware-offline"),
-        help="Compute install type override (default: keep each profile's existing setting).")
-    p_fw_apply.add_argument("--force", action="store_true",
-        help="Force reinstall even if already at the baseline / bypass non-disruptive validation.")
-    p_fw_apply.add_argument("--execute", action="store_true",
-        help="Actually apply (reboots interconnects + compute). Default is plan only.")
-    p_fw_apply.add_argument("--yes", action="store_true",
-        help="Skip the type-to-confirm prompt (with --execute).")
-    p_fw_apply.set_defaults(func=_cmd_firmware_apply)
-    fw_apply_baseline.completer = suppress_file_completion()  # type: ignore[attr-defined]
-    fw_apply_le.completer = suppress_file_completion()  # type: ignore[attr-defined]
-    fw_apply_sp.completer = suppress_file_completion()  # type: ignore[attr-defined]
 
     p_networks = sub.add_parser("networks", help="List or describe ethernet networks")
     s_networks = p_networks.add_subparsers(dest="what", metavar="ACTION")
@@ -3287,20 +3272,57 @@ examples:
     p_rep_mem = s_reports.add_parser("memory", help="Memory DIMM part-number breakdown")
     p_rep_mem.set_defaults(func=_cmd_report_memory)
 
-    # ── upgrade (readiness + disk cleanup) ────────────────────────────────
-    p_upgrade = sub.add_parser("upgrade", help="Appliance software upgrade, readiness & disk cleanup")
-    s_upgrade = p_upgrade.add_subparsers(dest="what", metavar="ACTION")
-    s_upgrade.required = True
-    p_up_ready = s_upgrade.add_parser("readiness",
+    # ── update (SSP enclosure rollout + appliance software) ────────────────
+    p_update = sub.add_parser("update", help="Roll out SSP firmware baselines or update the appliance itself")
+    s_update = p_update.add_subparsers(dest="target", metavar="TARGET")
+    s_update.required = True
+
+    p_upd_enc = s_update.add_parser("enclosure",
+        help="Update a logical enclosure's SSP firmware baseline",
+        description="Roll out an SSP (Synergy Service Pack) firmware baseline to one logical "
+                    "enclosure, matching the OneView GUI's 'Update firmware' dialog: pick the "
+                    "baseline and whether to update shared infrastructure only or shared "
+                    "infrastructure plus every server profile in this enclosure. Default is a "
+                    "non-destructive plan; add --execute to apply.")
+    upd_enc_name = p_upd_enc.add_argument("name", metavar="NAME",
+        help="Logical enclosure name (e.g. LE01)")
+    upd_enc_name.completer = _oneview_logical_enclosure_name_completer  # type: ignore[attr-defined]
+    upd_enc_baseline = p_upd_enc.add_argument("--baseline", metavar="NAME|VERSION",
+        help="SSP bundle to apply (version / short name / uri id). Defaults to the newest "
+             "registered SSP -- pass a specific one to repeat the same rollout for testing.")
+    upd_enc_baseline.completer = suppress_file_completion()  # type: ignore[attr-defined]
+    p_upd_enc.add_argument("--scope", choices=("shared-infra", "shared-infra-and-profiles"),
+        default="shared-infra",
+        help="'shared-infra' updates only the frame link modules + interconnects. "
+             "'shared-infra-and-profiles' also updates every server profile in this "
+             "enclosure's compute modules (matches the GUI's 'Shared infrastructure and "
+             "profiles' option). Default: shared-infra.")
+    p_upd_enc.add_argument("--install-type", choices=("firmware-only", "firmware-and-drivers", "firmware-offline"),
+        help="Compute install type override when --scope includes profiles (default: keep "
+             "each profile's existing setting).")
+    p_upd_enc.add_argument("--force", action="store_true",
+        help="Force reinstall even if already at the baseline / bypass non-disruptive validation.")
+    p_upd_enc.add_argument("--execute", action="store_true",
+        help="Actually apply (reboots interconnects, and compute modules if --scope includes "
+             "profiles). Default is plan only.")
+    p_upd_enc.add_argument("--yes", action="store_true",
+        help="Skip the type-to-confirm prompt and any validation-warning prompt (with --execute).")
+    p_upd_enc.set_defaults(func=_cmd_update_enclosure)
+
+    p_upd_app = s_update.add_parser("appliance",
+        help="Update the OneView/Composer appliance software itself (readiness, stage, install)")
+    s_upd_app = p_upd_app.add_subparsers(dest="what", metavar="ACTION")
+    s_upd_app.required = True
+    p_up_ready = s_upd_app.add_parser("readiness",
         help="Read-only pre-upgrade readiness report (version, health, path)")
     p_up_ready.set_defaults(func=_cmd_upgrade_readiness)
-    p_up_clean = s_upgrade.add_parser("cleanup",
+    p_up_clean = s_upd_app.add_parser("cleanup",
         help="List (and optionally delete) unused firmware baselines to free disk")
     p_up_clean.add_argument("--yes", "-y", action="store_true",
         help="Actually delete the unused baselines (default is a dry-run preview)")
     p_up_clean.set_defaults(func=_cmd_upgrade_cleanup)
 
-    p_up_run = s_upgrade.add_parser("run",
+    p_up_run = s_upd_app.add_parser("run",
         help="Upload + stage an appliance software update (guarded --execute installs it)")
     g_up_src = p_up_run.add_mutually_exclusive_group()
     up_image_arg = g_up_src.add_argument("--image", metavar="PATH",
@@ -3319,11 +3341,11 @@ examples:
         help="Replace a different already-staged update instead of aborting")
     p_up_run.set_defaults(func=_cmd_upgrade_run)
 
-    p_up_pending = s_upgrade.add_parser("pending",
+    p_up_pending = s_upd_app.add_parser("pending",
         help="Show the currently staged appliance update (read-only)")
     p_up_pending.set_defaults(func=_cmd_upgrade_pending)
 
-    p_up_cancel = s_upgrade.add_parser("cancel",
+    p_up_cancel = s_upd_app.add_parser("cancel",
         help="Remove a stuck/aborted staged appliance update")
     p_up_cancel.add_argument("--yes", "-y", action="store_true",
         help="Actually remove the staged update (default is a dry-run preview)")

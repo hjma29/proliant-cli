@@ -17,13 +17,15 @@ from proliant.oneview.ssp_update import (
     build_le_firmware_patch,
     build_plan,
     build_profile_firmware_put,
+    find_le_by_name,
+    hardware_enclosure_map,
     is_task_done,
     is_task_failed,
     normalize_le,
     normalize_profile,
     normalize_task,
     poll_task,
-    resolve_targets,
+    profiles_under_le,
     run_ssp_apply,
     same_baseline,
     select_baseline,
@@ -50,6 +52,7 @@ LE_RAW = {
     "eTag": "2026-07-10T05:35:47.088Z",
     "status": "OK",
     "firmware": {"firmwareBaselineUri": "/rest/firmware-drivers/SSP_2023_05"},
+    "enclosureUris": ["/rest/enclosures/enc-1"],
 }
 
 PROFILE_RAW = {
@@ -66,6 +69,11 @@ PROFILE_RAW = {
         "installationPolicy": "LowerThanBaseline",
     },
 }
+
+RAW_HARDWARE = [
+    {"uri": "/rest/server-hardware/uuid-1", "locationUri": "/rest/enclosures/enc-1"},
+    {"uri": "/rest/server-hardware/uuid-2", "locationUri": "/rest/enclosures/enc-2"},
+]
 
 
 def _newest():
@@ -108,18 +116,38 @@ def test_select_baseline_no_match_returns_none():
 def test_normalize_le_and_profile():
     le = normalize_le(LE_RAW)
     assert le["name"] == "LE01" and le["current_baseline_uri"].endswith("SSP_2023_05")
+    assert le["enclosure_uris"] == ["/rest/enclosures/enc-1"]
     p = normalize_profile(PROFILE_RAW)
     assert p["manage_firmware"] is True
     assert p["server_hardware_uri"].endswith("uuid-1")
     assert p["install_type"] == "FirmwareOnlyOfflineMode"
 
 
-def test_resolve_targets_by_name_all_and_empty():
-    items = [normalize_le(LE_RAW)]
-    assert resolve_targets(items, ["le01"], False)[0]["name"] == "LE01"  # case-insensitive
-    assert resolve_targets(items, None, True) == items
-    assert resolve_targets(items, None, False) == []
-    assert resolve_targets(items, ["missing"], False) == []
+def test_find_le_by_name_case_insensitive():
+    les = [normalize_le(LE_RAW)]
+    assert find_le_by_name(les, "le01")["name"] == "LE01"
+    assert find_le_by_name(les, "missing") is None
+
+
+def test_hardware_enclosure_map():
+    m = hardware_enclosure_map(RAW_HARDWARE)
+    assert m["/rest/server-hardware/uuid-1"] == "/rest/enclosures/enc-1"
+    assert m["/rest/server-hardware/uuid-2"] == "/rest/enclosures/enc-2"
+
+
+def test_profiles_under_le_matches_by_hardware_enclosure():
+    le = normalize_le(LE_RAW)  # enclosureUris = ["/rest/enclosures/enc-1"]
+    profiles = [normalize_profile(PROFILE_RAW)]  # server-hardware/uuid-1 -> enc-1
+    hw_map = hardware_enclosure_map(RAW_HARDWARE)
+    assert profiles_under_le(le, profiles, hw_map) == profiles
+    # a profile whose hardware sits in a different enclosure is excluded
+    other = dict(PROFILE_RAW, serverHardwareUri="/rest/server-hardware/uuid-2")
+    assert profiles_under_le(le, [normalize_profile(other)], hw_map) == []
+
+
+def test_profiles_under_le_no_enclosures_returns_empty():
+    le = dict(normalize_le(LE_RAW), enclosure_uris=[])
+    assert profiles_under_le(le, [normalize_profile(PROFILE_RAW)], {}) == []
 
 
 # ── plan building ─────────────────────────────────────────────────────────────

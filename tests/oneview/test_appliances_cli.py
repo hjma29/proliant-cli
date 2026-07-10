@@ -52,36 +52,45 @@ class TestParserWiring:
         assert args.func is _cmd_appliances_describe
         assert args.name is None
 
-    def test_parser_firmware_apply_parses(self):
-        from proliant.oneview.cli import _build_parser, _cmd_firmware_apply
+    def test_parser_update_enclosure_parses(self):
+        from proliant.oneview.cli import _build_parser, _cmd_update_enclosure
         parser = _build_parser()
         args = parser.parse_args([
-            "firmware", "apply",
+            "update", "enclosure", "LE01",
             "--baseline", "SY-2026.01.02",
-            "--logical-enclosure", "LE01",
-            "--server-profile", "ocp-single-node",
+            "--scope", "shared-infra-and-profiles",
             "--install-type", "firmware-and-drivers",
             "--force", "--execute", "--yes",
         ])
-        assert args.func is _cmd_firmware_apply
+        assert args.func is _cmd_update_enclosure
+        assert args.name == "LE01"
         assert args.baseline == "SY-2026.01.02"
-        assert args.logical_enclosure == ["LE01"]
-        assert args.server_profile == ["ocp-single-node"]
+        assert args.scope == "shared-infra-and-profiles"
         assert args.install_type == "firmware-and-drivers"
         assert args.force and args.execute and args.yes
 
-    def test_parser_firmware_apply_defaults_and_repeatable(self):
-        from proliant.oneview.cli import _build_parser, _cmd_firmware_apply
+    def test_parser_update_enclosure_defaults(self):
+        from proliant.oneview.cli import _build_parser, _cmd_update_enclosure
         parser = _build_parser()
-        args = parser.parse_args([
-            "firmware", "apply", "--all-enclosures",
-            "--server-profile", "a", "--server-profile", "b",
-        ])
-        assert args.func is _cmd_firmware_apply
+        args = parser.parse_args(["update", "enclosure", "LE01"])
+        assert args.func is _cmd_update_enclosure
         assert args.baseline is None
-        assert args.all_enclosures is True
-        assert args.server_profile == ["a", "b"]
+        assert args.scope == "shared-infra"
         assert args.execute is False  # plan by default
+
+    def test_parser_update_appliance_run_parses(self):
+        from proliant.oneview.cli import _build_parser, _cmd_upgrade_run
+        parser = _build_parser()
+        args = parser.parse_args(["update", "appliance", "run", "--image", "update.bin", "--execute"])
+        assert args.func is _cmd_upgrade_run
+        assert args.image == "update.bin"
+        assert args.execute is True
+
+    def test_parser_update_appliance_readiness_parses(self):
+        from proliant.oneview.cli import _build_parser, _cmd_upgrade_readiness
+        parser = _build_parser()
+        args = parser.parse_args(["update", "appliance", "readiness"])
+        assert args.func is _cmd_upgrade_readiness
 
 
 class TestAppliancesList:

@@ -463,7 +463,7 @@ def assess_readiness(data: dict[str, Any], *, now: datetime | None = None) -> di
     elif free < _DISK_WARN_GB:
         add("Appliance disk space", "WARN",
             f"{free:.1f} GB free — tight. Consider pruning unused baselines "
-            f"('proliant oneview upgrade cleanup').")
+            f"('proliant oneview update appliance cleanup').")
     else:
         add("Appliance disk space", "PASS", f"{free:.1f} GB free.")
 
@@ -533,7 +533,7 @@ def assess_readiness(data: dict[str, Any], *, now: datetime | None = None) -> di
     if prunable:
         add("Reclaimable firmware baselines", "INFO",
             f"{len(prunable)} old unused baseline(s) using {bs.get('reclaimable_gb', 0):.1f} GB — "
-            f"reclaim with 'proliant oneview upgrade cleanup'.")
+            f"reclaim with 'proliant oneview update appliance cleanup'.")
 
     # Unused baselines that only exist in an external repository — never
     # deletable via OneView, shown separately so the count above never

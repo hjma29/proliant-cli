@@ -327,6 +327,15 @@ def _oneview_enclosure_name_completer(prefix: str, **kwargs) -> list[str]:
         return []
 
 
+def _oneview_interconnect_name_completer(prefix: str, **kwargs) -> list[str]:
+    """Tab-complete interconnect names by querying OneView."""
+    try:
+        names = _oneview_cached_object_names("interconnects", "/rest/interconnects")
+        return [n for n in names if n.lower().startswith(prefix.lower())]
+    except Exception:
+        return []
+
+
 def _power_style(state: str) -> str:
     s = state.lower()
     if s == "on":
@@ -1152,6 +1161,140 @@ async def _async_interconnects_list() -> None:
 
 async def _cmd_interconnects_list(args: argparse.Namespace) -> None:
     await _async_interconnects_list()
+
+
+# ── proliant oneview interconnects describe ───────────────────────────────────
+
+def _link_status_style(state: str) -> str:
+    s = (state or "").lower()
+    if s == "linked":
+        return f"[green]{state}[/green]"
+    if s == "unlinked":
+        return f"[dim]{state}[/dim]"
+    return state or ""
+
+
+async def _async_interconnects_describe(name: str) -> None:
+    from proliant.oneview.interconnects import describe_interconnect
+
+    async with _load_client() as client:
+        with get_console().status(f"[dim]Fetching interconnect '{name}'…[/dim]"):
+            ic = await describe_interconnect(client, name)
+
+    if get_output_mode() == OutputMode.JSON:
+        print_json(ic)
+        return
+
+    console = get_console()
+    g = ic["general"]
+    h = ic["hardware"]
+
+    baseline = g["firmware_baseline_name"] or "—"
+    if g["firmware_version_from_baseline"]:
+        baseline += f"  (bundled version: {g['firmware_version_from_baseline']})"
+    ipv4 = f"{g['ipv4']} ({g['ipv4_type']})" if g["ipv4"] else "—"
+    ipv6 = f"{g['ipv6']} ({g['ipv6_type']})" if g["ipv6"] else "—"
+
+    details = [
+        f"[bold]{ic['name']}[/bold]",
+        f"Status: {_status_style(ic['status'])}  |  State: {_state_style(ic['state'])}  |  Power: {_power_style(g['power'])}",
+        f"Logical interconnect:  {g['logical_interconnect'] or '—'}",
+        f"Firmware baseline:     {baseline}",
+        f"Installed firmware:    {g['installed_firmware_version'] or '—'}",
+        f"Management interface:  {g['mgmt_interface']}",
+        f"Stacking:              domain {g['stacking_domain_id'] or '—'} / member {g['stacking_member_id'] or '—'} ({g['stacking_domain_role'] or '—'})",
+        f"Host name:             {g['host_name'] or '—'}",
+        f"IPv4:                  {ipv4}",
+        f"IPv6:                  {ipv6}",
+    ]
+    console.print(Panel("\n".join(details), title="General", border_style="cyan"))
+
+    hw_details = [
+        f"Product name:      {h['product_name'] or '—'}",
+        f"Location:          {h['location'] or '—'}",
+        f"Management MAC:    {h['mgmt_mac'] or '—'}",
+        f"Base WWN:          {h['base_wwn'] or '—'}",
+        f"Serial number:     {h['serial_number'] or '—'}",
+        f"Part number:       {h['part_number'] or '—'}",
+        f"Spare part number: {h['spare_part_number'] or '—'}",
+        f"Hardware health:   {_status_style(h['health'])}",
+    ]
+    console.print(Panel("\n".join(hw_details), title="Hardware", border_style="cyan"))
+
+    link_ports = ic["link_ports"]
+    if link_ports:
+        table = make_table(
+            "Interconnect Link Ports",
+            ("Port", {"no_wrap": True}),
+            ("State", {"justify": "center", "no_wrap": True}),
+            ("Connected To", {"no_wrap": True}),
+        )
+        for p in link_ports:
+            table.add_row(p["port"], _link_status_style(p["state"]), p["connected_to"])
+        console.print(table)
+
+    uplink_ports = ic["uplink_ports"]
+    if uplink_ports:
+        table = make_table(
+            f"Uplink Ports  ({len(uplink_ports)})",
+            ("Port", {"no_wrap": True}),
+            ("Type", {"no_wrap": True}),
+            ("State", {"justify": "center", "no_wrap": True}),
+            ("Speed (Gb/s)", {"justify": "right", "no_wrap": True}),
+            ("Uplink Set", {"min_width": 14, "no_wrap": True}),
+            ("Port WWN", {"no_wrap": True}),
+            ("Connector", {"no_wrap": True}),
+            ("Connected To", {"no_wrap": True}),
+        )
+        for p in uplink_ports:
+            table.add_row(
+                p["port"], p["type"] or "—", _link_status_style(p["state"]),
+                p["speed"] or "unknown", p["uplink_set"] or "—",
+                p["port_wwn"], p["connector_type"], p["connected_to"],
+            )
+        console.print(table)
+
+    downlink_ports = ic["downlink_ports"]
+    if downlink_ports:
+        table = make_table(
+            f"Downlink Ports  ({len(downlink_ports)})",
+            ("Port", {"no_wrap": True}),
+            ("State", {"justify": "center", "no_wrap": True}),
+            ("Speed (Gb/s)", {"justify": "right", "no_wrap": True}),
+            ("Server Hardware", {"min_width": 18, "no_wrap": True}),
+            ("Adapter Port", {"no_wrap": True}),
+            ("Server Profile", {"min_width": 14, "no_wrap": True}),
+        )
+        for p in downlink_ports:
+            table.add_row(
+                p["port"], _link_status_style(p["state"]), p["speed"],
+                p["server_hardware"], p["adapter_port"], p["server_profile"],
+            )
+        console.print(table)
+
+    u = ic["utilization"]
+    lines = []
+    if u["cpu_pct"] is not None:
+        lines.append(f"CPU:          {u['cpu_pct']:g}%")
+    if u["memory_used_mb"] is not None:
+        cap = f" of {u['memory_capacity_mb']:g} MB" if u["memory_capacity_mb"] else ""
+        pct = f"  ({u['memory_pct']:g}%)" if u["memory_pct"] is not None else ""
+        lines.append(f"Memory:       {u['memory_used_mb']:g} MB{cap}{pct}")
+    if u["power_avg_w"] is not None:
+        cap = f" of {u['power_capacity_w']:g} W" if u["power_capacity_w"] else ""
+        lines.append(f"Power:        {u['power_avg_w']:g} W{cap}")
+    if u["temperature_f"] is not None:
+        lines.append(f"Temperature:  {u['temperature_f']:g} °F")
+    if lines:
+        console.print(Panel("\n".join(lines), title="Utilization", border_style="cyan"))
+
+    rs = ic["remote_support"]
+    rs_style = "[green]Enabled[/green]" if rs["enabled"] else f"[dim]{rs['state'] or '—'}[/dim]"
+    console.print(f"Remote support: {rs_style}")
+
+
+async def _cmd_interconnects_describe(args: argparse.Namespace) -> None:
+    await _async_interconnects_describe(args.name)
 
 
 # ── proliant oneview mac list ─────────────────────────────────────────────────
@@ -2892,6 +3035,8 @@ examples:
   proliant oneview li list                               Logical interconnects
   proliant oneview lig list                              Logical interconnect groups
   proliant oneview interconnects list                    Interconnect hardware
+  proliant oneview interconnects describe "Enclosure-01, interconnect 6"
+                                                          Interconnect detail (ports, utilization, firmware)
   proliant oneview mac list --address 00:11:22:33:44:55  MAC forwarding table by address
   proliant oneview mac list --vlan 100                   MAC forwarding table by VLAN
   proliant oneview mac describe 00:11:22:33:44:55        Trace a MAC end-to-end through the fabric
@@ -3044,6 +3189,10 @@ examples:
     s_ics = p_ics.add_subparsers(dest="what", metavar="ACTION")
     s_ics.required = True
     s_ics.add_parser("list", help="List all interconnect hardware").set_defaults(func=_cmd_interconnects_list)
+    p_ics_desc = s_ics.add_parser("describe", help="Show interconnect detail (ports, utilization, firmware)")
+    p_ics_desc_name = p_ics_desc.add_argument("name", metavar="NAME", help="Name of the interconnect (e.g. 'Enclosure-01, interconnect 6')")
+    p_ics_desc_name.completer = _oneview_interconnect_name_completer
+    p_ics_desc.set_defaults(func=_cmd_interconnects_describe)
 
     # ── mac address table ─────────────────────────────────────────────────
     p_mac = sub.add_parser("mac", help="Query MAC forwarding-information-base")

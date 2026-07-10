@@ -8,11 +8,14 @@ Key endpoints:
   GET /rest/logical-interconnects                   -> all LIs
   GET /rest/logical-interconnect-groups             -> all LIGs
   GET /rest/interconnects                           -> IC hardware
+  GET {ic_uri}/statistics                           -> live CPU/memory (instant)
+  GET {ic_uri}/utilization                          -> CPU/memory/power/temperature history
   GET {li_uri}/forwarding-information-base          -> MAC address table
 """
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -369,3 +372,350 @@ async def get_mac_table(
     enrich_mac_entries(unique, mac_map, port_map, port_conns, tunnel_ports)
 
     return sorted(unique, key=lambda m: (m["mac"], m["ic_name"]))
+
+
+# ── Single-interconnect detail (matches OneView's interconnect detail page) ───
+
+def _ic_location_map(raw: dict) -> dict[str, str]:
+    entries = (raw.get("interconnectLocation") or {}).get("locationEntries", [])
+    return {e.get("type", ""): e.get("value", "") for e in entries}
+
+
+def _ip_by_type(ip_list: list[dict] | None) -> dict[str, str]:
+    return {e.get("ipAddressType", ""): e.get("ipAddress", "") for e in ip_list or []}
+
+
+_SPEED_RE_G = re.compile(r"^(\d+)(?:x(\d+))?G$")
+_SPEED_RE_M = re.compile(r"^(\d+)M$")
+
+
+def parse_port_speed(raw: str | None) -> str:
+    """Normalize a port's ``operationalSpeed`` for display.
+
+    ``'Speed10G'`` -> ``'10'``; ``'Speed4x25G'`` -> ``'4x25'``;
+    ``'Auto'``/``'SpeedUnknown'`` (no link) -> ``'unknown'``; blank -> ``''``.
+    """
+    if not raw:
+        return ""
+    if raw in ("Auto", "SpeedUnknown"):
+        return "unknown"
+    if raw.startswith("Speed"):
+        rest = raw[len("Speed"):]
+        m = _SPEED_RE_G.match(rest)
+        if m:
+            return f"{m.group(1)}x{m.group(2)}" if m.group(2) else m.group(1)
+        m = _SPEED_RE_M.match(rest)
+        if m:
+            mbps = int(m.group(1))
+            # 'Speed0M' means "no link negotiated" (same idea as SpeedUnknown)
+            # -- OneView reports it for every Unlinked port -- not a real 0 Gb/s.
+            return "" if mbps == 0 else str(mbps)
+        return rest.lower() if rest else ""
+    return raw
+
+
+def format_adapter_port(port_id: str) -> str:
+    """Server-profile connection ``portId`` -> GUI-style adapter port label.
+
+    ``'Mezz 3:2-a'`` -> ``'Mezzanine 3:2'`` (drops the per-connection ``-a``
+    suffix, since it names a virtual sub-function, not the physical port).
+    Other adapter names (``'FlexLOM 1:1'``) pass through unchanged.
+    """
+    m = re.match(r"^Mezz\s+(\d+):(\d+)", port_id or "")
+    if m:
+        return f"Mezzanine {m.group(1)}:{m.group(2)}"
+    return re.sub(r"-[a-zA-Z]$", "", (port_id or "").strip())
+
+
+def _connected_to(neighbor: dict | None) -> str:
+    if not neighbor:
+        return "none"
+    chassis = neighbor.get("remoteChassisId") or neighbor.get("remoteSystemName") or ""
+    port = neighbor.get("remotePortId") or neighbor.get("remotePortDescription") or ""
+    if chassis and port:
+        return f"{chassis} ({port})"
+    return chassis or port or "none"
+
+
+def _uplink_port_visible(port: dict) -> bool:
+    """Whether an uplink port row should be shown, matching the GUI.
+
+    A splittable QSFP cage's *parent* row (e.g. ``'Q1'``) is hidden once it is
+    populated and split into ``'Q1:1'``..``'Q1:4'`` -- OneView only shows the
+    active subports then. When unpopulated (no transceiver), the parent is
+    shown alongside its placeholder subports (verified live: an unpopulated
+    cage's own row carries ``portStatusReason == "Unpopulated"``).
+    """
+    if ":" in (port.get("portName") or ""):
+        return True
+    return port.get("portStatusReason") == "Unpopulated"
+
+
+def _port_sort_key(port_name: str) -> tuple[int, int]:
+    m = re.match(r"^[A-Za-z]+(\d+)(?::(\d+))?$", port_name or "")
+    if not m:
+        return (0, 0)
+    return (int(m.group(1)), int(m.group(2)) if m.group(2) else -1)
+
+
+def _port_wwn(port: dict) -> str:
+    fc = port.get("fcPortProperties") or {}
+    return fc.get("portWwpn") or fc.get("wwpn") or fc.get("worldWideName") or "n/a"
+
+
+def _metric(metric_list: list[dict] | None, name: str) -> dict | None:
+    for m in metric_list or []:
+        if m.get("metricName") == name:
+            return m
+    return None
+
+
+def _latest_metric_value(metric_list: list[dict] | None, name: str) -> float | None:
+    m = _metric(metric_list, name)
+    if not m:
+        return None
+    samples = m.get("metricSamples") or []
+    series = samples[-1] if samples else []
+    return series[-1][-1] if series else None
+
+
+def _to_float(value: object) -> float | None:
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def _component_version_for_product(components: list[dict], product_name: str) -> str:
+    """Find this interconnect model's bundled firmware version in an SPP baseline.
+
+    A baseline's ``fwComponents`` list has one entry per hardware component it
+    covers (e.g. ``'HPE Virtual Connect SE 100Gb F32 Module for Synergy
+    Firmware install package'``); matching the interconnect's own
+    ``productName`` as a substring reliably picks the right one (verified
+    live: exactly one match for this appliance's registered baselines).
+    """
+    needle = (product_name or "").strip().lower()
+    if not needle:
+        return ""
+    for c in components:
+        name = (c.get("name") or c.get("componentName") or "").lower()
+        if needle in name:
+            return c.get("componentVersion") or c.get("version") or ""
+    return ""
+
+
+def _resolve_baseline_uri(enclosure_uri: str, raw_les: list[dict]) -> str:
+    """Firmware baselines are assigned at the Logical Enclosure -- neither the
+    interconnect nor its Logical Interconnect carries its own baseline field
+    (confirmed live: no firmware-named key on either resource)."""
+    for le in raw_les:
+        if enclosure_uri and enclosure_uri in (le.get("enclosureUris") or []):
+            return (le.get("firmware") or {}).get("firmwareBaselineUri", "") or ""
+    return ""
+
+
+def _build_downlink_map(
+    raw_profiles: list[dict], raw_server_hw: list[dict],
+) -> dict[tuple[str, int], dict]:
+    """``(interconnect_uri, interconnectPort)`` -> server hardware / adapter port / profile.
+
+    Mirrors ``build_profile_maps()``'s connection-scanning approach but keeps
+    the extra fields (``serverHardwareUri``, connection ``portId``) needed for
+    the Downlink Ports table's Server Hardware / Adapter Port columns.
+    """
+    hw_name = {h.get("uri", ""): h.get("name", "") for h in raw_server_hw}
+    out: dict[tuple[str, int], dict] = {}
+    for p in raw_profiles:
+        pname = p.get("name", "") or ""
+        hw_uri = p.get("serverHardwareUri") or ""
+        cs = p.get("connectionSettings") or {}
+        for c in cs.get("connections") or p.get("connections") or []:
+            ic_uri = c.get("interconnectUri")
+            port = c.get("interconnectPort")
+            if ic_uri and isinstance(port, int):
+                out.setdefault((ic_uri, port), {
+                    "server_profile": pname,
+                    "server_hardware": hw_name.get(hw_uri, ""),
+                    "adapter_port": format_adapter_port(c.get("portId", "")),
+                })
+    return out
+
+
+_DOWNLINK_PORT_RE = re.compile(r"^\D*(\d+)$")
+
+
+async def describe_interconnect(client: "OneViewClient", name: str) -> dict:
+    """Return a rich single-interconnect detail dict mirroring the OneView
+    GUI's interconnect detail page (General / Hardware / Interconnect Link
+    Ports / Uplink Ports / Downlink Ports / Utilization / Remote Support)."""
+    raw_ics = await client.get_all("/rest/interconnects")
+    matched = [ic for ic in raw_ics if ic.get("name", "").lower() == name.lower()]
+    if not matched:
+        known = ", ".join(sorted(ic.get("name", "") for ic in raw_ics))
+        raise ValueError(f"Interconnect '{name}' not found. Known: {known}")
+    raw = matched[0]
+    uri = raw.get("uri", "")
+    enc_uri = raw.get("enclosureUri", "")
+
+    (
+        raw_lis, raw_les, raw_drivers, raw_uplinksets, raw_profiles, raw_server_hw, stats, util,
+    ) = await asyncio.gather(
+        client.get_all("/rest/logical-interconnects"),
+        client.get_all("/rest/logical-enclosures"),
+        client.get_all("/rest/firmware-drivers"),
+        client.get_all("/rest/uplink-sets"),
+        client.get_all("/rest/server-profiles"),
+        client.get_all("/rest/server-hardware"),
+        client.get(f"{uri}/statistics"),
+        client.get(f"{uri}/utilization"),
+    )
+
+    li_map = {li.get("uri", ""): li.get("name", "") for li in raw_lis}
+    uplinkset_names = {u.get("uri", ""): u.get("name", "") for u in raw_uplinksets}
+    uplinkset_types = {u.get("uri", ""): u.get("networkType", "") for u in raw_uplinksets}
+    downlink_map = _build_downlink_map(raw_profiles, raw_server_hw)
+    # Downlink port -> device bay is a fixed physical (midplane) wiring fact,
+    # independent of any server profile -- a Linked port's own LLDP-style
+    # neighbor names the connected server hardware by its own resource ID
+    # (verified live), which is the authoritative source. The profile
+    # connection map above is only a fallback for Unlinked-but-configured
+    # ports (no neighbor to read) and for Adapter Port / Server Profile,
+    # which aren't exposed anywhere outside the profile connection.
+    hw_by_id = {h["uri"].rsplit("/", 1)[-1]: h.get("name", "") for h in raw_server_hw if h.get("uri")}
+
+    baseline_uri = _resolve_baseline_uri(enc_uri, raw_les)
+    baseline = next((d for d in raw_drivers if d.get("uri", "") == baseline_uri), None) if baseline_uri else None
+    # The baseline resource splits its display name across two fields --
+    # e.g. name="HPE Synergy Service Pack", version="SY-2023.05.01" -- the
+    # GUI shows them joined ("HPE Synergy Service Pack SY-2023.05.01").
+    baseline_name = " ".join(
+        part for part in ((baseline or {}).get("name", ""), (baseline or {}).get("version", "")) if part
+    )
+    baseline_version = _component_version_for_product(
+        (baseline or {}).get("fwComponents") or [], raw.get("productName", "")
+    )
+
+    loc = _ic_location_map(raw)
+    ips = _ip_by_type(raw.get("ipAddressList"))
+
+    general = {
+        "logical_interconnect": li_map.get(raw.get("logicalInterconnectUri", ""), ""),
+        "power": raw.get("powerState", ""),
+        "state": raw.get("state", ""),
+        "firmware_baseline_name": baseline_name,
+        "firmware_baseline_uri": baseline_uri,
+        "firmware_version_from_baseline": baseline_version,
+        "installed_firmware_version": raw.get("firmwareVersion", ""),
+        "mgmt_interface": raw.get("mgmtInterface") or "none",
+        "stacking_domain_id": str(raw.get("stackingDomainId", "") or ""),
+        "stacking_member_id": str(raw.get("stackingMemberId", "") or ""),
+        "stacking_domain_role": raw.get("stackingDomainRole", ""),
+        "host_name": raw.get("hostName", ""),
+        "ipv4": ips.get("Ipv4Dhcp") or ips.get("Ipv4Static") or "",
+        "ipv4_type": "DHCP" if "Ipv4Dhcp" in ips else ("Static" if "Ipv4Static" in ips else ""),
+        "ipv6": ips.get("Ipv6LinkLocal") or ips.get("Ipv6Static") or "",
+        "ipv6_type": "link-local" if "Ipv6LinkLocal" in ips else ("static" if "Ipv6Static" in ips else ""),
+    }
+
+    hardware = {
+        "product_name": raw.get("productName", ""),
+        "location": f"{raw.get('enclosureName', '')}, interconnect bay {loc.get('Bay', '')}".strip(", "),
+        "mgmt_mac": raw.get("interconnectMAC", ""),
+        "base_wwn": raw.get("baseWWN", ""),
+        "serial_number": raw.get("serialNumber", ""),
+        "part_number": raw.get("partNumber", ""),
+        "spare_part_number": raw.get("sparePartNumber", ""),
+        "health": raw.get("interconnectHardwareHealth", ""),
+    }
+
+    link_ports: list[dict] = []
+    uplink_ports: list[dict] = []
+    downlink_ports: list[dict] = []
+    ports = sorted(raw.get("ports") or [], key=lambda p: _port_sort_key(p.get("portName", "")))
+    for p in ports:
+        ptype = p.get("portType")
+        pname = p.get("portName", "")
+        if ptype == "Extension":
+            link_ports.append({
+                "port": pname.upper(),
+                "state": p.get("portStatus", ""),
+                "connected_to": _connected_to(p.get("neighbor")),
+            })
+        elif ptype == "Uplink":
+            if not _uplink_port_visible(p):
+                continue
+            uplinkset_uri = p.get("associatedUplinkSetUri") or ""
+            uplink_ports.append({
+                "port": pname,
+                "type": uplinkset_types.get(uplinkset_uri, "") if uplinkset_uri else "",
+                "state": p.get("portStatus", ""),
+                "speed": parse_port_speed(p.get("operationalSpeed")),
+                "uplink_set": uplinkset_names.get(uplinkset_uri, "") if uplinkset_uri else "",
+                "port_wwn": _port_wwn(p),
+                "connector_type": p.get("connectorType") or "n/a",
+                "connected_to": _connected_to(p.get("neighbor")),
+            })
+        elif ptype == "Downlink":
+            m = _DOWNLINK_PORT_RE.match(pname)
+            port_num = int(m.group(1)) if m else None
+            info = downlink_map.get((uri, port_num), {}) if port_num is not None else {}
+            neighbor = p.get("neighbor")
+            server_hw = info.get("server_hardware", "")
+            if neighbor:
+                server_hw = hw_by_id.get(neighbor.get("remoteChassisId", ""), "") or server_hw
+            downlink_ports.append({
+                "port": m.group(1) if m else pname,
+                "state": p.get("portStatus", ""),
+                "speed": parse_port_speed(p.get("operationalSpeed")),
+                "server_hardware": server_hw,
+                "adapter_port": info.get("adapter_port", ""),
+                "server_profile": info.get("server_profile", ""),
+            })
+
+    util_list = (util or {}).get("metricList") or []
+    cpu_metric = _metric(util_list, "Cpu")
+    cpu_pct = None
+    if cpu_metric:
+        samples = cpu_metric.get("metricSamples") or []
+        series = samples[-1] if samples else []
+        vals = [v for _, v in series]
+        if vals:
+            cpu_pct = round(sum(vals) / len(vals), 1)
+    if cpu_pct is None:
+        cpu_pct = _to_float(((stats or {}).get("moduleStatistics") or {}).get("cpuUsage"))
+
+    mem_used = _latest_metric_value(util_list, "Memory")
+    mem_cap = (_metric(util_list, "Memory") or {}).get("metricCapacity")
+    power_avg = _latest_metric_value(util_list, "PowerAverageWatts")
+    power_cap = (_metric(util_list, "PowerAverageWatts") or {}).get("metricCapacity")
+
+    utilization = {
+        "cpu_pct": cpu_pct,
+        "memory_used_mb": mem_used,
+        "memory_capacity_mb": mem_cap,
+        "memory_pct": round(mem_used / mem_cap * 100) if mem_used and mem_cap else None,
+        "power_avg_w": power_avg,
+        "power_capacity_w": power_cap,
+        "temperature_f": _latest_metric_value(util_list, "Temperature"),
+    }
+
+    remote_support = raw.get("remoteSupport") or {}
+    remote = {
+        "enabled": (remote_support.get("supportState") or "").lower() == "enabled",
+        "state": remote_support.get("supportState", ""),
+    }
+
+    return {
+        "name": raw.get("name", ""),
+        "status": raw.get("status", ""),
+        "state": raw.get("state", ""),
+        "uri": uri,
+        "general": general,
+        "hardware": hardware,
+        "link_ports": link_ports,
+        "uplink_ports": uplink_ports,
+        "downlink_ports": downlink_ports,
+        "utilization": utilization,
+        "remote_support": remote,
+    }

@@ -101,6 +101,8 @@ proliant oneview server-profiles describe <name>
 proliant oneview mac list --address <mac>
 proliant oneview mac list --network-name <name>
 proliant oneview mac describe <mac>
+proliant oneview interconnects list
+proliant oneview interconnects describe <name>          # ports, utilization, firmware baseline (matches GUI detail page)
 proliant oneview appliances list                        # list configured appliances (* = active)
 proliant oneview appliances describe [name]             # appliance General page (HA nodes, memory, uptime, firmware)
 proliant oneview firmware bundles                        # registered SPP/SSP baselines

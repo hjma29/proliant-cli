@@ -2135,6 +2135,190 @@ async def _cmd_firmware_compliance_list(args: argparse.Namespace) -> None:
     await _async_firmware_compliance_list()
 
 
+# ── proliant oneview firmware apply (SSP baseline rollout) ────────────────────
+
+_SSP_POLL_S = 20
+_SSP_TASK_TIMEOUT_S = 90 * 60
+
+
+def _render_ssp_plan(console, plan: dict) -> None:
+    """Render the non-destructive apply plan (baseline + per-target changes)."""
+    b = plan.get("baseline") or {}
+    released = (b.get("release_date") or "")[:10]
+    console.print(Panel(
+        f"Baseline:  [bold]{b.get('name') or '—'}[/bold]"
+        + (f"  ({b.get('version')})" if b.get("version") else "")
+        + (f"\nReleased:  {released}" if released else "")
+        + f"\nChanges:   [bold]{plan.get('changes', 0)}[/bold] target(s) would be updated",
+        title="SSP Firmware Apply — Plan", border_style="cyan"))
+
+    rows = plan.get("logical_enclosures", []) + plan.get("server_profiles", [])
+    if not rows:
+        return
+    table = make_table(
+        "Targets",
+        ("Scope", {"no_wrap": True}),
+        ("Target", {"no_wrap": True}),
+        ("Change", {"no_wrap": True}),
+        ("Detail", {"style": "dim"}),
+    )
+    _scope_label = {"logical-enclosure": "Shared infra", "server-profile": "Compute"}
+    for r in rows:
+        change = "[yellow]update[/yellow]" if r["will_change"] else "[green]current[/green]"
+        table.add_row(_scope_label.get(r["kind"], r["kind"]), r["name"], change, r.get("detail", ""))
+    console.print(table)
+
+
+async def _async_firmware_apply(args: argparse.Namespace) -> None:
+    from proliant.oneview.ssp_update import (
+        INSTALL_TYPES,
+        LE_SCOPE_SHARED,
+        fetch_apply_targets,
+        resolve_targets,
+        run_ssp_apply,
+        select_baseline,
+    )
+
+    json_mode = getattr(args, "json_output", False) or get_output_mode() == OutputMode.JSON
+    console = get_console()
+
+    async with _load_client() as client:
+        with console.status("[dim]Fetching SSP baselines and rollout targets…[/dim]"):
+            data = await fetch_apply_targets(client)
+
+    baseline = select_baseline(data["baselines"], getattr(args, "baseline", None))
+    if baseline is None:
+        names = ", ".join(f"{b['name']} ({b['version']})" for b in data["baselines"][:8]) or "none registered"
+        if json_mode:
+            print_json({"status": "error", "reason": "baseline not found",
+                        "query": getattr(args, "baseline", None), "available": data["baselines"]})
+        else:
+            q = getattr(args, "baseline", None)
+            console.print(f"[red]No SSP baseline matches '{q}'.[/red]" if q
+                          else "[red]No SSP/SPP baselines are registered on this appliance.[/red]")
+            console.print(f"[dim]Available: {names}[/dim]")
+        return
+
+    les = resolve_targets(data["logical_enclosures"],
+                          getattr(args, "logical_enclosure", None), getattr(args, "all_enclosures", False))
+    profs = resolve_targets(data["server_profiles"],
+                            getattr(args, "server_profile", None), getattr(args, "all_profiles", False))
+
+    if not les and not profs:
+        msg = ("Select a scope: [bold]--logical-enclosure NAME[/bold] / [bold]--all-enclosures[/bold] "
+               "for shared infrastructure, and/or [bold]--server-profile NAME[/bold] / "
+               "[bold]--all-profiles[/bold] for compute.")
+        if json_mode:
+            print_json({"status": "error", "reason": "no targets selected"})
+        else:
+            console.print(f"[yellow]{msg}[/yellow]")
+            le_names = ", ".join(le["name"] for le in data["logical_enclosures"]) or "—"
+            console.print(f"[dim]Logical enclosures: {le_names}[/dim]")
+            console.print(f"[dim]Server profiles: {len(data['server_profiles'])} available[/dim]")
+        return
+
+    install_type = INSTALL_TYPES.get(getattr(args, "install_type", None) or "")
+    execute = bool(getattr(args, "execute", False))
+
+    bars: dict = {}
+
+    def _stop_bar() -> None:
+        p = bars.pop("bar", None)
+        bars.pop("task", None)
+        if p is not None:
+            try:
+                p.stop()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def on_event(kind: str, payload: dict) -> None:
+        if json_mode:
+            return
+        if kind == "plan":
+            _render_ssp_plan(console, payload)
+        elif kind == "applying":
+            from rich.progress import (
+                BarColumn, Progress, SpinnerColumn, TaskProgressColumn,
+                TextColumn, TimeElapsedColumn,
+            )
+            label = "Shared infra" if payload.get("kind") == "logical-enclosure" else "Compute"
+            p = Progress(
+                SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
+                BarColumn(), TaskProgressColumn(), TimeElapsedColumn(), console=console,
+            )
+            p.start()
+            bars["bar"] = p
+            bars["task"] = p.add_task(f"[bold]{label}: {payload.get('name')}[/bold]", total=100)
+        elif kind == "task-progress":
+            p = bars.get("bar")
+            if p is None:
+                return
+            pct = payload.get("percent")
+            state = payload.get("status") or payload.get("state") or "working…"
+            res = payload.get("resource")
+            desc = f"{state}  [dim]({res})[/dim]" if res else state
+            if isinstance(pct, (int, float)):
+                p.update(bars["task"], completed=pct, description=desc)
+            else:
+                p.update(bars["task"], description=desc)
+        elif kind == "applied":
+            _stop_bar()
+
+    def confirm(plan: dict) -> bool:
+        if getattr(args, "yes", False):
+            return True
+        if json_mode:
+            return False  # never silently flash hardware in scripted mode
+        token = baseline.get("version") or baseline.get("name") or "apply"
+        console.print(Panel(
+            f"About to APPLY SSP [bold]{baseline.get('name')} ({baseline.get('version')})[/bold] to "
+            f"[bold]{plan.get('changes', 0)}[/bold] target(s).\n"
+            "[red]Interconnects will reboot (one redundant side at a time) and compute "
+            "modules will power-cycle.[/red] Ensure hosts are ready for their servers to reboot.",
+            title="Confirm SSP firmware apply", border_style="red"))
+        ans = console.input(f'Type the baseline version "{token}" to proceed (or anything else to abort): ')
+        return ans.strip() == token
+
+    factory = _oneview_client_factory()
+    try:
+        result = await run_ssp_apply(
+            factory,
+            baseline=baseline, le_targets=les, profile_targets=profs,
+            scope=LE_SCOPE_SHARED, install_type=install_type, force=bool(getattr(args, "force", False)),
+            execute=execute, confirm=confirm if execute else None, on_event=on_event,
+            poll_interval_s=_SSP_POLL_S, task_timeout_s=_SSP_TASK_TIMEOUT_S,
+        )
+    finally:
+        _stop_bar()
+
+    if json_mode:
+        print_json(result)
+        return
+
+    status = result.get("status")
+    if status == "planned":
+        console.print("\n[green]Plan only.[/green] Re-run with [bold]--execute[/bold] to apply "
+                      "(shared infrastructure first, then compute).")
+    elif status == "nothing-to-do":
+        console.print("\n[green]All selected targets already match this baseline.[/green] "
+                      "Use [bold]--force[/bold] to reapply anyway.")
+    elif status == "aborted":
+        console.print("\n[yellow]Aborted — nothing was modified.[/yellow]")
+    elif status == "applied":
+        console.print(f"\n[green]SSP apply complete.[/green] Updated "
+                      f"[bold]{len(result.get('results', []))}[/bold] target(s).")
+    elif status == "failed":
+        done = result.get("results", [])
+        last = done[-1] if done else {}
+        console.print(f"\n[red]SSP apply failed[/red] on [bold]{last.get('name', '?')}[/bold] "
+                      f"({last.get('status') or last.get('state') or 'error'}). "
+                      "Check the OneView UI / 'proliant oneview reports'.")
+
+
+async def _cmd_firmware_apply(args: argparse.Namespace) -> None:
+    await _async_firmware_apply(args)
+
+
 async def _async_upgrade_cleanup(do_delete: bool) -> None:
     from proliant.oneview.upgrade import delete_baseline, gather_stale_baselines
 
@@ -2711,6 +2895,34 @@ examples:
     p_fw_compliance = s_firmware.add_parser("compliance",
         help="Firmware compliance vs newer candidate bundles (per server)")
     p_fw_compliance.set_defaults(func=_cmd_firmware_compliance_list)
+
+    p_fw_apply = s_firmware.add_parser("apply",
+        help="Apply an SSP firmware baseline to shared infra and/or compute",
+        description="Roll out an SSP (Synergy Service Pack) firmware baseline that OneView "
+                    "orchestrates. Default is a non-destructive plan; add --execute to apply "
+                    "(shared infrastructure first, then compute).")
+    fw_apply_baseline = p_fw_apply.add_argument("--baseline", metavar="NAME|VERSION",
+        help="SSP bundle to apply (version / short name / uri id). Defaults to the newest registered SSP.")
+    fw_apply_le = p_fw_apply.add_argument("--logical-enclosure", metavar="NAME", action="append",
+        help="Shared-infra scope: logical enclosure to update (repeatable).")
+    p_fw_apply.add_argument("--all-enclosures", action="store_true",
+        help="Shared-infra scope: update every logical enclosure.")
+    fw_apply_sp = p_fw_apply.add_argument("--server-profile", metavar="NAME", action="append",
+        help="Compute scope: server profile to update (repeatable).")
+    p_fw_apply.add_argument("--all-profiles", action="store_true",
+        help="Compute scope: update every managed server profile.")
+    p_fw_apply.add_argument("--install-type", choices=("firmware-only", "firmware-and-drivers", "firmware-offline"),
+        help="Compute install type override (default: keep each profile's existing setting).")
+    p_fw_apply.add_argument("--force", action="store_true",
+        help="Force reinstall even if already at the baseline / bypass non-disruptive validation.")
+    p_fw_apply.add_argument("--execute", action="store_true",
+        help="Actually apply (reboots interconnects + compute). Default is plan only.")
+    p_fw_apply.add_argument("--yes", action="store_true",
+        help="Skip the type-to-confirm prompt (with --execute).")
+    p_fw_apply.set_defaults(func=_cmd_firmware_apply)
+    fw_apply_baseline.completer = suppress_file_completion()  # type: ignore[attr-defined]
+    fw_apply_le.completer = suppress_file_completion()  # type: ignore[attr-defined]
+    fw_apply_sp.completer = suppress_file_completion()  # type: ignore[attr-defined]
 
     p_networks = sub.add_parser("networks", help="List or describe ethernet networks")
     s_networks = p_networks.add_subparsers(dest="what", metavar="ACTION")

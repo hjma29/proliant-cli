@@ -103,6 +103,10 @@ proliant oneview mac list --network-name <name>
 proliant oneview mac describe <mac>
 proliant oneview appliances list                        # list configured appliances (* = active)
 proliant oneview appliances describe [name]             # appliance General page (HA nodes, memory, uptime, firmware)
+proliant oneview firmware bundles                        # registered SPP/SSP baselines
+proliant oneview firmware compliance                     # per-server compliance vs newer baselines
+proliant oneview firmware apply --baseline <ssp>         # plan an SSP rollout (shared infra + compute)
+proliant oneview firmware apply --all-enclosures --all-profiles --execute   # apply it (reboots HW)
 proliant oneview upgrade readiness                       # pre-upgrade readiness report
 proliant oneview upgrade run --from-dir <dir>            # pick + stage an appliance software update
 proliant oneview upgrade run --image <file> --execute   # stage + install (reboots the appliance)

@@ -216,8 +216,20 @@ class OneViewClient(BaseAsyncClient):
         self._raise_for_status(resp, "POST", uri)
         return self._safe_json(resp)
 
-    async def patch(self, uri: str, body: list[dict[str, Any]]) -> dict[str, Any]:
-        resp = await self._ensure_http().patch(uri, json=body, headers=self._headers)
+    async def patch(
+        self,
+        uri: str,
+        body: list[dict[str, Any]],
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        # Some OneView PATCH operations (e.g. a logical-enclosure firmware
+        # update) require an ``If-Match`` header; callers pass it via *headers*,
+        # which is merged on top of the session auth/version headers.
+        req_headers = self._headers
+        if headers:
+            req_headers = {**req_headers, **headers}
+        resp = await self._ensure_http().patch(uri, json=body, headers=req_headers)
         self._raise_for_status(resp, "PATCH", uri)
         return self._safe_json(resp)
 

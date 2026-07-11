@@ -18,6 +18,7 @@ import os
 import re
 import sys
 from contextlib import asynccontextmanager
+from typing import Any
 
 
 from rich import box
@@ -2453,6 +2454,229 @@ def _render_ssp_plan(console, plan: dict) -> None:
     console.print(table)
 
 
+# ── interactive wizard (bare `proliant oneview update enclosure`, no NAME) ────
+
+class _WizardBack(Exception):
+    """Raised when the operator types 'b' to go back a step in the wizard."""
+
+
+class _WizardCancelled(Exception):
+    """Raised when the operator types 'c'/'q' to cancel the wizard outright."""
+
+
+def _wizard_default_index(options: list[tuple[Any, str]], current: Any, fallback: int | None) -> int | None:
+    """Prefer the position of the previously-chosen value over a hardcoded
+    fallback, so going 'back' to a step and returning to it shows your prior
+    answer as the default instead of resetting it."""
+    if current is not None:
+        for idx, (value, _) in enumerate(options):
+            if isinstance(value, dict) and isinstance(current, dict):
+                if value.get("uri") and value.get("uri") == current.get("uri"):
+                    return idx
+            elif value == current:
+                return idx
+    return fallback
+
+
+def _wizard_choice(
+    console, title: str, options: list[tuple[Any, str]], *,
+    default_index: int | None = 0, allow_back: bool = True,
+) -> Any:
+    """Print a numbered menu and prompt for a selection by number.
+
+    Typing 'b' goes back a step (only if *allow_back*); 'c'/'q' cancels the
+    whole wizard. Blank input picks *default_index* when one is given.
+    """
+    console.print(f"\n[bold cyan]{title}[/bold cyan]")
+    for i, (_, label) in enumerate(options, start=1):
+        console.print(f"  {i}. {label}")
+    hint = f"1-{len(options)}"
+    if allow_back:
+        hint += ", b=back"
+    hint += ", c=cancel"
+    default_hint = f"  [dim](default {default_index + 1})[/dim]" if default_index is not None else ""
+    while True:
+        raw = console.input(f"Select ({hint}){default_hint}: ", markup=False).strip().lower()
+        if not raw:
+            if default_index is not None:
+                return options[default_index][0]
+            console.print(f"[red]Enter a number 1-{len(options)}.[/red]")
+            continue
+        if raw in ("c", "q", "cancel"):
+            raise _WizardCancelled()
+        if allow_back and raw in ("b", "back"):
+            raise _WizardBack()
+        if not raw.isdigit() or not (1 <= int(raw) <= len(options)):
+            console.print(f"[red]Enter a number 1-{len(options)}, "
+                           f"{'b to go back, ' if allow_back else ''}or c to cancel.[/red]")
+            continue
+        return options[int(raw) - 1][0]
+
+
+_WIZARD_STEPS = ("le", "baseline", "scope", "install_type", "activation", "force", "review")
+
+
+async def _wizard_update_enclosure(args: argparse.Namespace) -> None:
+    """Interactive, menu-driven alternative to passing every --flag up front.
+
+    Triggered by omitting NAME: `proliant oneview update enclosure` with no
+    arguments. Walks through logical enclosure -> baseline -> scope ->
+    install type -> activation mode -> force -> review/execute one numbered
+    question at a time; 'b' goes back a step, 'c' cancels without changing
+    anything. Once every answer is collected it fills in the same
+    ``args`` fields the flag-driven form uses and delegates to
+    ``_async_update_enclosure`` so the plan / type-to-confirm /
+    validation-warning behavior is identical either way.
+    """
+    from proliant.oneview.ssp_update import fetch_apply_targets
+
+    console = get_console()
+    json_mode = getattr(args, "json_output", False) or get_output_mode() == OutputMode.JSON
+    if json_mode:
+        console.print("[red]NAME is required with --json[/red] (the interactive wizard needs a terminal).")
+        return
+    if not sys.stdin.isatty():
+        console.print(
+            "[red]NAME is required when not running interactively[/red] (e.g. piped input/CI). "
+            "Pass it directly: proliant oneview update enclosure <NAME> [--baseline ...] [--execute]."
+        )
+        return
+
+    async with _load_client() as client:
+        with console.status("[dim]Fetching logical enclosures and SSP baselines…[/dim]"):
+            data = await fetch_apply_targets(client)
+
+    les = data["logical_enclosures"]
+    baselines = data["baselines"]
+    if not les:
+        console.print("[red]No logical enclosures found on this appliance.[/red]")
+        return
+    if not baselines:
+        console.print("[red]No SSP/SPP baselines are registered on this appliance.[/red]")
+        return
+
+    state: dict[str, Any] = {
+        "le": None, "baseline": None, "scope": "shared-infra",
+        "install_type": None, "activation_mode": "orchestrated",
+        "force": False, "execute": False,
+    }
+    i = 0
+    direction = 1
+    while 0 <= i < len(_WIZARD_STEPS):
+        step = _WIZARD_STEPS[i]
+        if step == "install_type" and state["scope"] != "shared-infra-and-profiles":
+            i += direction
+            continue
+        try:
+            if step == "le":
+                options = [
+                    (le, le["name"] + (f"  [dim]({le['status']})[/dim]" if le.get("status") else ""))
+                    for le in les
+                ]
+                default_index = 0 if len(les) == 1 else _wizard_default_index(options, state["le"], None)
+                state["le"] = _wizard_choice(
+                    console, "Which logical enclosure do you want to update?",
+                    options, default_index=default_index, allow_back=False,
+                )
+            elif step == "baseline":
+                options = []
+                for b in baselines:
+                    released = (b.get("release_date") or "")[:10]
+                    label = f"{b.get('name') or 'SSP'} ({b.get('version') or '?'})"
+                    if released:
+                        label += f"  [dim]released {released}[/dim]"
+                    options.append((b, label))
+                default_index = _wizard_default_index(options, state["baseline"], 0)  # newest-first
+                state["baseline"] = _wizard_choice(
+                    console, "Which SSP baseline do you want to apply?", options, default_index=default_index,
+                )
+            elif step == "scope":
+                options = [
+                    ("shared-infra", "Shared infrastructure only (frame link modules + interconnects)"),
+                    ("shared-infra-and-profiles",
+                     "Shared infrastructure + every server profile in this enclosure "
+                     "[yellow](compute modules will power-cycle)[/yellow]"),
+                ]
+                default_index = _wizard_default_index(options, state["scope"], 0)
+                state["scope"] = _wizard_choice(
+                    console, "What should this rollout cover?", options, default_index=default_index,
+                )
+            elif step == "install_type":
+                options = [
+                    (None, "Keep each profile's existing install-type setting (default)"),
+                    ("firmware-only", "Firmware only"),
+                    ("firmware-and-drivers", "Firmware + OS drivers"),
+                    ("firmware-offline", "Firmware only, offline mode"),
+                ]
+                default_index = _wizard_default_index(options, state["install_type"], 0)
+                state["install_type"] = _wizard_choice(
+                    console, "Compute install type override?", options, default_index=default_index,
+                )
+            elif step == "activation":
+                options = [
+                    ("orchestrated",
+                     "Orchestrated (default) — one redundant side at a time, non-disruptive; "
+                     "requires real interconnect redundancy"),
+                    ("parallel",
+                     "[bold red]Parallel[/bold red] — flashes every interconnect at once, regardless "
+                     "of redundancy; the only way to force a non-redundant fabric, expect a network outage"),
+                ]
+                default_index = _wizard_default_index(options, state["activation_mode"], 0)
+                state["activation_mode"] = _wizard_choice(
+                    console, "Interconnect activation mode?", options, default_index=default_index,
+                )
+            elif step == "force":
+                options = [
+                    (False, "No (default) — keep OneView's own non-disruptive validation"),
+                    (True, "Yes — force reinstall / bypass non-disruptive validation"),
+                ]
+                default_index = _wizard_default_index(options, state["force"], 0)
+                state["force"] = _wizard_choice(
+                    console, "Force reinstall even if already current?", options, default_index=default_index,
+                )
+            elif step == "review":
+                le = state["le"]
+                baseline = state["baseline"]
+                summary = (
+                    f"Logical enclosure: [bold]{le['name']}[/bold]\n"
+                    f"Baseline:          [bold]{baseline.get('name')} ({baseline.get('version')})[/bold]\n"
+                    f"Scope:             {state['scope']}\n"
+                )
+                if state["scope"] == "shared-infra-and-profiles":
+                    summary += f"Install type:      {state['install_type'] or 'keep existing'}\n"
+                summary += (
+                    f"Activation mode:   {state['activation_mode']}\n"
+                    f"Force:             {state['force']}"
+                )
+                console.print(Panel(summary, title="Review your selections", border_style="cyan"))
+                options = [
+                    (False, "No — just show the plan, don't change anything"),
+                    (True, "Yes — apply this now"),
+                ]
+                default_index = _wizard_default_index(options, state["execute"], 0)
+                state["execute"] = _wizard_choice(
+                    console, "Execute this now?", options, default_index=default_index,
+                )
+        except _WizardBack:
+            direction = -1
+            i -= 1
+            continue
+        except _WizardCancelled:
+            console.print("[yellow]Cancelled — nothing was changed.[/yellow]")
+            return
+        direction = 1
+        i += 1
+
+    args.name = state["le"]["name"]
+    args.baseline = state["baseline"].get("version") or state["baseline"].get("name")
+    args.scope = state["scope"]
+    args.install_type = state["install_type"]
+    args.activation_mode = state["activation_mode"]
+    args.force = state["force"]
+    args.execute = state["execute"]
+    await _async_update_enclosure(args)
+
+
 async def _async_update_enclosure(args: argparse.Namespace) -> None:
     from proliant.oneview.ssp_update import (
         INSTALL_TYPES,
@@ -2733,7 +2957,10 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
 
 
 async def _cmd_update_enclosure(args: argparse.Namespace) -> None:
-    await _async_update_enclosure(args)
+    if not getattr(args, "name", None):
+        await _wizard_update_enclosure(args)
+    else:
+        await _async_update_enclosure(args)
 
 
 async def _async_upgrade_cleanup(do_delete: bool) -> None:
@@ -3461,9 +3688,12 @@ examples:
                     "enclosure, matching the OneView GUI's 'Update firmware' dialog: pick the "
                     "baseline and whether to update shared infrastructure only or shared "
                     "infrastructure plus every server profile in this enclosure. Default is a "
-                    "non-destructive plan; add --execute to apply.")
-    upd_enc_name = p_upd_enc.add_argument("name", metavar="NAME",
-        help="Logical enclosure name (e.g. LE01)")
+                    "non-destructive plan; add --execute to apply. Omit NAME to walk through the "
+                    "same choices interactively, one numbered question at a time (type 'b' to go "
+                    "back a step, 'c' to cancel).")
+    upd_enc_name = p_upd_enc.add_argument("name", metavar="NAME", nargs="?", default=None,
+        help="Logical enclosure name (e.g. LE01). Omit to launch an interactive step-by-step "
+             "wizard instead of passing every flag up front.")
     upd_enc_name.completer = _oneview_logical_enclosure_name_completer  # type: ignore[attr-defined]
     upd_enc_baseline = p_upd_enc.add_argument("--baseline", metavar="NAME|VERSION",
         help="SSP bundle to apply (version / short name / uri id). Defaults to the newest "

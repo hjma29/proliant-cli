@@ -108,6 +108,7 @@ proliant oneview appliances describe [name]             # appliance General page
 proliant oneview firmware bundles                        # registered SPP/SSP baselines
 proliant oneview firmware compliance                     # per-server compliance vs newer baselines
 proliant oneview release                                 # HPE Synergy Software Releases matrix (Composer <-> recommended/supported SSP)
+proliant oneview update enclosure                        # no NAME -- interactive step-by-step wizard (numbered menus; 'b' back, 'c' cancel)
 proliant oneview update enclosure <LE-name>              # plan an SSP rollout to one logical enclosure (shared infra only)
 proliant oneview update enclosure <LE-name> --baseline <ssp> --scope shared-infra-and-profiles
 #   --scope shared-infra            updates frame link modules + interconnects only (default)

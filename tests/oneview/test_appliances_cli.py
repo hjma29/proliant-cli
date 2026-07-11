@@ -81,6 +81,20 @@ class TestParserWiring:
         assert args.activation_mode == "orchestrated"
         assert args.execute is False  # plan by default
 
+    def test_parser_update_enclosure_name_optional(self):
+        """Omitting NAME must parse cleanly (it launches the interactive wizard) --
+        it must not be treated as a required positional error."""
+        from proliant.oneview.cli import _build_parser, _cmd_update_enclosure
+        parser = _build_parser()
+        args = parser.parse_args(["update", "enclosure"])
+        assert args.func is _cmd_update_enclosure
+        assert args.name is None
+        # the rest of the flags still get their normal defaults
+        assert args.scope == "shared-infra"
+        assert args.activation_mode == "orchestrated"
+        assert args.force is False
+        assert args.execute is False
+
     def test_parser_update_appliance_run_parses(self):
         from proliant.oneview.cli import _build_parser, _cmd_upgrade_run
         parser = _build_parser()

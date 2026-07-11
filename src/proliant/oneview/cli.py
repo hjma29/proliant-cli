@@ -336,6 +336,34 @@ def _oneview_logical_enclosure_name_completer(prefix: str, **kwargs) -> list[str
         return []
 
 
+def _oneview_ssp_baseline_completer(prefix: str, **kwargs) -> list[str]:
+    """Tab-complete registered SSP/SPP baseline versions for '--baseline'.
+
+    Queries live firmware-drivers from OneView (no static/bundled list) --
+    same source ``select_baseline()`` matches against at apply time.
+    """
+    try:
+        from proliant.oneview.config import load_oneview_config
+        from proliant.oneview.client import OneViewClient
+        from proliant.oneview.ssp_update import FW_DRIVERS_URI, service_pack_baselines
+        from proliant.common.completers import cached_names
+
+        cfg = load_oneview_config()
+
+        def _fetch_versions() -> list[str]:
+            async def _fetch() -> list[str]:
+                async with OneViewClient(cfg["host"], cfg["username"], cfg["password"]) as client:
+                    raw = await client.get_all(FW_DRIVERS_URI)
+                    return [b["version"] for b in service_pack_baselines(raw) if b.get("version")]
+
+            return asyncio.run(_fetch())
+
+        versions = cached_names(f"oneview-ssp-baselines-{cfg['host']}", _fetch_versions)
+        return [v for v in versions if v.lower().startswith(prefix.lower())]
+    except Exception:
+        return []
+
+
 def _oneview_interconnect_name_completer(prefix: str, **kwargs) -> list[str]:
     """Tab-complete interconnect names by querying OneView."""
     try:
@@ -3290,7 +3318,7 @@ examples:
     upd_enc_baseline = p_upd_enc.add_argument("--baseline", metavar="NAME|VERSION",
         help="SSP bundle to apply (version / short name / uri id). Defaults to the newest "
              "registered SSP -- pass a specific one to repeat the same rollout for testing.")
-    upd_enc_baseline.completer = suppress_file_completion()  # type: ignore[attr-defined]
+    upd_enc_baseline.completer = _oneview_ssp_baseline_completer  # type: ignore[attr-defined]
     p_upd_enc.add_argument("--scope", choices=("shared-infra", "shared-infra-and-profiles"),
         default="shared-infra",
         help="'shared-infra' updates only the frame link modules + interconnects. "

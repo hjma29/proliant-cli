@@ -235,6 +235,13 @@ def _singles() -> dict:
             {"metricName": "Temperature", "metricSamples": [[[1, 174]]], "metricCapacity": 212},
             {"metricName": "PowerAverageWatts", "metricSamples": [[[1, 155]]], "metricCapacity": 270},
         ]},
+        f"{LI_URI}/firmware": {
+            "sppName": "HPE Synergy Service Pack SY-2023.05.01",
+            "sppUri": BASELINE_URI,
+            "interconnects": [
+                {"interconnectUri": IC_URI, "installedFw": "2.6.0.1001", "desiredFw": "2.6.0.1001", "state": "Active"},
+            ],
+        },
     }
 
 
@@ -250,6 +257,8 @@ async def test_describe_interconnect_general_and_hardware():
     assert g["firmware_baseline_name"] == "HPE Synergy Service Pack SY-2023.05.01"
     assert g["firmware_version_from_baseline"] == "2.6.0.1001"
     assert g["installed_firmware_version"] == "2.6.0.1001"
+    assert g["installed_spp_name"] == "HPE Synergy Service Pack SY-2023.05.01"
+    assert g["firmware_up_to_date"] is True
     assert g["mgmt_interface"] == "none"
     assert g["ipv4"] == "10.16.41.18" and g["ipv4_type"] == "DHCP"
     assert g["ipv6"] == "fe80::5eed:8cff:fe74:8060" and g["ipv6_type"] == "link-local"
@@ -311,6 +320,38 @@ async def test_describe_interconnect_utilization_and_remote_support():
     assert u["temperature_f"] == 174
 
     assert d["remote_support"] == {"enabled": False, "state": "Disabled"}
+
+
+@pytest.mark.asyncio
+async def test_describe_interconnect_shows_pending_target_when_not_yet_applied():
+    # Reproduces the live bug report: an LE-level SSP rollout was requested
+    # (assigning a newer baseline) but never actually landed on the
+    # interconnect -- the LE's "assigned baseline" must not be conflated with
+    # what's really installed (per the LI /firmware sub-resource + the
+    # interconnect's own live firmwareVersion, which both still show old).
+    newer_baseline_uri = "/rest/firmware-drivers/ssp2"
+    collections = _base_collections()
+    collections["/rest/logical-enclosures"] = [{
+        "enclosureUris": [ENC_URI],
+        "firmware": {"firmwareBaselineUri": newer_baseline_uri},
+    }]
+    collections["/rest/firmware-drivers"] = collections["/rest/firmware-drivers"] + [{
+        "uri": newer_baseline_uri, "name": "HPE Synergy Service Pack", "version": "SY-2025.10.01",
+        "fwComponents": [
+            {"name": "HPE Virtual Connect SE 100Gb F32 Module for Synergy Firmware install package",
+             "componentVersion": "2.9.1.1001"},
+        ],
+    }]
+    client = FakeClient(collections, _singles())
+
+    d = await ic.describe_interconnect(client, "Enclosure-01, interconnect 6")
+    g = d["general"]
+
+    assert g["firmware_baseline_name"] == "HPE Synergy Service Pack SY-2025.10.01"
+    assert g["firmware_version_from_baseline"] == "2.9.1.1001"
+    assert g["installed_firmware_version"] == "2.6.0.1001"
+    assert g["installed_spp_name"] == "HPE Synergy Service Pack SY-2023.05.01"
+    assert g["firmware_up_to_date"] is False
 
 
 @pytest.mark.asyncio

@@ -1232,12 +1232,27 @@ async def _async_interconnects_describe(name: str) -> None:
     ipv4 = f"{g['ipv4']} ({g['ipv4_type']})" if g["ipv4"] else "—"
     ipv6 = f"{g['ipv6']} ({g['ipv6_type']})" if g["ipv6"] else "—"
 
+    # When the LE's assigned baseline hasn't actually landed on this
+    # interconnect yet, show both values distinctly (mirrors the GUI's
+    # "Installed: X -> Selected: update to Y") instead of one ambiguous
+    # "Firmware baseline" line that looks like it's already been applied.
+    if g["firmware_up_to_date"] is False:
+        fw_lines = [
+            f"Installed SPP:         {g['installed_spp_name'] or '—'}",
+            f"Installed firmware:    {g['installed_firmware_version'] or '—'}",
+            f"Target baseline:       {baseline}  [yellow](not yet applied)[/yellow]",
+        ]
+    else:
+        fw_lines = [
+            f"Firmware baseline:     {baseline}",
+            f"Installed firmware:    {g['installed_firmware_version'] or '—'}",
+        ]
+
     details = [
         f"[bold]{ic['name']}[/bold]",
         f"Status: {_status_style(ic['status'])}  |  State: {_state_style(ic['state'])}  |  Power: {_power_style(g['power'])}",
         f"Logical interconnect:  {g['logical_interconnect'] or '—'}",
-        f"Firmware baseline:     {baseline}",
-        f"Installed firmware:    {g['installed_firmware_version'] or '—'}",
+        *fw_lines,
         f"Management interface:  {g['mgmt_interface']}",
         f"Stacking:              domain {g['stacking_domain_id'] or '—'} / member {g['stacking_member_id'] or '—'} ({g['stacking_domain_role'] or '—'})",
         f"Host name:             {g['host_name'] or '—'}",

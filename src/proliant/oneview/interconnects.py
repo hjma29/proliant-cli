@@ -567,9 +567,24 @@ async def describe_interconnect(client: "OneViewClient", name: str) -> dict:
     raw = matched[0]
     uri = raw.get("uri", "")
     enc_uri = raw.get("enclosureUri", "")
+    li_uri = raw.get("logicalInterconnectUri", "")
+
+    async def _safe_li_firmware(li_uri: str) -> dict:
+        # GET {li_uri}/firmware is the LI's own actually-installed SPP tracking
+        # (what the GUI's "Update firmware" dialog shows as "Installed:") --
+        # distinct from the Logical Enclosure's *assigned* baseline below,
+        # which only reflects the most recently *requested* rollout, whether
+        # or not it actually completed. Best-effort: not every LI type/version
+        # is guaranteed to expose this sub-resource.
+        if not li_uri:
+            return {}
+        try:
+            return await client.get(f"{li_uri}/firmware") or {}
+        except Exception:  # noqa: BLE001
+            return {}
 
     (
-        raw_lis, raw_les, raw_drivers, raw_uplinksets, raw_profiles, raw_server_hw, stats, util,
+        raw_lis, raw_les, raw_drivers, raw_uplinksets, raw_profiles, raw_server_hw, stats, util, li_fw,
     ) = await asyncio.gather(
         client.get_all("/rest/logical-interconnects"),
         client.get_all("/rest/logical-enclosures"),
@@ -579,6 +594,7 @@ async def describe_interconnect(client: "OneViewClient", name: str) -> dict:
         client.get_all("/rest/server-hardware"),
         client.get(f"{uri}/statistics"),
         client.get(f"{uri}/utilization"),
+        _safe_li_firmware(li_uri),
     )
 
     li_map = {li.get("uri", ""): li.get("name", "") for li in raw_lis}
@@ -606,6 +622,17 @@ async def describe_interconnect(client: "OneViewClient", name: str) -> dict:
         (baseline or {}).get("fwComponents") or [], raw.get("productName", "")
     )
 
+    # LE's assigned baseline (above) is only the *target* -- it's set as soon
+    # as an update is requested and does not roll back if the update fails or
+    # is blocked. The LI /firmware sub-resource tracks what's *actually*
+    # running, which is what the GUI's "Installed:" column reflects.
+    installed_version = raw.get("firmwareVersion", "")
+    installed_spp_name = li_fw.get("sppName", "")
+    installed_spp_uri = li_fw.get("sppUri", "")
+    firmware_up_to_date = (
+        installed_version == baseline_version if installed_version and baseline_version else None
+    )
+
     loc = _ic_location_map(raw)
     ips = _ip_by_type(raw.get("ipAddressList"))
 
@@ -616,7 +643,10 @@ async def describe_interconnect(client: "OneViewClient", name: str) -> dict:
         "firmware_baseline_name": baseline_name,
         "firmware_baseline_uri": baseline_uri,
         "firmware_version_from_baseline": baseline_version,
-        "installed_firmware_version": raw.get("firmwareVersion", ""),
+        "installed_firmware_version": installed_version,
+        "installed_spp_name": installed_spp_name,
+        "installed_spp_uri": installed_spp_uri,
+        "firmware_up_to_date": firmware_up_to_date,
         "mgmt_interface": raw.get("mgmtInterface") or "none",
         "stacking_domain_id": str(raw.get("stackingDomainId", "") or ""),
         "stacking_member_id": str(raw.get("stackingMemberId", "") or ""),

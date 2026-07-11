@@ -46,6 +46,8 @@ behind an explicit confirmation; the default is a non-destructive **plan**.
 
 from __future__ import annotations
 
+import json
+import re
 from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
@@ -516,29 +518,71 @@ def _resource_baseline_uri(resource: dict | None) -> str:
     return ((resource or {}).get("firmware") or {}).get("firmwareBaselineUri", "") or ""
 
 
-async def _task_block_reason(client: "OneViewClient", task_uri: str) -> str:
-    """Best-effort human-readable reason a ``Warning`` task actually changed nothing.
+_EMBEDDED_REF_RE = re.compile(r'\{[^{}]*"name"\s*:\s*"[^"]*"[^{}]*\}')
 
-    OneView can report a parent task as ``Warning`` / 100% / "successful with
-    warning" for a firmware update that it silently validated-only and never
-    applied (e.g. blocked by a non-redundant-connectivity guard) -- the real
-    explanation lives on a child task's ``taskErrors``, found via
-    ``parentTaskUri``. Never raises: this is a diagnostic nicety layered on
-    top of the baseline-mismatch check that actually decides pass/fail.
+
+def _clean_embedded_refs(text: str) -> str:
+    """OneView embeds raw ``{"name":"X","uri":"..."}`` JSON blobs inline in
+    some task messages (the GUI renders each as a clickable link) -- collapse
+    each blob down to just its ``name`` so plain-text CLI output reads the
+    same as the GUI, e.g. ``{"name":"LE01-LIG-VC100","uri":"/rest/..."}`` ->
+    ``LE01-LIG-VC100``."""
+    def _replace(m: re.Match) -> str:
+        try:
+            return json.loads(m.group(0)).get("name", m.group(0))
+        except (json.JSONDecodeError, AttributeError):
+            return m.group(0)
+    return _EMBEDDED_REF_RE.sub(_replace, text)
+
+
+async def _task_block_reason(client: "OneViewClient", task_uri: str) -> dict[str, str]:
+    """Best-effort structured reason a ``Warning`` task actually changed nothing.
+
+    OneView can report a task as ``Warning`` / 100% / "successful with
+    warning" for a firmware update that it only validated and never actually
+    applied (e.g. blocked by a non-redundant-connectivity guard). The full
+    explanation -- exactly what the GUI's own "Review the warnings..." modal
+    shows -- lives in that task's own ``taskErrors``: ``details`` (or
+    ``message`` as a fallback, since OneView puts the real explanation in
+    whichever field the parent/child task shape leaves free) is the warning
+    body, and ``recommendedActions`` is the "Resolution:" steps. Some task
+    shapes instead carry this on a child task (``parentTaskUri=<task_uri>``),
+    checked as a fallback. Never raises: this is a diagnostic nicety layered
+    on top of the baseline-mismatch check that actually decides pass/fail.
     """
-    try:
-        data = await client.get(
-            "/rest/tasks", params={"filter": f"parentTaskUri='{task_uri}'", "count": 50},
-        )
-    except Exception:  # noqa: BLE001 - best-effort; caller still reports "blocked"
-        return ""
-    reasons = []
-    for child in data.get("members", []) or []:
-        for err in child.get("taskErrors") or []:
-            detail = (err.get("details") or "").strip()
-            if detail and detail not in reasons:
-                reasons.append(detail)
-    return " ".join(reasons)
+    async def _errors_of(uri: str) -> list[dict]:
+        try:
+            return (await client.get(uri) or {}).get("taskErrors") or []
+        except Exception:  # noqa: BLE001 - best-effort
+            return []
+
+    errs = await _errors_of(task_uri)
+    if not errs:
+        try:
+            data = await client.get(
+                "/rest/tasks", params={"filter": f"parentTaskUri='{task_uri}'", "count": 50},
+            )
+        except Exception:  # noqa: BLE001 - best-effort; caller still reports "blocked"
+            data = {}
+        for child in data.get("members", []) or []:
+            errs.extend(child.get("taskErrors") or [])
+
+    warnings: list[str] = []
+    resolutions: list[str] = []
+    for err in errs:
+        body = (err.get("details") or err.get("message") or "").strip()
+        if body:
+            body = _clean_embedded_refs(body)
+            if body not in warnings:
+                warnings.append(body)
+        for action in err.get("recommendedActions") or []:
+            action = (action or "").strip()
+            if action:
+                action = _clean_embedded_refs(action)
+                if action not in resolutions:
+                    resolutions.append(action)
+
+    return {"warning": "\n\n".join(warnings), "resolution": "\n\n".join(resolutions)}
 
 
 async def poll_task(
@@ -625,17 +669,20 @@ async def run_ssp_apply(
       ``blocked``        OneView validated the update and refused to apply it
                           (e.g. a non-redundant-fabric guard), and the operator
                           declined to proceed anyway -- the last ``results``
-                          entry carries ``blocked_reason``.
+                          entry carries ``blocked_reason``/``blocked_resolution``.
 
     Mirrors the OneView GUI's own "Review the warnings. If these conditions
     are acceptable, click OK to proceed." flow: each target is first
     attempted with OneView's non-disruptive validation guard on (unless
     ``force`` is already set). If OneView blocks it -- reported as a
     ``Warning`` task whose target baseline never actually moved -- the real
-    reason is surfaced via ``on_validation_blocked({"kind", "name", "reason"})``.
-    Returning ``True`` retries that *same* target with the guard bypassed
-    (no need to re-run the whole command with ``--force``); returning
-    ``False`` (or passing no callback) stops with ``status == "blocked"``.
+    reason is surfaced via
+    ``on_validation_blocked({"kind", "name", "reason", "resolution"})``, where
+    ``reason`` is the same warning text and ``resolution`` the same
+    "Resolution:" steps the GUI's own modal shows. Returning ``True`` retries
+    that *same* target with the guard bypassed (no need to re-run the whole
+    command with ``--force``); returning ``False`` (or passing no callback)
+    stops with ``status == "blocked"``.
     """
     import asyncio
 
@@ -691,13 +738,17 @@ async def run_ssp_apply(
                         if (
                             not force_this and not already_offered
                             and on_validation_blocked is not None
-                            and on_validation_blocked({"kind": kind, "name": name, "reason": reason})
+                            and on_validation_blocked({
+                                "kind": kind, "name": name,
+                                "reason": reason["warning"], "resolution": reason["resolution"],
+                            })
                         ):
                             force_this = True
                             already_offered = True
                             emit("applying", {"kind": kind, "name": name, "retry": True})
                             continue
-                        task["blocked_reason"] = reason
+                        task["blocked_reason"] = reason["warning"]
+                        task["blocked_resolution"] = reason["resolution"]
                         return "blocked", task
                 return None, task
 

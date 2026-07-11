@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 
+from proliant.oneview import ssp_update
 from proliant.oneview.ssp_update import (
     INSTALL_TYPES,
     LE_SCOPE_SHARED,
@@ -380,11 +381,13 @@ class FakeClient:
     def __init__(
         self, *, task_state="Completed", profile=None,
         le_get_response=None, children_tasks=None, blocked_until_forced=False,
+        own_task_errors=None,
     ):
         self.task_state = task_state
         self._profile = profile or PROFILE_RAW
         self._le_get_response = le_get_response
         self._children_tasks = children_tasks or []
+        self._own_task_errors = own_task_errors
         # When True: the first PATCH always comes back "Warning" with the
         # baseline unchanged (simulating OneView's validation guard); a
         # second PATCH (retried with force, i.e. validation bypassed) comes
@@ -412,7 +415,10 @@ class FakeClient:
                 state = "Warning" if self._patch_count <= 1 else "Completed"
             else:
                 state = self.task_state
-            return {"uri": uri, "taskState": state, "taskStatus": state, "percentComplete": 100}
+            resp = {"uri": uri, "taskState": state, "taskStatus": state, "percentComplete": 100}
+            if self._own_task_errors is not None:
+                resp["taskErrors"] = self._own_task_errors
+            return resp
         if uri.startswith("/rest/server-profiles/"):
             return dict(self._profile, uri=uri)
         if self._blocked_until_forced:
@@ -667,3 +673,86 @@ async def test_run_execute_blocked_without_callback_no_retry():
     )
     assert res["status"] == "blocked"
     assert len(fake.patch_bodies) == 1
+
+
+# ── _task_block_reason / _clean_embedded_refs (matches OneView's own GUI text) ─
+
+def test_clean_embedded_refs_collapses_json_blob_to_name():
+    text = (
+        'Logical interconnect(s) {"name":"LE01-LIG-VC100","uri":"/rest/logical-interconnects/x"} '
+        "do not have redundant connectivity."
+    )
+    assert ssp_update._clean_embedded_refs(text) == (
+        "Logical interconnect(s) LE01-LIG-VC100 do not have redundant connectivity."
+    )
+
+
+def test_clean_embedded_refs_collapses_multiple_blobs_in_a_list():
+    text = (
+        "connectivity disruption on the following server profile(s): "
+        '{"name":"aci-Mapped-host1","uri":"/rest/server-profiles/a"},'
+        '{"name":"aci-FM-host1","uri":"/rest/server-profiles/b"}.'
+    )
+    assert ssp_update._clean_embedded_refs(text) == (
+        "connectivity disruption on the following server profile(s): "
+        "aci-Mapped-host1,aci-FM-host1."
+    )
+
+
+def test_clean_embedded_refs_leaves_plain_text_alone():
+    assert ssp_update._clean_embedded_refs("no braces here") == "no braces here"
+
+
+@pytest.mark.asyncio
+async def test_task_block_reason_prefers_the_task_s_own_errors_over_children():
+    # Reproduces the real OneView shape found live: the LE-level task itself
+    # carries taskErrors (details = the real GUI warning body, message = the
+    # generic "Review the warnings..." banner, recommendedActions = the
+    # "Resolution:" steps) -- this must win over any child task, and the
+    # embedded {"name":...} ref blobs must collapse to plain names.
+    fake = FakeClient(
+        own_task_errors=[{
+            "message": "Review the warnings. If these conditions are acceptable, click OK to proceed.",
+            "details": (
+                'Logical interconnect(s) {"name":"LE01-LIG-VC100","uri":"/rest/x"} do not have '
+                "redundant connectivity for one or more uplink sets and/or downlink connections "
+                "configured. Updating the firmware will disrupt the network connectivity."
+            ),
+            "recommendedActions": [
+                "Ensure that the following items have been addressed. \n"
+                "- Redundancy is available for all the logical interconnect uplink sets. \n"
+                "Alternatively, continuing firmware update may result in connectivity disruption "
+                'on the following server profile(s): {"name":"aci-FM-host1","uri":"/rest/y"}.'
+            ],
+        }],
+        children_tasks=[{"taskErrors": [{"details": "should not be used -- own task errors win"}]}],
+    )
+    reason = await ssp_update._task_block_reason(fake, "/rest/tasks/le-task")
+    assert reason["warning"] == (
+        "Logical interconnect(s) LE01-LIG-VC100 do not have redundant connectivity for one or "
+        "more uplink sets and/or downlink connections configured. Updating the firmware will "
+        "disrupt the network connectivity."
+    )
+    assert "Redundancy is available for all the logical interconnect uplink sets." in reason["resolution"]
+    assert "aci-FM-host1" in reason["resolution"]
+    assert "should not be used" not in reason["warning"]
+
+
+@pytest.mark.asyncio
+async def test_task_block_reason_falls_back_to_children_when_task_has_no_errors_of_its_own():
+    fake = FakeClient(children_tasks=[{"taskErrors": [{"details": "child-level reason"}]}])
+    reason = await ssp_update._task_block_reason(fake, "/rest/tasks/le-task")
+    assert reason["warning"] == "child-level reason"
+    assert reason["resolution"] == ""
+
+
+@pytest.mark.asyncio
+async def test_task_block_reason_falls_back_to_message_when_details_is_null():
+    # Some task shapes leave "details" null and put the real body in "message"
+    # instead (seen live on a child task) -- must not silently drop it.
+    fake = FakeClient(children_tasks=[{"taskErrors": [
+        {"details": None, "message": "the real warning body"},
+    ]}])
+    reason = await ssp_update._task_block_reason(fake, "/rest/tasks/le-task")
+    assert reason["warning"] == "the real warning body"
+

@@ -2619,11 +2619,12 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
         return ans.strip() == token
 
     def on_validation_blocked(info: dict) -> bool:
-        """Mirrors the OneView GUI's own validation-warning modal: OneView
-        rejected the update as potentially disruptive (e.g. a non-redundant
-        fabric) instead of applying it. Show its own reason and let the
-        operator decide whether to proceed anyway, same as clicking "OK to
-        proceed" in the GUI — no need to abort and re-run with --force."""
+        """Mirrors the OneView GUI's own validation-warning modal exactly:
+        OneView rejected the update as potentially disruptive (e.g. a
+        non-redundant fabric) instead of applying it. Show its own warning
+        text and "Resolution:" steps, then let the operator decide whether to
+        proceed anyway, same as clicking "OK" in the GUI's modal — no need to
+        abort and re-run with --force."""
         if getattr(args, "yes", False):
             return True
         if json_mode:
@@ -2633,9 +2634,15 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
             "OneView flagged this update as potentially disruptive and refused "
             "to apply it, but did not report a specific reason."
         )
+        resolution = info.get("resolution") or ""
+        body = f"[yellow]{reason}[/yellow]"
+        if resolution:
+            body += f"\n\n[bold]Resolution:[/bold] {resolution}"
         console.print(Panel(
-            f"[yellow]{reason}[/yellow]",
-            title=f"⚠ Validation warning — {info.get('name')}", border_style="yellow"))
+            body,
+            title=f"⚠ Validation warning — {info.get('name')}", border_style="yellow",
+            subtitle="Review the warnings. If the conditions are acceptable, then click OK to proceed.",
+            subtitle_align="left"))
         ans = console.input("Proceed anyway despite this warning? [y/N]: ")
         return ans.strip().lower() in ("y", "yes")
 
@@ -2683,11 +2690,13 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
             "OneView validated the update and refused to apply it, but did not "
             "report a specific reason — check the OneView UI Activity log."
         )
+        resolution = last.get("blocked_resolution") or ""
         console.print(
             f"\n[yellow]SSP apply not applied[/yellow] on [bold]{last.get('name', '?')}[/bold] — "
             "nothing was changed.\n"
             f"[dim]{reason}[/dim]\n"
-            "Re-run and answer 'y' at the validation-warning prompt to proceed anyway "
+            + (f"[dim]Resolution: {resolution}[/dim]\n" if resolution else "")
+            + "Re-run and answer 'y' at the validation-warning prompt to proceed anyway "
             "(or pass [bold]--force[/bold]/[bold]--yes[/bold] to skip the prompt), or fix "
             "the reported issue first."
         )

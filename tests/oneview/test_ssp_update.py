@@ -381,13 +381,15 @@ class FakeClient:
     def __init__(
         self, *, task_state="Completed", profile=None,
         le_get_response=None, children_tasks=None, blocked_until_forced=False,
-        own_task_errors=None,
+        own_task_errors=None, raw_lis=None, li_firmware=None,
     ):
         self.task_state = task_state
         self._profile = profile or PROFILE_RAW
         self._le_get_response = le_get_response
         self._children_tasks = children_tasks or []
         self._own_task_errors = own_task_errors
+        self._raw_lis = raw_lis or []
+        self._li_firmware = li_firmware or {}
         # When True: the first PATCH always comes back "Warning" with the
         # baseline unchanged (simulating OneView's validation guard); a
         # second PATCH (retried with force, i.e. validation bypassed) comes
@@ -406,8 +408,16 @@ class FakeClient:
     async def __aexit__(self, *exc):
         return False
 
+    async def get_all(self, uri, **extra_params):
+        self.calls.append(("get_all", uri))
+        if uri == "/rest/logical-interconnects":
+            return self._raw_lis
+        return []
+
     async def get(self, uri, params=None):
         self.calls.append(("get", uri))
+        if uri.endswith("/firmware") and uri in self._li_firmware:
+            return self._li_firmware[uri]
         if uri == "/rest/tasks":
             return {"members": self._children_tasks}
         if "/rest/tasks/" in uri:
@@ -466,17 +476,84 @@ async def test_poll_task_runs_to_completion():
 
 
 @pytest.mark.asyncio
-async def test_run_plan_only_does_not_touch_client():
-    def factory():
-        raise AssertionError("client_factory must not be called for a plan")
-
+async def test_run_plan_only_never_writes_only_reads():
+    """A plan-only run (execute=False) now does open the client -- it needs
+    to cross-check each LE's real installed firmware (see below) -- but it
+    must never PATCH/PUT anything."""
+    fake = FakeClient()
     res = await run_ssp_apply(
-        factory, baseline=_newest(),
+        lambda: fake, baseline=_newest(),
         le_targets=[normalize_le(LE_RAW)], profile_targets=[normalize_profile(PROFILE_RAW)],
         execute=False,
     )
     assert res["status"] == "planned"
     assert res["plan"]["changes"] == 2
+    assert not any(m in ("patch", "put") for m, _ in fake.calls)
+
+
+@pytest.mark.asyncio
+async def test_plan_flags_le_as_not_up_to_date_when_actually_not_installed():
+    """Reproduces the live bug: the LE's own target pointer
+    (``firmware.firmwareBaselineUri``) already says the new baseline, but
+    every Logical Interconnect under it still reports the *old* SPP as
+    actually installed (blocked/never finished propagating) -- the plan must
+    not claim "up to date" in that case, and the top-level "changes" count
+    must reflect the correction too."""
+    newest = _newest()
+    le_already_targeted = dict(LE_RAW, firmware={"firmwareBaselineUri": newest["uri"]})
+    fake = FakeClient(
+        raw_lis=[{"uri": "/rest/logical-interconnects/li-1", "enclosureUris": ["/rest/enclosures/enc-1"]}],
+        li_firmware={
+            "/rest/logical-interconnects/li-1/firmware": {
+                "sppUri": "/rest/firmware-drivers/SSP_2023_05",  # still the OLD spp actually installed
+            },
+        },
+    )
+    res = await run_ssp_apply(
+        lambda: fake, baseline=newest,
+        le_targets=[normalize_le(le_already_targeted)], profile_targets=[],
+        execute=False,
+    )
+    le_plan = res["plan"]["logical_enclosures"][0]
+    assert le_plan["will_change"] is True
+    assert le_plan["detail"] == "target baseline set but not yet installed"
+    assert res["plan"]["changes"] == 1
+
+
+@pytest.mark.asyncio
+async def test_plan_trusts_le_when_actual_installed_matches_target():
+    newest = _newest()
+    le_already_targeted = dict(LE_RAW, firmware={"firmwareBaselineUri": newest["uri"]})
+    fake = FakeClient(
+        raw_lis=[{"uri": "/rest/logical-interconnects/li-1", "enclosureUris": ["/rest/enclosures/enc-1"]}],
+        li_firmware={"/rest/logical-interconnects/li-1/firmware": {"sppUri": newest["uri"]}},
+    )
+    res = await run_ssp_apply(
+        lambda: fake, baseline=newest,
+        le_targets=[normalize_le(le_already_targeted)], profile_targets=[],
+        execute=False,
+    )
+    le_plan = res["plan"]["logical_enclosures"][0]
+    assert le_plan["will_change"] is False
+    assert le_plan["detail"] == "up to date"
+
+
+@pytest.mark.asyncio
+async def test_plan_falls_back_to_target_only_when_no_lis_resolved():
+    """No Logical Interconnects could be matched under the LE (e.g. this
+    appliance/test doesn't model them) -- must not regress; falls back to
+    the plain target-vs-target comparison exactly as before."""
+    newest = _newest()
+    le_already_targeted = dict(LE_RAW, firmware={"firmwareBaselineUri": newest["uri"]})
+    fake = FakeClient()  # no raw_lis configured
+    res = await run_ssp_apply(
+        lambda: fake, baseline=newest,
+        le_targets=[normalize_le(le_already_targeted)], profile_targets=[],
+        execute=False,
+    )
+    le_plan = res["plan"]["logical_enclosures"][0]
+    assert le_plan["will_change"] is False
+    assert le_plan["detail"] == "up to date"
 
 
 @pytest.mark.asyncio
@@ -510,7 +587,8 @@ async def test_run_execute_confirm_false_aborts():
         execute=True, confirm=lambda plan: False, sleeper=_noop_sleep,
     )
     assert res["status"] == "aborted"
-    assert fake.calls == []
+    # Only the plan's read-only cross-check ran -- no PATCH/PUT before confirm.
+    assert not any(m in ("patch", "put") for m, _ in fake.calls)
 
 
 @pytest.mark.asyncio

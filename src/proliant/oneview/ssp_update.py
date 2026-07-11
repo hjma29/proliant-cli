@@ -518,6 +518,48 @@ def _resource_baseline_uri(resource: dict | None) -> str:
     return ((resource or {}).get("firmware") or {}).get("firmwareBaselineUri", "") or ""
 
 
+async def _actual_le_baseline_uri(
+    client: "OneViewClient", le: dict, raw_lis: list[dict],
+) -> str | None:
+    """The Logical Enclosure's *actually installed* shared-infra SSP baseline.
+
+    ``le["current_baseline_uri"]`` (``firmware.firmwareBaselineUri``) only
+    ever reflects the *target* -- OneView sets it as soon as an update is
+    requested and never rolls it back if the rollout fails, is blocked, or
+    never finishes propagating to hardware (see ``interconnects.py``'s
+    ``_resolve_baseline_uri`` docstring). Verified live: after a rollout was
+    blocked by a non-redundant-fabric guard, the LE's target field pointed at
+    the new baseline while every Logical Interconnect under it still reported
+    its *old* SPP as actually installed -- so a naive target-vs-target
+    comparison wrongly reported the enclosure as already "up to date".
+
+    Each Logical Interconnect's own ``/firmware`` sub-resource's ``sppUri``
+    is the real, currently-applied SPP (the same source the GUI's own
+    "Installed:" state reads from), so that -- not the LE's target pointer --
+    is authoritative for "is this already applied".
+
+    Returns ``None`` (meaning: fall back to the target-only comparison) if no
+    Logical Interconnects can be resolved under this LE, if their installed
+    SPP disagrees with one another, or if a lookup fails.
+    """
+    enc_uris = set(le.get("enclosure_uris") or [])
+    if not enc_uris:
+        return None
+    matches = [li for li in raw_lis if enc_uris & set(li.get("enclosureUris") or [])]
+    if not matches:
+        return None
+    spp_uris: set[str] = set()
+    for li in matches:
+        try:
+            fw = await client.get(f"{li['uri']}/firmware") or {}
+        except Exception:  # noqa: BLE001 - best-effort; caller falls back
+            return None
+        spp_uris.add(fw.get("sppUri", "") or "")
+    if len(spp_uris) != 1:
+        return None  # mixed or unknown across LIs -- don't guess, fall back
+    return next(iter(spp_uris))
+
+
 _EMBEDDED_REF_RE = re.compile(r'\{[^{}]*"name"\s*:\s*"[^"]*"[^{}]*\}')
 
 
@@ -688,28 +730,47 @@ async def run_ssp_apply(
 
     sleeper = sleeper or asyncio.sleep
     emit = on_event or (lambda kind, data: None)
-
-    plan = build_plan(
-        baseline, le_targets, profile_targets,
-        appliance_version=appliance_version, baselines=baselines,
-    )
-    emit("plan", plan)
-
-    if not execute:
-        return {"status": "planned", "plan": plan}
-
-    changing_les = [le for le in plan["logical_enclosures"] if le["will_change"] or force]
-    changing_profs = [p for p in plan["server_profiles"] if p["will_change"] or force]
-    if not changing_les and not changing_profs:
-        return {"status": "nothing-to-do", "plan": plan}
-
-    if confirm is not None and not confirm(plan):
-        return {"status": "aborted", "plan": plan}
-
-    results: list[dict[str, Any]] = []
     baseline_uri = baseline.get("uri", "")
 
     async with client_factory() as client:
+        plan = build_plan(
+            baseline, le_targets, profile_targets,
+            appliance_version=appliance_version, baselines=baselines,
+        )
+
+        # The LE's own target pointer can say "up to date" even when the SSP
+        # was never actually installed on its interconnects (blocked, still
+        # in progress, or reverted) -- cross-check against what's actually
+        # running before trusting a "no change needed" verdict.
+        try:
+            raw_lis = await client.get_all("/rest/logical-interconnects")
+        except Exception:  # noqa: BLE001 - best-effort; falls back to plan as-is
+            raw_lis = []
+        for le_plan, le in zip(plan["logical_enclosures"], le_targets):
+            if le_plan["will_change"]:
+                continue
+            actual = await _actual_le_baseline_uri(client, le, raw_lis)
+            if actual is not None and not same_baseline(actual, baseline_uri):
+                le_plan["will_change"] = True
+                le_plan["detail"] = "target baseline set but not yet installed"
+        plan["changes"] = sum(
+            1 for x in plan["logical_enclosures"] + plan["server_profiles"] if x["will_change"]
+        )
+
+        emit("plan", plan)
+
+        if not execute:
+            return {"status": "planned", "plan": plan}
+
+        changing_les = [le for le in plan["logical_enclosures"] if le["will_change"] or force]
+        changing_profs = [p for p in plan["server_profiles"] if p["will_change"] or force]
+        if not changing_les and not changing_profs:
+            return {"status": "nothing-to-do", "plan": plan}
+
+        if confirm is not None and not confirm(plan):
+            return {"status": "aborted", "plan": plan}
+
+        results: list[dict[str, Any]] = []
 
         async def _apply_with_retry(
             kind: str, name: str, resource_uri: str, do_request: Callable[[bool], Any],

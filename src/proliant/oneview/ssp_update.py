@@ -767,6 +767,11 @@ async def run_ssp_apply(
         if not changing_les and not changing_profs:
             return {"status": "nothing-to-do", "plan": plan}
 
+        # build_plan()'s own dicts don't carry enclosure_uris (only name/uri/
+        # current_baseline_uri/etc) -- look the original target back up by
+        # uri so the actual-installed cross-check below has what it needs.
+        le_targets_by_uri = {le["uri"]: le for le in le_targets}
+
         if confirm is not None and not confirm(plan):
             return {"status": "aborted", "plan": plan}
 
@@ -774,11 +779,24 @@ async def run_ssp_apply(
 
         async def _apply_with_retry(
             kind: str, name: str, resource_uri: str, do_request: Callable[[bool], Any],
+            actual_checker: Callable[[], Any] | None = None,
         ) -> tuple[str | None, dict[str, Any]]:
             """Run *do_request(force_flag)*, polling to completion.
 
-            On a "Warning" task whose target baseline never actually moved,
-            offers ``on_validation_blocked`` a chance to retry with the guard
+            On a "Warning" task, verify the target baseline actually moved
+            before trusting it as a real success. *actual_checker*, when
+            given, re-checks what's really installed (e.g. via each Logical
+            Interconnect's own firmware sub-resource for a logical enclosure)
+            rather than the resource's own target-baseline pointer, since
+            OneView sets that pointer as soon as an update is *requested* and
+            never rolls it back if the update is blocked or fails -- so for
+            a logical enclosure the naive pointer comparison always reports
+            "changed" right after the request, masking a real block. Falls
+            back to the plain pointer comparison if no checker is given or it
+            can't determine an answer (e.g. server profiles, whose firmware
+            pointer does reflect the real state).
+
+            Offers ``on_validation_blocked`` a chance to retry with the guard
             bypassed -- exactly once, since a second block means forcing
             didn't help. Returns ``(status, task)`` where *status* is
             ``None`` (success), ``"failed"``, or ``"blocked"``.
@@ -793,8 +811,15 @@ async def run_ssp_apply(
                 if is_task_failed(task):
                     return "failed", task
                 if (task.get("state") or "").lower() == "warning":
-                    current = await client.get(resource_uri)
-                    if _resource_baseline_uri(current) != baseline_uri:
+                    changed = None
+                    if actual_checker is not None:
+                        actual = await actual_checker()
+                        if actual is not None:
+                            changed = same_baseline(actual, baseline_uri)
+                    if changed is None:
+                        current = await client.get(resource_uri)
+                        changed = _resource_baseline_uri(current) == baseline_uri
+                    if not changed:
                         reason = await _task_block_reason(client, task["uri"])
                         if (
                             not force_this and not already_offered
@@ -827,8 +852,13 @@ async def run_ssp_apply(
                 )
                 return await client.patch(le["uri"], patch, headers={"If-Match": "*"})
 
+            async def _le_actual_checker(le=le) -> str | None:
+                target = le_targets_by_uri.get(le["uri"], le)
+                return await _actual_le_baseline_uri(client, target, raw_lis)
+
             status, task = await _apply_with_retry(
-                "logical-enclosure", le["name"], le["uri"], _le_request
+                "logical-enclosure", le["name"], le["uri"], _le_request,
+                actual_checker=_le_actual_checker,
             )
             results.append({"kind": "logical-enclosure", "name": le["name"], **task})
             emit("applied", results[-1])

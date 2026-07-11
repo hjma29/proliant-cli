@@ -666,6 +666,37 @@ async def test_run_execute_warning_with_unchanged_baseline_reports_blocked():
 
 
 @pytest.mark.asyncio
+async def test_run_execute_warning_blocked_even_when_le_pointer_already_matches_target():
+    """Reproduces the live false positive: OneView moves the LE's own target
+    pointer (firmware.firmwareBaselineUri) to the new baseline as soon as
+    the update is *requested*, regardless of whether it actually applied --
+    so comparing only that pointer after a 'Warning' task always looks like
+    success. The apply flow must cross-check the LIs' actually installed SPP
+    (like the plan-phase fix does) instead of trusting the LE's own pointer."""
+    newest = _newest()
+    fake = FakeClient(
+        task_state="Warning",
+        le_get_response={"firmware": {"firmwareBaselineUri": newest["uri"]}},  # already "moved"
+        children_tasks=[{"taskErrors": [
+            {"details": "Non-redundant fabric; update would disrupt connectivity."}
+        ]}],
+        raw_lis=[{"uri": "/rest/logical-interconnects/li-1", "enclosureUris": ["/rest/enclosures/enc-1"]}],
+        li_firmware={
+            "/rest/logical-interconnects/li-1/firmware": {
+                "sppUri": "/rest/firmware-drivers/SSP_2023_05",  # actually still the OLD spp
+            },
+        },
+    )
+    res = await run_ssp_apply(
+        lambda: fake, baseline=newest,
+        le_targets=[normalize_le(LE_RAW)], profile_targets=[],
+        execute=True, confirm=lambda plan: True, sleeper=_noop_sleep,
+    )
+    assert res["status"] == "blocked"
+    assert "Non-redundant fabric" in res["results"][-1]["blocked_reason"]
+
+
+@pytest.mark.asyncio
 async def test_run_execute_warning_with_baseline_changed_still_applied():
     """A genuine 'completed with a minor warning' task (baseline did move)
     must still report success, not be misclassified as blocked."""

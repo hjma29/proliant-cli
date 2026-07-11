@@ -270,6 +270,20 @@ def compat_note(
     return note
 
 
+def compat_matrix() -> list[dict[str, Any]]:
+    """The full HPE Synergy Software Releases matrix, ready for display.
+
+    One row per OneView "track" in :data:`SSP_COMPAT`, in the same order
+    the table is defined (HPE's current Recommended Milestone first). See
+    `proliant oneview release`.
+    """
+    return [
+        {"track": track, "recommended": entry["recommended"],
+         "supported": list(entry.get("supported", []))}
+        for track, entry in SSP_COMPAT.items()
+    ]
+
+
 # ── target normalization / resolution ──────────────────────────────────────────
 
 def normalize_le(le: dict) -> dict[str, Any]:

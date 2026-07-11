@@ -2112,6 +2112,62 @@ async def _cmd_logical_enclosures_list(args: argparse.Namespace) -> None:
     await _async_logical_enclosures_list()
 
 
+# ── proliant oneview release (HPE Synergy Software Releases matrix) ──────────
+
+async def _async_release_matrix(args: argparse.Namespace) -> None:
+    from proliant.oneview.ssp_update import (
+        SSP_COMPAT_AS_OF, SSP_COMPAT_SOURCE_URL, compat_matrix, oneview_track,
+    )
+
+    json_mode = getattr(args, "json_output", False) or get_output_mode() == OutputMode.JSON
+    console = get_console()
+
+    current_track = ""
+    current_version = ""
+    try:
+        async with _load_client() as client:
+            ver = await client.get("/rest/appliance/nodeinfo/version")
+        current_version = (ver or {}).get("softwareVersion", "")
+        current_track = oneview_track(current_version)
+    except Exception:  # noqa: BLE001 — advisory only; still show the full matrix offline
+        pass
+
+    rows = compat_matrix()
+
+    if json_mode:
+        print_json({
+            "as_of": SSP_COMPAT_AS_OF,
+            "source_url": SSP_COMPAT_SOURCE_URL,
+            "current_appliance_version": current_version,
+            "current_track": current_track,
+            "releases": rows,
+        })
+        return
+
+    table = make_table(
+        f"HPE Synergy Software Releases  (snapshot as of {SSP_COMPAT_AS_OF})",
+        ("Composer (HPE OneView)", {"no_wrap": True}),
+        ("Recommended SSP",        {"no_wrap": True}),
+        ("Additionally Supported SSP", {"no_wrap": False}),
+    )
+    for r in rows:
+        label = f"Composer (HPE OneView) {r['track']}"
+        if r["track"] and r["track"] == current_track:
+            label += "  [green]← this appliance[/green]"
+        table.add_row(label, r["recommended"], ", ".join(r["supported"]) or "—")
+    console.print(table)
+    console.print(f"[dim]Source: {SSP_COMPAT_SOURCE_URL}[/dim]", highlight=False)
+    if current_version and not current_track:
+        console.print(
+            f"[dim]Note: could not match this appliance's version ({current_version}) "
+            "to a row above.[/dim]", highlight=False,
+        )
+
+
+async def _cmd_release(args: argparse.Namespace) -> None:
+    await _async_release_matrix(args)
+
+
 # ── proliant oneview update appliance readiness / cleanup ─────────────────────
 
 _VERDICT_STYLE = {"PASS": "green", "WARN": "yellow", "FAIL": "red"}
@@ -3124,6 +3180,7 @@ examples:
   proliant oneview networksets describe "network-set-for-FM"
   proliant oneview server-profiles describe "ocp-single-node"
   proliant oneview reports memory
+  proliant oneview release                              Composer <-> SSP compatibility matrix
   proliant oneview update enclosure LE01                 Plan an SSP rollout (shared infra only)
   proliant oneview update enclosure LE01 --baseline SY-2026.01.02 --scope shared-infra-and-profiles
                                                           Plan shared infra + every profile in LE01
@@ -3292,6 +3349,14 @@ examples:
     s_les = p_les.add_subparsers(dest="what", metavar="ACTION")
     s_les.required = True
     s_les.add_parser("list", help="List all logical enclosures").set_defaults(func=_cmd_logical_enclosures_list)
+
+    p_release = sub.add_parser("release",
+        help="HPE Synergy Software Releases matrix (Composer <-> SSP compatibility)",
+        description="Show HPE's published Composer (OneView) <-> SSP compatibility matrix "
+                    "(https://support.hpe.com/docs/display/public/synergy-sw-release/index.html) "
+                    "-- which SSP baseline is recommended vs. additionally supported for each "
+                    "OneView version. Marks the row matching the active appliance when reachable.")
+    p_release.set_defaults(func=_cmd_release)
 
     # ── reports ───────────────────────────────────────────────────────────
     p_reports = sub.add_parser("reports", help="Fleet hardware reports")

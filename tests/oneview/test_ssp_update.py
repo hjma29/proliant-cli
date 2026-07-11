@@ -263,6 +263,18 @@ def test_compat_note_unknown_track():
     assert note["recommended"] is None
 
 
+def test_compat_matrix_matches_ssp_compat_order_and_content():
+    from proliant.oneview.ssp_update import SSP_COMPAT, compat_matrix
+    rows = compat_matrix()
+    assert [r["track"] for r in rows] == list(SSP_COMPAT.keys())
+    row = next(r for r in rows if r["track"] == "11.3")
+    assert row["recommended"] == "2026.04.01"
+    assert row["supported"] == ["2026.01.02", "2025.10.02", "2025.07.03", "2025.05.xx"]
+    # tracks with no additional supported entries return an empty list, not None
+    row94 = next(r for r in rows if r["track"] == "9.4")
+    assert row94["supported"] == []
+
+
 # ── payload construction ──────────────────────────────────────────────────────
 
 def test_build_le_firmware_patch_shape():

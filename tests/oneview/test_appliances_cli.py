@@ -92,6 +92,58 @@ class TestParserWiring:
         args = parser.parse_args(["update", "appliance", "readiness"])
         assert args.func is _cmd_upgrade_readiness
 
+    def test_parser_release_parses(self):
+        from proliant.oneview.cli import _build_parser, _cmd_release
+        parser = _build_parser()
+        args = parser.parse_args(["release"])
+        assert args.func is _cmd_release
+
+
+class _FakeVersionClient:
+    def __init__(self, version):
+        self._version = version
+
+    async def get(self, uri):
+        return {"softwareVersion": self._version}
+
+
+class TestReleaseMatrix:
+    def test_release_marks_current_appliance(self, capsys):
+        from proliant.oneview import cli
+
+        with patch.object(cli, "_load_client",
+                           lambda name=None: _FakeCM(_FakeVersionClient("10.00.00-0507518"))):
+            cli.main(["release"])
+
+        out = capsys.readouterr().out
+        assert "this appliance" in out
+        assert "11.3" in out and "2026.04.01" in out
+
+    def test_release_json_output(self, capsys):
+        from proliant.oneview import cli
+
+        with patch.object(cli, "_load_client",
+                           lambda name=None: _FakeCM(_FakeVersionClient("10.00.00-0507518"))):
+            cli.main(["--json", "release"])
+
+        result = json.loads(capsys.readouterr().out)
+        assert result["current_track"] == "10.0"
+        assert any(r["track"] == "11.3" and r["recommended"] == "2026.04.01"
+                   for r in result["releases"])
+
+    def test_release_works_without_a_configured_appliance(self, capsys):
+        from proliant.oneview import cli
+
+        def _raise(name=None):
+            raise RuntimeError("no OneView appliance configured")
+
+        with patch.object(cli, "_load_client", _raise):
+            cli.main(["release"])
+
+        out = capsys.readouterr().out
+        assert "11.3" in out
+        assert "this appliance" not in out
+
 
 class TestAppliancesList:
     def test_list_marks_active_appliance(self, capsys):

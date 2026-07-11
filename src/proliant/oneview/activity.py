@@ -356,12 +356,14 @@ def tree_is_terminal(node: dict | None) -> bool:
 
 async def find_active_task(
     client: "Any", *, resource: str | None = None, name_contains: str | None = None,
+    token: str | None = None,
 ) -> dict[str, Any] | None:
     """Newest still-running top-level task, for ``activity --watch`` to follow.
 
     Filters to top-level tasks (no ``parentTaskUri``) that are in an active
     state, optionally narrowed by associated-resource substring and/or task
-    name substring.
+    name substring. ``token`` matches EITHER the task name or the resource
+    (what the operator sees in the feed's Name / Resource columns).
     """
     try:
         data = await client.get(TASKS_URI, params={"count": 40, "sort": "created:descending"})
@@ -377,16 +379,22 @@ async def find_active_task(
             continue
         if name_contains and name_contains.lower() not in row["name"].lower():
             continue
+        if token:
+            tok = token.lower()
+            if tok not in row["name"].lower() and tok not in row["resource"].lower():
+                continue
         return row
     return None
 
 
 async def find_task(
     client: "Any", *, resource: str | None = None, name_contains: str | None = None,
+    token: str | None = None,
 ) -> dict[str, Any] | None:
     """Newest top-level task matching the filters, running or not (for a
     one-shot ``activity --tree``). Falls back to the most recent top-level task
-    when no filter is given."""
+    when no filter is given. ``token`` matches EITHER the task name or the
+    resource (what the operator sees in the feed's Name / Resource columns)."""
     try:
         data = await client.get(TASKS_URI, params={"count": 40, "sort": "created:descending"})
     except Exception:  # noqa: BLE001 - best-effort
@@ -399,5 +407,9 @@ async def find_task(
             continue
         if name_contains and name_contains.lower() not in row["name"].lower():
             continue
+        if token:
+            tok = token.lower()
+            if tok not in row["name"].lower() and tok not in row["resource"].lower():
+                continue
         return row
     return None

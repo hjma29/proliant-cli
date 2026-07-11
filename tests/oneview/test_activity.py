@@ -327,6 +327,31 @@ async def test_find_active_task_picks_running_toplevel():
     assert row is not None and row["name"] == "LE fw update"
 
 
+@pytest.mark.asyncio
+async def test_find_task_token_matches_name_or_resource():
+    """`--tree LE01` (a resource name) must match the same way `--tree Logical`
+    (a task-name fragment) does — the feed shows both columns, so either the
+    Name or the Resource text the operator sees should locate the operation."""
+    class _C:
+        async def get(self, uri, params=None):
+            return {"members": [
+                {"name": "Logical enclosure firmware update", "taskState": "Running",
+                 "parentTaskUri": "", "created": "2026-07-11T06:00:01Z",
+                 "associatedResource": {"resourceName": "LE01"}},
+                {"name": "Background inventory collection", "taskState": "Error",
+                 "parentTaskUri": "", "created": "2026-07-11T06:00:00Z",
+                 "associatedResource": {"resourceName": "Enclosure-01, bay 7"}},
+            ]}
+    # token = resource name (what the user sees in the Resource column)
+    by_resource = await act.find_task(_C(), token="LE01")
+    assert by_resource is not None and by_resource["name"] == "Logical enclosure firmware update"
+    # token = task-name fragment
+    by_name = await act.find_task(_C(), token="Logical")
+    assert by_name is not None and by_name["resource"] == "LE01"
+    # non-matching token finds nothing
+    assert await act.find_task(_C(), token="zzz-nope") is None
+
+
 def test_format_elapsed_uses_now():
     from datetime import datetime, timezone
     start = "2026-07-11T06:00:00Z"

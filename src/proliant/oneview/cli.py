@@ -2340,9 +2340,9 @@ async def _async_activity_detail(args: argparse.Namespace) -> None:
 
     console = get_console()
     resource = getattr(args, "resource", None)
-    name_contains = getattr(args, "tree", None)
-    if name_contains is True:  # bare --tree flag, no value
-        name_contains = None
+    tree_token = getattr(args, "tree", None)
+    if tree_token is True:  # bare --tree flag, no value
+        tree_token = None
     watch = getattr(args, "watch", False)
     json_mode = getattr(args, "json_output", False) or get_output_mode() == OutputMode.JSON
 
@@ -2350,13 +2350,13 @@ async def _async_activity_detail(args: argparse.Namespace) -> None:
         with console.status("[dim]Locating operation…[/dim]"):
             if watch:
                 target = await find_active_task(
-                    client, resource=resource, name_contains=name_contains)
+                    client, resource=resource, token=tree_token)
                 if target is None:
                     target = await find_task(
-                        client, resource=resource, name_contains=name_contains)
+                        client, resource=resource, token=tree_token)
             else:
                 target = await find_task(
-                    client, resource=resource, name_contains=name_contains)
+                    client, resource=resource, token=tree_token)
 
         if target is None:
             console.print("[yellow]No matching operation found in recent activity.[/yellow]")
@@ -4010,8 +4010,9 @@ examples:
     act_tree = p_activity.add_argument("--tree", nargs="?", const=True, default=False,
         metavar="NAME",
         help="Show the subtask tree of an operation (like expanding a row in the "
-             "GUI Activity page). Optionally give part of the task name to pick one; "
-             "otherwise the newest matching top-level task is used.")
+             "GUI Activity page). Optionally give part of the task name OR the "
+             "resource (e.g. LE01) to pick one; otherwise the newest top-level "
+             "task is used.")
     act_tree.completer = suppress_file_completion()  # type: ignore[attr-defined]
     p_activity.add_argument("--watch", "-w", action="store_true",
         help="Live-follow a running operation's subtask tree, refreshing until it "

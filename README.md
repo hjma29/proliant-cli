@@ -111,6 +111,8 @@ proliant oneview release                                 # HPE Synergy Software 
 proliant oneview activity                                # recent tasks + alerts, newest first (mirrors the GUI Activity page)
 proliant oneview activity --resource <name> --limit 30   # filter the feed to one resource (e.g. LE01, Enclosure-01)
 proliant oneview activity --state Error                  # only failed operations (or --tasks-only / --alerts-only)
+proliant oneview activity --tree --resource LE01         # expand one operation's subtask tree (per-interconnect phase/percent)
+proliant oneview activity --watch --resource LE01        # live-follow a running operation until it finishes (the GUI Activity view)
 proliant oneview update enclosure                        # no NAME -- interactive step-by-step wizard (numbered menus; 'b' back, 'c' cancel)
 proliant oneview update enclosure <LE-name>              # plan an SSP rollout to one logical enclosure (shared infra only)
 proliant oneview update enclosure <LE-name> --baseline <ssp> --scope shared-infra-and-profiles

@@ -2217,6 +2217,7 @@ async def _async_activity(args: argparse.Namespace) -> None:
     include_tasks = not getattr(args, "alerts_only", False)
     include_alerts = not getattr(args, "tasks_only", False)
     limit = getattr(args, "limit", 20) or 20
+    toplevel_only = not getattr(args, "all_tasks", False)
 
     async with _load_client() as client:
         with console.status("[dim]Fetching OneView activity…[/dim]"):
@@ -2225,13 +2226,14 @@ async def _async_activity(args: argparse.Namespace) -> None:
                 include_tasks=include_tasks, include_alerts=include_alerts,
                 resource=getattr(args, "resource", None),
                 state=getattr(args, "state", None),
+                toplevel_only=toplevel_only,
             )
 
     if json_mode:
         print_json({"activity": rows})
         return
 
-    from proliant.oneview.activity import format_local
+    from proliant.oneview.activity import format_local, format_elapsed
 
     table = make_table(
         "OneView Activity",
@@ -2245,10 +2247,11 @@ async def _async_activity(args: argparse.Namespace) -> None:
     for r in rows:
         marker = "•" if r["kind"] == "task" else "!"
         marker_style = "cyan" if r["kind"] == "task" else "magenta"
-        pct = r.get("percent")
         dur = r.get("duration") or ""
-        if r["kind"] == "task" and (r.get("state") or "").lower() == "running" and pct is not None:
-            dur = f"{pct}%"
+        # A running top-level task's own percent/modified stay flat while its
+        # subtasks do the work, so show live elapsed (GUI-style) instead.
+        if r["kind"] == "task" and (r.get("state") or "").lower() == "running":
+            dur = format_elapsed(r.get("created")) or dur
         name = r["name"] or "—"
         table.add_row(
             f"[{marker_style}]{marker}[/{marker_style}] {name}",
@@ -2271,7 +2274,150 @@ async def _async_activity(args: argparse.Namespace) -> None:
 
 
 async def _cmd_activity(args: argparse.Namespace) -> None:
-    await _async_activity(args)
+    if getattr(args, "watch", False) or getattr(args, "tree", False):
+        await _async_activity_detail(args)
+    else:
+        await _async_activity(args)
+
+
+# ── activity subtask tree / live watch (the GUI's expandable operation view) ──
+
+def _tree_state_markup(row: dict) -> str:
+    state = row.get("state") or ""
+    style = _ACTIVITY_STATE_STYLE.get(state.lower(), "white")
+    return f"[{style}]{state or '—'}[/{style}]"
+
+
+def _build_activity_tree_table(node: dict, target: dict):
+    """Rich table for a task's subtask hierarchy, mirroring the GUI's expanded
+    Activity view: indented Name, per-node Resource / State / % / Phase text."""
+    from proliant.oneview.activity import flatten_tree, phase_text, format_elapsed
+
+    root_row = node["task"]
+    running = (root_row.get("state") or "").lower() == "running"
+    dur = format_elapsed(root_row.get("created")) if running else (root_row.get("duration") or "")
+    title = f"{root_row.get('name') or 'Task'}"
+    if root_row.get("resource"):
+        title += f" — {_short_server_name(root_row['resource'])}"
+    subtitle = f"{root_row.get('state') or ''}"
+    if dur:
+        subtitle += f"  ({dur})"
+
+    table = make_table(
+        title,
+        ("Name / phase", {"no_wrap": False, "overflow": "fold", "min_width": 30}),
+        ("Resource", {"no_wrap": True, "overflow": "ellipsis"}),
+        ("State", {"no_wrap": True}),
+        ("%", {"no_wrap": True, "justify": "right"}),
+    )
+    for depth, row in flatten_tree(node):
+        indent = "  " * depth
+        marker = "└ " if depth else ""
+        pct = row.get("percent")
+        pct_txt = f"{int(pct)}%" if isinstance(pct, (int, float)) else "—"
+        phase = phase_text(row)
+        name_cell = f"{indent}{marker}{row.get('name') or '—'}"
+        if phase:
+            name_cell += f"\n{indent}   [dim]{phase}[/dim]"
+        table.add_row(
+            name_cell,
+            _short_server_name(row.get("resource") or "") or "—",
+            _tree_state_markup(row),
+            pct_txt,
+        )
+    return table, subtitle
+
+
+async def _async_activity_detail(args: argparse.Namespace) -> None:
+    """Show one operation's subtask tree (``--tree``) and, with ``--watch``,
+    live-refresh it until it reaches a terminal state — the CLI equivalent of
+    watching the OneView GUI Activity page's expanded subtasks."""
+    import asyncio
+
+    from proliant.oneview.activity import (
+        fetch_task_tree, find_active_task, find_task, tree_is_terminal,
+    )
+
+    console = get_console()
+    resource = getattr(args, "resource", None)
+    name_contains = getattr(args, "tree", None)
+    if name_contains is True:  # bare --tree flag, no value
+        name_contains = None
+    watch = getattr(args, "watch", False)
+    json_mode = getattr(args, "json_output", False) or get_output_mode() == OutputMode.JSON
+
+    async with _load_client() as client:
+        with console.status("[dim]Locating operation…[/dim]"):
+            if watch:
+                target = await find_active_task(
+                    client, resource=resource, name_contains=name_contains)
+                if target is None:
+                    target = await find_task(
+                        client, resource=resource, name_contains=name_contains)
+            else:
+                target = await find_task(
+                    client, resource=resource, name_contains=name_contains)
+
+        if target is None:
+            console.print("[yellow]No matching operation found in recent activity.[/yellow]")
+            console.print("[dim]Try 'proliant oneview activity' to see the feed, or widen "
+                          "--resource / --tree filters.[/dim]")
+            return
+
+        if json_mode:
+            tree = await fetch_task_tree(client, target["uri"])
+            print_json({"task": tree})
+            return
+
+        if not watch:
+            tree = await fetch_task_tree(client, target["uri"])
+            table, subtitle = _build_activity_tree_table(tree, target)
+            console.print(table)
+            console.print(f"[dim]{subtitle}[/dim]", highlight=False)
+            if not tree_is_terminal(tree):
+                console.print("[dim]Still running — add [bold]--watch[/bold] to follow it "
+                              "live.[/dim]", highlight=False)
+            return
+
+        # Live watch loop.
+        from rich.console import Group
+        from rich.live import Live
+
+        interval = float(getattr(args, "watch_interval", 4) or 4)
+        console.print(
+            f"[dim]Watching '{target.get('name')}' on "
+            f"{_short_server_name(target.get('resource') or '')} — Ctrl-C to stop.[/dim]",
+            highlight=False,
+        )
+        final_tree = None
+        try:
+            with Live(console=console, refresh_per_second=4, transient=False) as live:
+                while True:
+                    tree = await fetch_task_tree(client, target["uri"])
+                    final_tree = tree
+                    if tree is None:
+                        live.update("[red]Task disappeared from OneView.[/red]")
+                        break
+                    table, subtitle = _build_activity_tree_table(tree, target)
+                    live.update(Group(table, f"[dim]{subtitle}[/dim]"))
+                    if tree_is_terminal(tree):
+                        break
+                    await asyncio.sleep(interval)
+        except KeyboardInterrupt:
+            console.print("[dim]Stopped watching (task keeps running on the "
+                          "appliance).[/dim]", highlight=False)
+            return
+
+        if final_tree is not None:
+            state = (final_tree["task"].get("state") or "").lower()
+            if state == "completed":
+                console.print("[green]✓ Operation completed.[/green]")
+            elif state == "warning":
+                console.print("[yellow]⚠ Operation finished with a warning "
+                              "(see phase text above / 'proliant oneview activity').[/yellow]")
+            elif state in ("error", "terminated", "killed"):
+                console.print("[red]✗ Operation failed "
+                              "(see phase text above / 'proliant oneview activity').[/red]")
 
 
 # ── proliant oneview update appliance readiness / cleanup ─────────────────────
@@ -3818,6 +3964,22 @@ examples:
         help="Show only tasks (operations), not health/condition alerts.")
     act_grp.add_argument("--alerts-only", action="store_true",
         help="Show only alerts (health/condition notices), not tasks.")
+    p_activity.add_argument("--all-tasks", action="store_true",
+        help="Include subtasks in the feed. By default only top-level operations "
+             "are listed (matching the GUI); use --tree/--watch to see subtasks.")
+    act_tree = p_activity.add_argument("--tree", nargs="?", const=True, default=False,
+        metavar="NAME",
+        help="Show the subtask tree of an operation (like expanding a row in the "
+             "GUI Activity page). Optionally give part of the task name to pick one; "
+             "otherwise the newest matching top-level task is used.")
+    act_tree.completer = suppress_file_completion()  # type: ignore[attr-defined]
+    p_activity.add_argument("--watch", "-w", action="store_true",
+        help="Live-follow a running operation's subtask tree, refreshing until it "
+             "finishes (Ctrl-C to stop). Pair with --resource/--tree to pick one.")
+    act_int = p_activity.add_argument("--interval", type=float, default=4, dest="watch_interval",
+        metavar="SECONDS",
+        help="Refresh interval for --watch, in seconds (default: 4).")
+    act_int.completer = suppress_file_completion()  # type: ignore[attr-defined]
     p_activity.set_defaults(func=_cmd_activity)
 
     # ── reports ───────────────────────────────────────────────────────────

@@ -99,6 +99,25 @@ class TestParserWiring:
         assert args.func is _cmd_release
 
 
+class TestIsAffirmative:
+    """`_is_affirmative()` backs the validation-warning "Proceed anyway?"
+    prompt. Live testing found two bugs here: Rich's console.input() was
+    silently swallowing the "[y/N]" hint as (invalid) markup -- leaving the
+    operator with no visible cue of what to type -- and the panel's own
+    subtitle text says "...click OK to proceed", so a literal "ok" answer
+    (typed against that wording) was being declined instead of accepted."""
+
+    @pytest.mark.parametrize("answer", ["y", "Y", "yes", "YES", "ok", "OK", "okay", "Okay", "  y  "])
+    def test_accepts_yes_variants(self, answer):
+        from proliant.oneview.cli import _is_affirmative
+        assert _is_affirmative(answer) is True
+
+    @pytest.mark.parametrize("answer", ["n", "no", "", "  ", "nope", "cancel"])
+    def test_rejects_everything_else(self, answer):
+        from proliant.oneview.cli import _is_affirmative
+        assert _is_affirmative(answer) is False
+
+
 class _FakeVersionClient:
     def __init__(self, version):
         self._version = version

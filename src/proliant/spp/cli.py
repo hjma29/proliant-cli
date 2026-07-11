@@ -545,7 +545,7 @@ def _ensure_spp_packages(gen: str, version: str, components: list) -> None:
         f"    [dim]{dest_dir}[/dim]\n"
     )
     try:
-        answer = console.input("  Proceed with download? [Y/n] ").strip().lower()
+        answer = console.input("  Proceed with download? [Y/n] ", markup=False).strip().lower()
     except (EOFError, KeyboardInterrupt):
         print()
         sys.exit(0)

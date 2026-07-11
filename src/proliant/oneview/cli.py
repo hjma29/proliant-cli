@@ -2388,8 +2388,19 @@ async def _cmd_firmware_compliance_list(args: argparse.Namespace) -> None:
 
 # ── proliant oneview update enclosure (SSP baseline rollout) ──────────────────
 
-_SSP_POLL_S = 20
+_SSP_POLL_S = 5
 _SSP_TASK_TIMEOUT_S = 90 * 60
+
+
+def _is_affirmative(answer: str) -> bool:
+    """Treat y/yes/ok/okay (case-insensitive) as an affirmative answer.
+
+    "ok"/"okay" are accepted in addition to the conventional y/yes because the
+    validation-warning panel's subtitle deliberately echoes the OneView GUI's
+    own wording ("...click OK to proceed"), so typing "ok" is the natural
+    response to what's on screen -- and previously wasn't recognized at all.
+    """
+    return answer.strip().lower() in ("y", "yes", "ok", "okay")
 
 
 def _render_ssp_plan(console, plan: dict) -> None:
@@ -2556,7 +2567,14 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
                 segs.append(f"[bold]{label}[/bold]")
             segs.append(f"[cyan]{stage}[/cyan]" if stage else state)
             if stage and state:
-                segs.append(f"[dim]{state}[/dim]")
+                # A "Warning" terminal state doesn't mean the update actually
+                # landed -- OneView uses it for both "succeeded with a minor
+                # note" and "refused to apply due to a validation guard", and
+                # 100% here only means *OneView's own task* finished running,
+                # not that firmware was pushed. Call it out in yellow instead
+                # of blending it in as dim, ordinary progress chatter.
+                state_style = "yellow" if state.lower() == "warning" else "dim"
+                segs.append(f"[{state_style}]{state}[/{state_style}]")
             if res and res not in label:
                 segs.append(f"[dim]({res})[/dim]")
             desc = "  ".join(segs)
@@ -2615,7 +2633,10 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
             + " ".join(impact)
             + compat_warn,
             title="Confirm SSP firmware apply", border_style="red"))
-        ans = console.input(f'Type the baseline version "{token}" to proceed (or anything else to abort): ')
+        ans = console.input(
+            f'Type the baseline version "{token}" to proceed (or anything else to abort): ',
+            markup=False,
+        )
         return ans.strip() == token
 
     def on_validation_blocked(info: dict) -> bool:
@@ -2643,8 +2664,13 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
             title=f"⚠ Validation warning — {info.get('name')}", border_style="yellow",
             subtitle="Review the warnings. If the conditions are acceptable, then click OK to proceed.",
             subtitle_align="left"))
-        ans = console.input("Proceed anyway despite this warning? [y/N]: ")
-        return ans.strip().lower() in ("y", "yes")
+        # markup=False: "[y/N]" would otherwise be parsed as (invalid, silently
+        # dropped) Rich markup, leaving the operator with no visible hint of
+        # what to type -- which is exactly what happened live: the "[y/N]"
+        # vanished, and "OK" typed to match our own "click OK" wording above
+        # wasn't recognized as yes/no, silently declining.
+        ans = console.input("Proceed anyway despite this warning? [y/N]: ", markup=False)
+        return _is_affirmative(ans)
 
     factory = _oneview_client_factory()
     try:
@@ -2976,7 +3002,9 @@ def _resolve_upgrade_image(args: argparse.Namespace, platform: str, console, jso
             table.add_row(str(i), im.version, im.filename, f"{im.as_dict()['size_gb']:.2f} GB")
         console.print(table)
         try:
-            choice = console.input(f"Select image [1-{len(images)}] (default {len(images)} = newest): ").strip()
+            choice = console.input(
+                f"Select image [1-{len(images)}] (default {len(images)} = newest): ", markup=False
+            ).strip()
         except (EOFError, KeyboardInterrupt):
             console.print("\n[yellow]Cancelled.[/yellow]")
             return None

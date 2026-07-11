@@ -811,6 +811,16 @@ async def run_ssp_apply(
                 if is_task_failed(task):
                     return "failed", task
                 if (task.get("state") or "").lower() == "warning":
+                    # A "Warning" task at 100% does NOT mean the firmware was
+                    # actually applied -- OneView uses this same state/percent
+                    # combo for a genuine "succeeded with a minor note" *and*
+                    # for "refused to apply due to a validation guard". Make
+                    # that visible instead of leaving the bar frozen looking
+                    # like a clean, confident finish while we go check which
+                    # one this was.
+                    emit("task-progress", {
+                        **task, "stage": "Checking whether the update actually applied…",
+                    })
                     changed = None
                     if actual_checker is not None:
                         actual = await actual_checker()

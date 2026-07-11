@@ -654,6 +654,182 @@ async def _task_block_reason(client: "OneViewClient", task_uri: str) -> dict[str
     return {"warning": "\n\n".join(warnings), "resolution": "\n\n".join(resolutions)}
 
 
+# ── non-redundant uplink diagnostic (the "why" behind a blocked update) ─────────
+
+# OneView's non-redundant-fabric warning names the offending set(s) after an
+# explicit "uplink set(s):" — e.g. "...for one or more uplink sets: pvlan-uplinkset".
+_UPLINK_SET_NAMES_RE = re.compile(r"uplink[\s-]?sets?\s*:\s*([^.\n]+)", re.IGNORECASE)
+# ...trim any trailing prose OneView appends after the name list.
+_UPLINK_NAME_STOP_RE = re.compile(
+    r"\s+(?:that|which|is|are|will|would|does|do|has|have|because|so|and)\b",
+    re.IGNORECASE,
+)
+
+
+def _uplink_set_names_from_reason(reason: str) -> list[str]:
+    """Pull the uplink-set name(s) OneView named in a non-redundant-fabric warning.
+
+    Lets the diagnostic zoom straight in on exactly what OneView flagged rather
+    than scanning every set. Best-effort: returns ``[]`` if the phrasing doesn't
+    match, in which case the caller falls back to every set OneView itself marks
+    unhealthy.
+    """
+    names: list[str] = []
+    for m in _UPLINK_SET_NAMES_RE.finditer(reason or ""):
+        tail = _UPLINK_NAME_STOP_RE.split(m.group(1), maxsplit=1)[0]
+        for part in re.split(r"[,;]", tail):
+            part = part.strip().strip(".")
+            if part and part not in names:
+                names.append(part)
+    return names
+
+
+def _uplink_redundancy_note(legs: list[dict[str, str]]) -> str:
+    """One-line "why it's not redundant / what to fix" from an uplink set's legs."""
+    if not legs:
+        return (
+            "OneView flags this uplink set as not redundant, but no live uplink "
+            "ports were found for it — check that its uplink ports are cabled on "
+            "both interconnects."
+        )
+    linked = [leg for leg in legs if (leg.get("state") or "").lower() == "linked"]
+    linked_locs = {leg["location"] for leg in linked}
+    down = [leg for leg in legs if (leg.get("state") or "").lower() != "linked"]
+    if len(linked_locs) < 2:
+        if down and linked_locs:
+            d = down[0]
+            return (
+                f"the leg on {next(iter(linked_locs))} is up, but the leg on "
+                f"{d['location']} ({d.get('port', '?')}) is {d.get('state') or 'down'} "
+                "with no negotiated speed — with only one live leg the set has no "
+                "redundant path, so an Orchestrated update can't keep the fabric up. "
+                "Bring that uplink up (check the cable / switch port / port speed) to "
+                "restore redundancy."
+            )
+        return (
+            "all live uplink legs land on a single interconnect — there is no "
+            "redundant leg on the paired interconnect."
+        )
+    speeds = {leg["speed"] for leg in linked if leg.get("speed") not in ("", "unknown")}
+    if len(speeds) > 1:
+        detail = ", ".join(
+            f"{leg['location']} {leg.get('port', '')}={leg['speed']}G" for leg in linked
+        )
+        return (
+            f"the redundant legs negotiated different speeds ({detail}); a speed "
+            "mismatch between the two sides can drop redundancy. Set both uplink "
+            "ports to the same speed."
+        )
+    return (
+        "OneView reports this uplink set as degraded even though both legs appear "
+        "linked — check the OneView Activity log / alerts for the specific reason "
+        "before forcing the update."
+    )
+
+
+async def diagnose_nonredundant_uplinks(
+    client: "OneViewClient", hint_names: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Explain *why* an uplink set isn't redundant, for the block/abort UX.
+
+    OneView's own warning only *names* the offending uplink set(s); operators
+    then have to dig through the interconnect port pages to see which physical
+    leg is down or mis-negotiated. This does that dig for them, read-only:
+
+      * pick the uplink set(s) OneView flagged (``hint_names`` parsed from the
+        warning) or, failing that, every set OneView itself marks unhealthy
+        (``status`` other than OK/Unknown);
+      * for each, list its live uplink legs across the interconnect pair
+        (location, port, link state, negotiated speed) from ``/rest/interconnects``;
+      * summarise the redundancy problem with a concrete "what to fix" note.
+
+    Never raises — a diagnostic layered on top of OneView's own verdict. Returns
+    ``[]`` on any error or if nothing looks wrong.
+    """
+    from proliant.oneview.interconnects import parse_port_speed
+
+    try:
+        raw_sets = await client.get_all("/rest/uplink-sets")
+        raw_ics = await client.get_all("/rest/interconnects")
+    except Exception:  # noqa: BLE001 - best-effort diagnostic
+        return []
+    if not raw_sets:
+        return []
+    try:
+        raw_lis = await client.get_all("/rest/logical-interconnects")
+    except Exception:  # noqa: BLE001
+        raw_lis = []
+    li_names = {li.get("uri", ""): li.get("name", "") for li in raw_lis}
+
+    hint_lower = {n.lower() for n in (hint_names or [])}
+    if hint_lower:
+        sets = [u for u in raw_sets if (u.get("name") or "").lower() in hint_lower]
+    else:
+        sets = [
+            u for u in raw_sets if (u.get("status") or "OK") not in ("OK", "Unknown", "")
+        ]
+    if not sets:
+        return []
+
+    # interconnect uri -> "Enclosure-01 Bay 3", and its raw ports
+    ic_label: dict[str, str] = {}
+    ic_ports: dict[str, list[dict]] = {}
+    for ic in raw_ics:
+        entries = (ic.get("interconnectLocation") or {}).get("locationEntries", [])
+        loc = {e.get("type"): e.get("value") for e in entries}
+        encl = ic.get("enclosureName") or loc.get("Enclosure") or ""
+        bay = loc.get("Bay", "")
+        ic_uri = ic.get("uri", "")
+        ic_label[ic_uri] = (
+            f"{encl} Bay {bay}".strip() if bay else (encl or ic.get("name", ""))
+        )
+        ic_ports[ic_uri] = ic.get("ports") or []
+
+    findings: list[dict[str, Any]] = []
+    for u in sets:
+        uri = u.get("uri", "")
+        legs: list[dict[str, str]] = []
+        for ic_uri, ports in ic_ports.items():
+            for p in ports:
+                if p.get("portType") != "Uplink":
+                    continue
+                if (p.get("associatedUplinkSetUri") or "") != uri:
+                    continue
+                legs.append({
+                    "location": ic_label.get(ic_uri, ic_uri),
+                    "port": p.get("portName", ""),
+                    "state": p.get("portStatus", "") or "",
+                    "speed": parse_port_speed(p.get("operationalSpeed")),
+                })
+        findings.append({
+            "name": u.get("name", ""),
+            "status": u.get("status", "") or "",
+            "li_name": li_names.get(u.get("logicalInterconnectUri", ""), ""),
+            "legs": legs,
+            "note": _uplink_redundancy_note(legs),
+        })
+    return findings
+
+
+def _normalize_block_decision(result: Any) -> str:
+    """Map an ``on_validation_blocked`` return into a retry decision.
+
+    Legacy callbacks returned a bool — ``True`` meaning "proceed through the
+    warning" (clear the non-disruptive guard only). The A/B menu now returns an
+    explicit string: ``"abort"`` (stop, blocked), ``"proceed"`` (clear the guard,
+    matching the GUI's plain "OK to proceed"), or ``"force"`` (also
+    force-reinstall — the disruptive path that gets a genuinely non-redundant
+    fabric to update, as the GUI does when you accept the disruption).
+    """
+    if result is True:
+        return "proceed"
+    if isinstance(result, str):
+        r = result.strip().lower()
+        if r in ("abort", "proceed", "force"):
+            return r
+    return "abort"
+
+
 async def _deepest_active_descendant(
     client: "OneViewClient", root: dict, *, max_depth: int = 5,
 ) -> dict[str, Any] | None:
@@ -822,7 +998,7 @@ async def run_ssp_apply(
     interconnect_activation_mode: str = "Orchestrated",
     execute: bool = False,
     confirm: Callable[[dict], bool] | None = None,
-    on_validation_blocked: Callable[[dict], bool] | None = None,
+    on_validation_blocked: Callable[[dict], Any] | None = None,
     on_event: Callable[[str, dict], None] | None = None,
     sleeper: Callable[[float], Any] | None = None,
     poll_interval_s: float = 20.0,
@@ -844,7 +1020,9 @@ async def run_ssp_apply(
       ``blocked``        OneView validated the update and refused to apply it
                           (e.g. a non-redundant-fabric guard), and the operator
                           declined to proceed anyway -- the last ``results``
-                          entry carries ``blocked_reason``/``blocked_resolution``.
+                          entry carries ``blocked_reason``/``blocked_resolution``
+                          and a ``blocked_uplinks`` diagnostic naming exactly
+                          which uplink set / leg lost redundancy.
       ``unverified``     OneView reported the task as plain "Completed", but
                           re-checking what's actually installed didn't confirm
                           it landed -- the last ``results`` entry carries
@@ -858,26 +1036,34 @@ async def run_ssp_apply(
     attempted with OneView's non-disruptive validation guard on (unless
     ``force`` is already set). If OneView blocks it -- reported as a
     ``Warning`` task whose target baseline never actually moved -- the real
-    reason is surfaced via
-    ``on_validation_blocked({"kind", "name", "reason", "resolution"})``, where
-    ``reason`` is the same warning text and ``resolution`` the same
-    "Resolution:" steps the GUI's own modal shows. Returning ``True`` retries
-    that *same* target with the guard bypassed (no need to re-run the whole
-    command with ``--force``); returning ``False`` (or passing no callback)
-    stops with ``status == "blocked"``.
+    reason is surfaced via ``on_validation_blocked({"kind", "name", "reason",
+    "resolution", "uplinks"})``, where ``reason``/``resolution`` are the same
+    warning text + "Resolution:" steps the GUI's own modal shows and
+    ``uplinks`` is a diagnostic naming exactly which uplink set / leg lost
+    redundancy. The callback returns the operator's on-the-spot decision:
+
+      ``"proceed"`` (or legacy ``True``)  retry the same target with only the
+                    non-disruptive guard cleared -- the GUI's plain "OK to
+                    proceed" (``forceInstallFirmware`` untouched);
+      ``"force"``   retry with the guard cleared *and* ``forceInstallFirmware``
+                    on -- the disruptive path that gets a genuinely
+                    non-redundant fabric to update (a brief outage on those
+                    uplinks / any server profiles riding them);
+      ``"abort"``   (or ``False``/no callback)  stop with ``status ==
+                    "blocked"`` and let the operator fix the fabric first.
+
+    Either retry is offered exactly once -- a second block means it didn't help.
 
     ``interconnect_activation_mode`` mirrors the OneView SDK's own
     ``-InterconnectActivationMode``: ``"Orchestrated"`` (default) flashes one
     side of each redundant Logical Interconnect pair at a time so the fabric
     stays up. If an uplink set isn't redundant, OneView raises its
-    non-disruptive validation *warning* (a brief interruption on those uplinks
-    is possible) -- but, exactly as in the GUI, proceeding through that warning
-    (``on_validation_blocked`` -> ``True``, which clears
-    ``validateIfLIFirmwareUpdateIsNonDisruptive`` without touching
-    ``forceInstallFirmware``) can still complete the update. ``"Parallel"``
-    flashes every interconnect at once regardless of redundancy, at the cost of
-    a real network outage during the update, and OneView requires the affected
-    compute modules to be powered off first.
+    non-disruptive validation *warning*; proceeding through it clears the guard,
+    and forcing through it (disruptive) additionally re-installs -- exactly the
+    A/B choice the GUI offers. ``"Parallel"`` flashes every interconnect at once
+    regardless of redundancy, at the cost of a real network outage during the
+    update, and OneView requires the affected compute modules to be powered off
+    first.
     """
     import asyncio
 
@@ -1015,32 +1201,43 @@ async def run_ssp_apply(
                         changed = _resource_baseline_uri(current) == baseline_uri
                     if not changed:
                         reason = await _task_block_reason(client, task["uri"])
+                        # Dig out *why* the fabric isn't redundant (which uplink
+                        # set, which leg is down / mis-negotiated) so the operator
+                        # can decide on the spot: fix it, or force through.
+                        uplinks = await diagnose_nonredundant_uplinks(
+                            client, _uplink_set_names_from_reason(reason["warning"])
+                        )
+                        decision = "abort"
                         if (
                             not bypass_validation and not already_offered
                             and on_validation_blocked is not None
-                            and on_validation_blocked({
-                                "kind": kind, "name": name,
-                                "reason": reason["warning"], "resolution": reason["resolution"],
-                            })
                         ):
-                            # Proceed exactly as the GUI does: clear the
-                            # non-disruptive validation guard, but do NOT
-                            # escalate to forceInstallFirmware -- force is only
-                            # ever set when the operator explicitly asked for it.
+                            decision = _normalize_block_decision(on_validation_blocked({
+                                "kind": kind, "name": name,
+                                "reason": reason["warning"],
+                                "resolution": reason["resolution"],
+                                "uplinks": uplinks,
+                            }))
+                        if decision in ("proceed", "force"):
+                            # "proceed" clears only the non-disruptive validation
+                            # guard (the GUI's plain "OK to proceed"); "force" also
+                            # force-reinstalls -- the disruptive path that actually
+                            # gets a non-redundant fabric to update, as the GUI
+                            # does when you accept the disruption. Offered exactly
+                            # once: a second block means it didn't help.
                             bypass_validation = True
+                            if decision == "force":
+                                force_this = True
                             already_offered = True
                             emit("applying", {"kind": kind, "name": name, "retry": True})
                             continue
                         # Surface OneView's own reason + recommended actions
-                        # verbatim (the same text the GUI's warning modal
-                        # shows). Do not editorialize with hardware advice
-                        # (e.g. "power off servers" / "only Parallel works") --
-                        # that guidance was wrong: proceeding through this same
-                        # warning can complete an Orchestrated update on a
-                        # partially non-redundant fabric, just as it does in the
-                        # GUI. Let OneView's recommendedActions speak for itself.
+                        # verbatim (the same text the GUI's warning modal shows),
+                        # plus the concrete non-redundant-uplink diagnostic so the
+                        # operator sees exactly which leg to fix.
                         task["blocked_reason"] = reason["warning"]
                         task["blocked_resolution"] = reason["resolution"]
+                        task["blocked_uplinks"] = uplinks
                         return "blocked", task
                 elif actual_checker is not None:
                     # Don't trust a plain "Completed" report unconditionally

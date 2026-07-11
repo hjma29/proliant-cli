@@ -20,6 +20,7 @@ from proliant.oneview.ssp_update import (
     build_le_firmware_patch,
     build_plan,
     build_profile_firmware_put,
+    diagnose_nonredundant_uplinks,
     find_le_by_name,
     hardware_enclosure_map,
     is_task_done,
@@ -33,6 +34,11 @@ from proliant.oneview.ssp_update import (
     same_baseline,
     select_baseline,
     service_pack_baselines,
+)
+from proliant.oneview.ssp_update import (
+    _normalize_block_decision,
+    _uplink_redundancy_note,
+    _uplink_set_names_from_reason,
 )
 
 
@@ -473,6 +479,51 @@ class FakeClient:
         self.calls.append(("put", uri))
         self.put_bodies.append(body)
         return {"uri": "/rest/tasks/sp-task", "taskState": "Running", "percentComplete": 0}
+
+
+# One interconnect pair for uplink set "/rest/uplink-sets/pv": Bay 3 leg linked at
+# 10G, Bay 6 leg down — the exact "one leg down, not redundant" shape that blocks
+# an Orchestrated update.
+_IC_PAIR_ONE_LEG_DOWN = [
+    {
+        "uri": "/rest/interconnects/ic3", "enclosureName": "Enclosure-01",
+        "interconnectLocation": {"locationEntries": [
+            {"type": "Enclosure", "value": "Enclosure-01"}, {"type": "Bay", "value": "3"}]},
+        "ports": [{
+            "portType": "Uplink", "portName": "Q1:1", "portStatus": "Linked",
+            "operationalSpeed": "Speed10G",
+            "associatedUplinkSetUri": "/rest/uplink-sets/pv"}],
+    },
+    {
+        "uri": "/rest/interconnects/ic6", "enclosureName": "Enclosure-01",
+        "interconnectLocation": {"locationEntries": [
+            {"type": "Enclosure", "value": "Enclosure-01"}, {"type": "Bay", "value": "6"}]},
+        "ports": [{
+            "portType": "Uplink", "portName": "Q1:1", "portStatus": "Unlinked",
+            "operationalSpeed": "Auto",
+            "associatedUplinkSetUri": "/rest/uplink-sets/pv"}],
+    },
+]
+
+
+class UplinkDiagClient(FakeClient):
+    """FakeClient that also serves /rest/uplink-sets + /rest/interconnects so the
+    non-redundant-uplink diagnostic has data to work with."""
+
+    def __init__(self, *, uplink_sets, interconnects, **kw):
+        super().__init__(**kw)
+        self._uplink_sets = uplink_sets
+        self._interconnects = interconnects
+
+    async def get_all(self, uri, **extra_params):
+        self.calls.append(("get_all", uri))
+        if uri == "/rest/uplink-sets":
+            return self._uplink_sets
+        if uri == "/rest/interconnects":
+            return self._interconnects
+        if uri == "/rest/logical-interconnects":
+            return self._raw_lis
+        return []
 
 
 async def _noop_sleep(_s):
@@ -1037,6 +1088,62 @@ async def test_run_execute_blocked_then_confirmed_retries_without_forcing():
 
 
 @pytest.mark.asyncio
+async def test_run_execute_blocked_force_decision_escalates_to_force_install():
+    """On-the-spot "B" choice: when on_validation_blocked returns "force", the
+    same target is retried with BOTH the non-disruptive guard cleared AND
+    forceInstallFirmware on -- the disruptive path that gets a genuinely
+    non-redundant fabric to update (matching accepting the GUI's warning)."""
+    fake = FakeClient(
+        blocked_until_forced=True,
+        le_get_response={"firmware": {"firmwareBaselineUri": "/rest/firmware-drivers/SSP_2023_05"}},
+        children_tasks=[{"taskErrors": [
+            {"details": "Non-redundant fabric; update would disrupt connectivity."}
+        ]}],
+    )
+    res = await run_ssp_apply(
+        lambda: fake, baseline=_newest(),
+        le_targets=[normalize_le(LE_RAW)], profile_targets=[],
+        execute=True, confirm=lambda plan: True, sleeper=_noop_sleep,
+        on_validation_blocked=lambda info: "force",
+    )
+    assert res["status"] == "applied"
+    # first attempt: guard on, no force; retry: guard cleared AND force on
+    assert fake.patch_bodies[0][0]["value"]["validateIfLIFirmwareUpdateIsNonDisruptive"] is True
+    assert fake.patch_bodies[0][0]["value"]["forceInstallFirmware"] is False
+    assert fake.patch_bodies[1][0]["value"]["validateIfLIFirmwareUpdateIsNonDisruptive"] is False
+    assert fake.patch_bodies[1][0]["value"]["forceInstallFirmware"] is True
+
+
+@pytest.mark.asyncio
+async def test_run_execute_blocked_carries_uplink_diagnostic():
+    """A blocked result carries the non-redundant-uplink diagnostic so the CLI
+    can show exactly which uplink set / leg lost redundancy."""
+    fake = UplinkDiagClient(
+        uplink_sets=[
+            {"uri": "/rest/uplink-sets/pv", "name": "pvlan-uplinkset", "status": "Warning",
+             "logicalInterconnectUri": "/rest/logical-interconnects/li1"},
+        ],
+        interconnects=_IC_PAIR_ONE_LEG_DOWN,
+        raw_lis=[{"uri": "/rest/logical-interconnects/li1", "name": "LE01-LIG-VC100"}],
+        blocked_until_forced=True,
+        le_get_response={"firmware": {"firmwareBaselineUri": "/rest/firmware-drivers/SSP_2023_05"}},
+        children_tasks=[{"taskErrors": [{"details":
+            "does not have redundant connectivity ... uplink sets: pvlan-uplinkset"}]}],
+    )
+    res = await run_ssp_apply(
+        lambda: fake, baseline=_newest(),
+        le_targets=[normalize_le(LE_RAW)], profile_targets=[],
+        execute=True, confirm=lambda plan: True, sleeper=_noop_sleep,
+        on_validation_blocked=lambda info: "abort",
+    )
+    assert res["status"] == "blocked"
+    ups = res["results"][-1]["blocked_uplinks"]
+    assert ups and ups[0]["name"] == "pvlan-uplinkset"
+    assert ups[0]["li_name"] == "LE01-LIG-VC100"
+    assert "Bay 6" in ups[0]["note"]  # names the down leg
+
+
+@pytest.mark.asyncio
 async def test_run_execute_blocked_declined_stays_blocked_no_retry():
     """If the operator declines the validation-warning prompt, stop after a
     single attempt -- do not silently retry with force."""
@@ -1257,4 +1364,99 @@ async def test_task_block_reason_descends_to_grandchild_task_errors():
     assert "does not have redundant connectivity" in reason["warning"]
     assert "pvlan-uplinkset" in reason["warning"]  # embedded ref blob collapsed to name
     assert "Ensure redundancy is available" in reason["resolution"]
+
+
+# ── non-redundant uplink diagnostic ───────────────────────────────────────────
+
+def test_uplink_set_names_from_reason_extracts_named_sets():
+    r = ("The logical interconnect does not have redundant connectivity "
+         "configured for one or more uplink sets: pvlan-uplinkset that will "
+         "disrupt network connectivity.")
+    assert _uplink_set_names_from_reason(r) == ["pvlan-uplinkset"]
+
+
+def test_uplink_set_names_from_reason_handles_comma_list():
+    r = "uplink sets: pvlan-uplinkset, mgmt-uplinkset."
+    assert _uplink_set_names_from_reason(r) == ["pvlan-uplinkset", "mgmt-uplinkset"]
+
+
+def test_uplink_set_names_from_reason_no_match_returns_empty():
+    assert _uplink_set_names_from_reason("some unrelated warning text") == []
+
+
+def test_uplink_redundancy_note_flags_down_leg():
+    legs = [
+        {"location": "Enclosure-01 Bay 3", "port": "Q1:1", "state": "Linked", "speed": "10"},
+        {"location": "Enclosure-01 Bay 6", "port": "Q1:1", "state": "Unlinked", "speed": "unknown"},
+    ]
+    note = _uplink_redundancy_note(legs)
+    assert "Bay 6" in note and "Bay 3" in note
+    assert "restore redundancy" in note.lower()
+
+
+def test_uplink_redundancy_note_flags_speed_mismatch():
+    legs = [
+        {"location": "Enclosure-01 Bay 3", "port": "Q1:1", "state": "Linked", "speed": "25"},
+        {"location": "Enclosure-01 Bay 6", "port": "Q1:1", "state": "Linked", "speed": "10"},
+    ]
+    note = _uplink_redundancy_note(legs)
+    assert "different speeds" in note
+    assert "25G" in note and "10G" in note
+
+
+def test_uplink_redundancy_note_no_legs():
+    assert "no live uplink ports" in _uplink_redundancy_note([])
+
+
+def test_normalize_block_decision_maps_all_forms():
+    assert _normalize_block_decision(True) == "proceed"      # legacy bool
+    assert _normalize_block_decision(False) == "abort"
+    assert _normalize_block_decision(None) == "abort"
+    assert _normalize_block_decision("force") == "force"
+    assert _normalize_block_decision("PROCEED") == "proceed"
+    assert _normalize_block_decision("nonsense") == "abort"
+
+
+@pytest.mark.asyncio
+async def test_diagnose_nonredundant_uplinks_uses_hint_and_finds_down_leg():
+    fake = UplinkDiagClient(
+        uplink_sets=[
+            {"uri": "/rest/uplink-sets/pv", "name": "pvlan-uplinkset", "status": "Warning",
+             "logicalInterconnectUri": "/rest/logical-interconnects/li1"},
+            {"uri": "/rest/uplink-sets/ok", "name": "mgmt-uplinkset", "status": "OK",
+             "logicalInterconnectUri": "/rest/logical-interconnects/li1"},
+        ],
+        interconnects=_IC_PAIR_ONE_LEG_DOWN,
+        raw_lis=[{"uri": "/rest/logical-interconnects/li1", "name": "LE01-LIG-VC100"}],
+    )
+    out = await diagnose_nonredundant_uplinks(fake, ["pvlan-uplinkset"])
+    assert len(out) == 1
+    f = out[0]
+    assert f["name"] == "pvlan-uplinkset"
+    assert f["li_name"] == "LE01-LIG-VC100"
+    assert {leg["location"] for leg in f["legs"]} == {"Enclosure-01 Bay 3", "Enclosure-01 Bay 6"}
+    assert "Bay 6" in f["note"]
+
+
+@pytest.mark.asyncio
+async def test_diagnose_nonredundant_uplinks_falls_back_to_unhealthy_status():
+    # No hint names -> pick every set OneView itself marks unhealthy (status != OK).
+    fake = UplinkDiagClient(
+        uplink_sets=[
+            {"uri": "/rest/uplink-sets/pv", "name": "pvlan-uplinkset", "status": "Warning",
+             "logicalInterconnectUri": "/rest/logical-interconnects/li1"},
+            {"uri": "/rest/uplink-sets/ok", "name": "mgmt-uplinkset", "status": "OK"},
+        ],
+        interconnects=_IC_PAIR_ONE_LEG_DOWN,
+        raw_lis=[{"uri": "/rest/logical-interconnects/li1", "name": "LE01-LIG-VC100"}],
+    )
+    out = await diagnose_nonredundant_uplinks(fake, [])
+    assert [f["name"] for f in out] == ["pvlan-uplinkset"]
+
+
+@pytest.mark.asyncio
+async def test_diagnose_nonredundant_uplinks_empty_when_no_data():
+    # A plain FakeClient serves no uplink-sets -> diagnostic returns [] (never raises).
+    assert await diagnose_nonredundant_uplinks(FakeClient(), ["pvlan-uplinkset"]) == []
+
 

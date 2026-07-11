@@ -3108,17 +3108,23 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
         )
         return ans.strip() == token
 
-    def on_validation_blocked(info: dict) -> bool:
-        """Mirrors the OneView GUI's own validation-warning modal exactly:
-        OneView rejected the update as potentially disruptive (e.g. a
-        non-redundant fabric) instead of applying it. Show its own warning
-        text and "Resolution:" steps, then let the operator decide whether to
-        proceed anyway, same as clicking "OK" in the GUI's modal — no need to
-        abort and re-run with --force."""
+    def on_validation_blocked(info: dict) -> str:
+        """OneView refused the update as potentially disruptive (a non-redundant
+        fabric). Present the same choice the GUI does — with the extra "which
+        uplink set / which leg" detail the GUI makes you hunt for — and let the
+        operator decide on the spot:
+
+          A) abort and fix the fabric redundancy first (recommended, clean); or
+          B) force the update through now (disruptive to the affected uplinks and
+             any server profiles riding them), matching clicking through the
+             GUI's warning and accepting the disruption.
+
+        Returns the decision string the SSP engine understands ("abort",
+        "proceed", or "force")."""
         if getattr(args, "yes", False):
-            return True
+            return "proceed"  # --yes: proceed non-disruptively; use --force to force
         if json_mode:
-            return False  # never silently proceed past a warning in scripted mode
+            return "abort"  # never silently proceed/force in scripted mode
         _stop_bar()
         reason = info.get("reason") or (
             "OneView flagged this update as potentially disruptive and refused "
@@ -3128,18 +3134,41 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
         body = f"[yellow]{reason}[/yellow]"
         if resolution:
             body += f"\n\n[bold]Resolution:[/bold] {resolution}"
+        for u in info.get("uplinks") or []:
+            head = f"\n\n[bold]Uplink set [cyan]{u.get('name', '?')}[/cyan]"
+            if u.get("li_name"):
+                head += f"[/bold] (on {u['li_name']})"
+            else:
+                head += "[/bold]"
+            if u.get("status"):
+                head += f" — status [yellow]{u['status']}[/yellow]"
+            body += head
+            for leg in u.get("legs", []):
+                sp = leg.get("speed") or ""
+                sp = f"{sp}G" if sp and sp != "unknown" else "no link"
+                body += (
+                    f"\n    {leg.get('location', '?')} {leg.get('port', '')}: "
+                    f"{leg.get('state', '?')}, {sp}"
+                )
+            if u.get("note"):
+                body += f"\n    → {u['note']}"
         console.print(Panel(
             body,
             title=f"⚠ Validation warning — {info.get('name')}", border_style="yellow",
             subtitle="Review the warnings. If the conditions are acceptable, then click OK to proceed.",
             subtitle_align="left"))
-        # markup=False: "[y/N]" would otherwise be parsed as (invalid, silently
-        # dropped) Rich markup, leaving the operator with no visible hint of
-        # what to type -- which is exactly what happened live: the "[y/N]"
-        # vanished, and "OK" typed to match our own "click OK" wording above
-        # wasn't recognized as yes/no, silently declining.
-        ans = console.input("Proceed anyway despite this warning? [y/N]: ", markup=False)
-        return _is_affirmative(ans)
+        # markup=False on the input so bracketed hints render literally rather
+        # than being parsed (and silently dropped) as Rich markup.
+        console.print(
+            "[bold]Choose an action:[/bold]\n"
+            "  [cyan]A[/cyan]) Abort — fix the uplink redundancy above first "
+            "(recommended, no disruption)\n"
+            "  [cyan]B[/cyan]) Force the update through now — [red]disruptive[/red]: "
+            "the affected uplinks (and any server profiles riding them) may briefly "
+            "lose connectivity"
+        )
+        ans = console.input("Your choice [A/b]: ", markup=False).strip().lower()
+        return "force" if ans in ("b", "f", "force") else "abort"
 
     factory = _oneview_client_factory()
     try:
@@ -3199,9 +3228,20 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
             "nothing was changed.\n"
             f"[dim]{reason}[/dim]\n"
             + (f"[dim]Resolution: {resolution}[/dim]\n" if resolution else "")
-            + "Re-run and answer 'y' at the validation-warning prompt to proceed anyway "
-            "(or pass [bold]--force[/bold]/[bold]--yes[/bold] to skip the prompt), or fix "
-            "the reported issue first."
+        )
+        for u in last.get("blocked_uplinks") or []:
+            note = u.get("note") or ""
+            console.print(
+                f"[dim] • {u.get('name', '?')}"
+                + (f" (on {u['li_name']})" if u.get("li_name") else "")
+                + (f": {note}" if note else "")
+                + "[/dim]"
+            )
+        console.print(
+            "Re-run interactively and choose [bold]B[/bold] at the warning to force it through "
+            "([red]disruptive[/red]), or pass [bold]--force[/bold] to do the same "
+            "non-interactively — or fix the uplink redundancy above first for a clean, "
+            "non-disruptive update."
         )
     elif status == "unverified":
         # OneView itself reported "Completed" -- unlike "blocked" there's no

@@ -763,7 +763,30 @@ async def test_run_execute_reports_failure_and_stops():
 
 
 @pytest.mark.asyncio
-async def test_run_execute_force_bypasses_nondisruptive_validation():
+async def test_run_execute_failed_surfaces_task_error_reason():
+    """A failed firmware task must carry OneView's own actionable error (e.g.
+    SERVER_NOT_POWERED_OFF_FOR_LE_FIRMWARE_UPDATE) so the CLI can show it
+    instead of a useless 'check the UI' -- the reason + recommended action
+    live in the task's taskErrors."""
+    fake = FakeClient(
+        task_state="Error",
+        own_task_errors=[{
+            "errorCode": "SERVER_NOT_POWERED_OFF_FOR_LE_FIRMWARE_UPDATE",
+            "message": "The following servers: Enclosure-01, bay 1 are currently "
+                       "powered on. Firmware update cannot be initiated until the "
+                       "listed servers within the logical enclosure are powered off.",
+            "recommendedActions": ["Power off the listed servers and retry the operation."],
+        }],
+    )
+    res = await run_ssp_apply(
+        lambda: fake, baseline=_newest(),
+        le_targets=[normalize_le(LE_RAW)], profile_targets=[],
+        execute=True, confirm=lambda plan: True, sleeper=_noop_sleep,
+    )
+    assert res["status"] == "failed"
+    last = res["results"][-1]
+    assert "powered on" in last["failed_reason"]
+    assert "Power off the listed servers" in last["failed_resolution"]
     """--force must also skip OneView's non-disruptive-fabric guard, not just
     forceInstallFirmware -- otherwise a non-redundant fabric silently blocks
     the update no matter what --force was documented to do."""

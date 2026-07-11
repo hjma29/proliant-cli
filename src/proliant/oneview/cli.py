@@ -2178,6 +2178,102 @@ async def _cmd_release(args: argparse.Namespace) -> None:
     await _async_release_matrix(args)
 
 
+# ── proliant oneview activity (GUI Activity feed: tasks + alerts) ─────────────
+
+_ACTIVITY_STATE_STYLE = {
+    # task states
+    "completed": "green", "running": "cyan", "warning": "yellow",
+    "error": "red", "terminated": "red", "timeout": "red",
+    # alert states
+    "active": "yellow", "locked": "yellow", "cleared": "dim",
+}
+_ACTIVITY_SEVERITY_STYLE = {
+    "ok": "green", "warning": "yellow", "critical": "red", "disabled": "dim",
+    "unknown": "dim",
+}
+
+
+def _activity_state_markup(row: dict) -> str:
+    """Colour a row's State cell. Alerts fold severity in (e.g. Cleared but
+    was Critical) so a glance matches the GUI's severity dot + state label."""
+    state = row.get("state") or ""
+    style = _ACTIVITY_STATE_STYLE.get(state.lower(), "white")
+    text = state or "—"
+    if row.get("kind") == "alert" and row.get("severity"):
+        sev = row["severity"]
+        sev_style = _ACTIVITY_SEVERITY_STYLE.get(sev.lower(), "white")
+        # Only annotate severity when it adds signal (not a plain OK/cleared).
+        if sev.lower() not in ("ok",):
+            text = f"{state} [{sev_style}]({sev})[/{sev_style}]"
+    return f"[{style}]{text}[/{style}]"
+
+
+async def _async_activity(args: argparse.Namespace) -> None:
+    from proliant.oneview.activity import fetch_activity
+
+    json_mode = getattr(args, "json_output", False) or get_output_mode() == OutputMode.JSON
+    console = get_console()
+
+    include_tasks = not getattr(args, "alerts_only", False)
+    include_alerts = not getattr(args, "tasks_only", False)
+    limit = getattr(args, "limit", 20) or 20
+
+    async with _load_client() as client:
+        with console.status("[dim]Fetching OneView activity…[/dim]"):
+            rows = await fetch_activity(
+                client, limit=limit,
+                include_tasks=include_tasks, include_alerts=include_alerts,
+                resource=getattr(args, "resource", None),
+                state=getattr(args, "state", None),
+            )
+
+    if json_mode:
+        print_json({"activity": rows})
+        return
+
+    from proliant.oneview.activity import format_local
+
+    table = make_table(
+        "OneView Activity",
+        ("Name", {"no_wrap": False, "overflow": "fold", "min_width": 24}),
+        ("Resource", {"no_wrap": True, "overflow": "ellipsis"}),
+        ("Date", {"no_wrap": True}),
+        ("Duration", {"no_wrap": True, "justify": "right"}),
+        ("State", {"no_wrap": True}),
+        ("Owner", {"no_wrap": True}),
+    )
+    for r in rows:
+        marker = "•" if r["kind"] == "task" else "!"
+        marker_style = "cyan" if r["kind"] == "task" else "magenta"
+        pct = r.get("percent")
+        dur = r.get("duration") or ""
+        if r["kind"] == "task" and (r.get("state") or "").lower() == "running" and pct is not None:
+            dur = f"{pct}%"
+        name = r["name"] or "—"
+        table.add_row(
+            f"[{marker_style}]{marker}[/{marker_style}] {name}",
+            _short_server_name(r["resource"]) or "—",
+            format_local(r["created"]),
+            dur or "—",
+            _activity_state_markup(r),
+            r["owner"] or "[dim]System[/dim]",
+        )
+
+    if not rows:
+        console.print("[dim]No activity found.[/dim]")
+        return
+    console.print(table)
+    console.print(
+        "[dim]• = task (an operation OneView ran)   ! = alert (a health/condition notice). "
+        "Mirrors the OneView GUI Activity page.[/dim]",
+        highlight=False,
+    )
+
+
+async def _cmd_activity(args: argparse.Namespace) -> None:
+    await _async_activity(args)
+
+
 # ── proliant oneview update appliance readiness / cleanup ─────────────────────
 
 _VERDICT_STYLE = {"PASS": "green", "WARN": "yellow", "FAIL": "red"}
@@ -2934,9 +3030,16 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
     elif status == "failed":
         done = result.get("results", [])
         last = done[-1] if done else {}
-        console.print(f"\n[red]SSP apply failed[/red] on [bold]{last.get('name', '?')}[/bold] "
-                      f"({last.get('status') or last.get('state') or 'error'}). "
-                      "Check the OneView UI / 'proliant oneview reports'.")
+        reason = last.get("failed_reason") or ""
+        resolution = last.get("failed_resolution") or ""
+        console.print(
+            f"\n[red]SSP apply failed[/red] on [bold]{last.get('name', '?')}[/bold] "
+            f"({last.get('status') or last.get('state') or 'error'}).\n"
+            + (f"[dim]{reason}[/dim]\n" if reason else "")
+            + (f"[dim]Resolution: {resolution}[/dim]\n" if resolution else "")
+            + "See [bold]proliant oneview activity[/bold] (or the OneView UI Activity page) "
+            "for the full task detail."
+        )
     elif status == "blocked":
         done = result.get("results", [])
         last = done[-1] if done else {}
@@ -2971,8 +3074,8 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
             f"[dim]{reason}[/dim]\n"
             "This can happen if OneView's internal state takes a moment to catch up after "
             "a task finishes. Check [bold]proliant oneview interconnects describe[/bold] or "
-            "the OneView UI Activity log to confirm the real installed firmware before "
-            "trusting this result."
+            "[bold]proliant oneview activity[/bold] to confirm the real installed firmware "
+            "before trusting this result."
         )
 
 
@@ -3511,6 +3614,9 @@ examples:
   proliant oneview server-profiles describe "ocp-single-node"
   proliant oneview reports memory
   proliant oneview release                              Composer <-> SSP compatibility matrix
+  proliant oneview activity                             Recent tasks + alerts (GUI Activity feed)
+  proliant oneview activity --resource LE01 --limit 30  Filter the feed to one resource
+  proliant oneview activity --state Error               Only failed operations
   proliant oneview update enclosure LE01                 Plan an SSP rollout (shared infra only)
   proliant oneview update enclosure LE01 --baseline SY-2026.01.02 --scope shared-infra-and-profiles
                                                           Plan shared infra + every profile in LE01
@@ -3689,6 +3795,30 @@ examples:
                     "-- which SSP baseline is recommended vs. additionally supported for each "
                     "OneView version. Marks the row matching the active appliance when reachable.")
     p_release.set_defaults(func=_cmd_release)
+
+    # ── activity (GUI Activity feed: tasks + alerts merged) ────────────────
+    p_activity = sub.add_parser("activity",
+        help="Recent OneView activity (tasks + alerts) — mirrors the GUI Activity page",
+        description="Show OneView's Activity feed: named operations it ran (/rest/tasks -- "
+                    "firmware updates, refreshes, inventory collection) merged with health "
+                    "and condition alerts (/rest/alerts), newest first. This is where a "
+                    "firmware update's real per-phase progress and its actual failure reason "
+                    "show up — the same view the OneView GUI's Activity page presents.")
+    p_activity.add_argument("--limit", "-n", type=int, default=20, metavar="N",
+        help="Maximum number of activity rows to show (default: 20).").completer = suppress_file_completion()  # type: ignore[attr-defined]
+    act_res = p_activity.add_argument("--resource", "-r", metavar="NAME",
+        help="Only rows whose associated resource name contains this text "
+             "(e.g. LE01, Enclosure-01).")
+    act_res.completer = suppress_file_completion()  # type: ignore[attr-defined]
+    act_state = p_activity.add_argument("--state", "-s", metavar="STATE",
+        help="Only rows in this state (e.g. Error, Warning, Running, Completed, Active).")
+    act_state.completer = suppress_file_completion()  # type: ignore[attr-defined]
+    act_grp = p_activity.add_mutually_exclusive_group()
+    act_grp.add_argument("--tasks-only", action="store_true",
+        help="Show only tasks (operations), not health/condition alerts.")
+    act_grp.add_argument("--alerts-only", action="store_true",
+        help="Show only alerts (health/condition notices), not tasks.")
+    p_activity.set_defaults(func=_cmd_activity)
 
     # ── reports ───────────────────────────────────────────────────────────
     p_reports = sub.add_parser("reports", help="Fleet hardware reports")

@@ -115,6 +115,33 @@ class TestParserWiring:
         args = parser.parse_args(["release"])
         assert args.func is _cmd_release
 
+    def test_parser_activity_parses_defaults(self):
+        from proliant.oneview.cli import _build_parser, _cmd_activity
+        parser = _build_parser()
+        args = parser.parse_args(["activity"])
+        assert args.func is _cmd_activity
+        assert args.limit == 20
+        assert args.resource is None
+        assert args.state is None
+        assert args.tasks_only is False
+        assert args.alerts_only is False
+
+    def test_parser_activity_parses_filters(self):
+        from proliant.oneview.cli import _build_parser, _cmd_activity
+        parser = _build_parser()
+        args = parser.parse_args(
+            ["activity", "--resource", "LE01", "--state", "Error", "--limit", "5", "--tasks-only"])
+        assert args.resource == "LE01"
+        assert args.state == "Error"
+        assert args.limit == 5
+        assert args.tasks_only is True
+
+    def test_parser_activity_tasks_and_alerts_only_mutually_exclusive(self):
+        from proliant.oneview.cli import _build_parser
+        parser = _build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["activity", "--tasks-only", "--alerts-only"])
+
 
 class TestIsAffirmative:
     """`_is_affirmative()` backs the validation-warning "Proceed anyway?"

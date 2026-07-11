@@ -923,6 +923,17 @@ async def run_ssp_apply(
                     client, resp, emit, sleeper, poll_interval_s, task_timeout_s
                 )
                 if is_task_failed(task):
+                    # Surface OneView's own error reason (e.g.
+                    # SERVER_NOT_POWERED_OFF_FOR_LE_FIRMWARE_UPDATE) instead of
+                    # leaving the CLI to say a useless "check the UI" -- the
+                    # actionable message + recommended action live in the
+                    # task's (or a child task's) taskErrors, the same source
+                    # the Warning/blocked path already reads.
+                    reason = await _task_block_reason(client, task["uri"])
+                    if reason["warning"]:
+                        task["failed_reason"] = reason["warning"]
+                    if reason["resolution"]:
+                        task["failed_resolution"] = reason["resolution"]
                     return "failed", task
                 if (task.get("state") or "").lower() == "warning":
                     # A "Warning" task at 100% does NOT mean the firmware was

@@ -1238,6 +1238,15 @@ async def run_ssp_apply(
                         task["blocked_reason"] = reason["warning"]
                         task["blocked_resolution"] = reason["resolution"]
                         task["blocked_uplinks"] = uplinks
+                        # ``bypass_validation`` is True here only if force/proceed
+                        # was already in effect (either --force up front or the
+                        # operator picked B/proceed and we retried once). If it's
+                        # still blocked with the guard bypassed, forcing did NOT
+                        # help -- an Orchestrated update simply can't flash a
+                        # single-legged fabric, so telling the operator to "force
+                        # it" again is a dead end. The CLI uses this to steer them
+                        # to the real fix (restore redundancy) or Parallel mode.
+                        task["blocked_forced"] = bool(bypass_validation)
                         return "blocked", task
                 elif actual_checker is not None:
                     # Don't trust a plain "Completed" report unconditionally

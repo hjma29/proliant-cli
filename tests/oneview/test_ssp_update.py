@@ -400,6 +400,7 @@ class FakeClient:
     def __init__(
         self, *, task_state="Completed", profile=None,
         le_get_response=None, children_tasks=None, blocked_until_forced=False,
+        always_blocked=False,
         own_task_errors=None, raw_lis=None, li_firmware=None, task_children=None,
     ):
         self.task_state = task_state
@@ -420,6 +421,11 @@ class FakeClient:
         # back "Completed" with the baseline actually moved -- lets tests
         # exercise the interactive retry-after-confirm path end to end.
         self._blocked_until_forced = blocked_until_forced
+        # When True: EVERY patch (even one retried with force + validation
+        # bypassed) comes back "Warning" with the baseline unchanged -- the
+        # real-world single-legged-fabric case where forcing an Orchestrated
+        # update still can't apply. Lets tests prove blocked_forced is set.
+        self._always_blocked = always_blocked
         self._patch_count = 0
         self.calls: list[tuple] = []
         self.patch_headers: list = []
@@ -449,7 +455,9 @@ class FakeClient:
                     return {"members": self._task_children.get(m.group(1), [])}
             return {"members": self._children_tasks}
         if "/rest/tasks/" in uri:
-            if self._blocked_until_forced:
+            if self._always_blocked:
+                state = "Warning"
+            elif self._blocked_until_forced:
                 state = "Warning" if self._patch_count <= 1 else "Completed"
             else:
                 state = self.task_state
@@ -459,6 +467,9 @@ class FakeClient:
             return resp
         if uri.startswith("/rest/server-profiles/"):
             return dict(self._profile, uri=uri)
+        if self._always_blocked:
+            # Baseline never moves, no matter how many times we (force-)patch.
+            return self._le_get_response or {}
         if self._blocked_until_forced:
             if self._patch_count <= 1:
                 return self._le_get_response or {}
@@ -1115,7 +1126,31 @@ async def test_run_execute_blocked_force_decision_escalates_to_force_install():
 
 
 @pytest.mark.asyncio
-async def test_run_execute_blocked_carries_uplink_diagnostic():
+async def test_run_execute_blocked_forced_but_still_blocked_sets_blocked_forced():
+    """Real single-legged-fabric case: the operator chooses "force" (B), but an
+    Orchestrated update still can't apply a fabric with only one live leg, so it
+    stays blocked. The result must be flagged blocked_forced=True so the CLI can
+    stop telling the operator to "force it" (which they already did) and instead
+    steer them to fix redundancy or switch to Parallel mode."""
+    fake = FakeClient(
+        always_blocked=True,
+        le_get_response={"firmware": {"firmwareBaselineUri": "/rest/firmware-drivers/SSP_2023_05"}},
+        children_tasks=[{"taskErrors": [
+            {"details": "Non-redundant fabric; update would disrupt connectivity."}
+        ]}],
+    )
+    res = await run_ssp_apply(
+        lambda: fake, baseline=_newest(),
+        le_targets=[normalize_le(LE_RAW)], profile_targets=[],
+        execute=True, confirm=lambda plan: True, sleeper=_noop_sleep,
+        on_validation_blocked=lambda info: "force",
+    )
+    assert res["status"] == "blocked"
+    assert res["results"][-1]["blocked_forced"] is True
+    # force was actually attempted on the retry (guard cleared + force on) before
+    # OneView refused again
+    assert fake.patch_bodies[-1][0]["value"]["validateIfLIFirmwareUpdateIsNonDisruptive"] is False
+    assert fake.patch_bodies[-1][0]["value"]["forceInstallFirmware"] is True
     """A blocked result carries the non-redundant-uplink diagnostic so the CLI
     can show exactly which uplink set / leg lost redundancy."""
     fake = UplinkDiagClient(
@@ -1141,6 +1176,8 @@ async def test_run_execute_blocked_carries_uplink_diagnostic():
     assert ups and ups[0]["name"] == "pvlan-uplinkset"
     assert ups[0]["li_name"] == "LE01-LIG-VC100"
     assert "Bay 6" in ups[0]["note"]  # names the down leg
+    # operator aborted at the warning -> force was never attempted
+    assert res["results"][-1]["blocked_forced"] is False
 
 
 @pytest.mark.asyncio

@@ -3167,6 +3167,15 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
             "the affected uplinks (and any server profiles riding them) may briefly "
             "lose connectivity"
         )
+        if interconnect_activation_mode != "Parallel":
+            # In Orchestrated mode, force can't flash a fabric that has only one
+            # live leg (there's no redundant side to sequence). Say so up front so
+            # the operator isn't surprised when B still gets refused.
+            console.print(
+                "[dim]     Note: in Orchestrated mode, forcing may still be refused if an uplink "
+                "set has only one live leg — a single-legged fabric can only be updated by fixing "
+                "redundancy or re-running with --activation-mode parallel.[/dim]"
+            )
         ans = console.input("Your choice [A/b]: ", markup=False).strip().lower()
         return "force" if ans in ("b", "f", "force") else "abort"
 
@@ -3237,12 +3246,35 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
                 + (f": {note}" if note else "")
                 + "[/dim]"
             )
-        console.print(
-            "Re-run interactively and choose [bold]B[/bold] at the warning to force it through "
-            "([red]disruptive[/red]), or pass [bold]--force[/bold] to do the same "
-            "non-interactively — or fix the uplink redundancy above first for a clean, "
-            "non-disruptive update."
-        )
+        if last.get("blocked_forced"):
+            # The operator already forced it (chose B or passed --force) and
+            # OneView STILL refused -- so "force it again" is a dead end. Steer
+            # them to the paths that can actually update a single-legged fabric.
+            if interconnect_activation_mode == "Parallel":
+                console.print(
+                    "You already forced this in [bold]Parallel[/bold] mode and OneView still "
+                    "refused, so the block is not just the non-disruptive guard — check the "
+                    "OneView UI Activity log and the uplink/interconnect health above before "
+                    "retrying."
+                )
+            else:
+                console.print(
+                    "Forcing did [bold]not[/bold] help: an [bold]Orchestrated[/bold] update flashes "
+                    "one redundant leg at a time, so it cannot update a fabric that has only one "
+                    "live leg — not even with force. To proceed, either:\n"
+                    "  • [green]restore redundancy[/green] on the uplink set(s) above (bring the "
+                    "down leg up), then re-run — clean, no outage; or\n"
+                    "  • re-run with [bold]--activation-mode parallel[/bold] to flash all "
+                    "interconnects at once — this [red]will drop the fabric[/red] (and any server "
+                    "profiles riding it) for the duration of the update."
+                )
+        else:
+            console.print(
+                "Re-run interactively and choose [bold]B[/bold] at the warning to force it through "
+                "([red]disruptive[/red]), or pass [bold]--force[/bold] to do the same "
+                "non-interactively — or fix the uplink redundancy above first for a clean, "
+                "non-disruptive update."
+            )
     elif status == "unverified":
         # OneView itself reported "Completed" -- unlike "blocked" there's no
         # known validation reason to retry with force, so this isn't treated

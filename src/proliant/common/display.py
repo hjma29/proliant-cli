@@ -33,6 +33,33 @@ class OutputMode(Enum):
 # has its own independent output state without cross-thread pollution.
 _tls = threading.local()
 
+_utf8_stdio_done = False
+
+
+def ensure_utf8_stdio() -> None:
+    """Force stdout/stderr to UTF-8 so Rich glyphs never crash on Windows.
+
+    When output is piped/redirected on Windows (a non-TTY), Rich falls back to
+    the legacy console renderer which encodes with the OS code page (cp1252 on
+    most systems). Glyphs used throughout the UI — ``↔``, ``✓``, ``⚠``, ``•``,
+    box-drawing, etc. — have no cp1252 mapping and raise ``UnicodeEncodeError``,
+    crashing the command mid-render. Reconfiguring the streams to UTF-8 with
+    ``errors="replace"`` makes redirected output robust regardless of the
+    console code page. Idempotent and best-effort — never raises (pytest's
+    capture streams, for instance, don't support ``reconfigure``)."""
+    global _utf8_stdio_done
+    if _utf8_stdio_done:
+        return
+    _utf8_stdio_done = True
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):  # already detached / unsupported
+            pass
+
 
 def set_output_mode(mode: OutputMode) -> None:
     """Set per-thread output mode. Call early in CLI main() based on --json flag."""
@@ -50,6 +77,7 @@ def get_console() -> Console:
     In JSON mode, console writes to stderr so stdout is reserved for data.
     """
     if getattr(_tls, "console", None) is None:
+        ensure_utf8_stdio()
         if get_output_mode() == OutputMode.JSON:
             _tls.console = Console(stderr=True)
         else:

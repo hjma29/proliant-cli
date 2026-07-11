@@ -2861,7 +2861,7 @@ async def _wizard_update_enclosure(args: argparse.Namespace) -> None:
                      "requires real interconnect redundancy"),
                     ("parallel",
                      "[bold red]Parallel[/bold red] — flashes every interconnect at once, regardless "
-                     "of redundancy; the only way to force a non-redundant fabric, expect a network outage"),
+                     "of redundancy; a full network outage, and compute modules must be powered off first"),
                 ]
                 default_index = _wizard_default_index(options, state["activation_mode"], 0)
                 state["activation_mode"] = _wizard_choice(
@@ -4023,12 +4023,12 @@ examples:
     p_upd_enc.add_argument("--activation-mode", choices=("orchestrated", "parallel"),
         default="orchestrated",
         help="Interconnect activation mode (matches OneView's own -InterconnectActivationMode). "
-             "'orchestrated' (default) flashes one redundant side at a time so the fabric stays "
-             "up, but requires real redundancy -- a non-redundant Logical Interconnect keeps "
-             "failing its own validation no matter how many times --force is retried. "
-             "'parallel' flashes every interconnect at once regardless of redundancy -- the "
-             "only way to force firmware onto a non-redundant fabric -- at the cost of a real "
-             "network outage during the update.")
+             "'orchestrated' (default) flashes one side of each redundant pair at a time so the "
+             "fabric stays up; if an uplink set isn't redundant OneView raises a non-disruptive "
+             "validation warning, which you can proceed through (as in the GUI) to apply it with "
+             "a brief interruption on those uplinks. 'parallel' flashes every interconnect at "
+             "once regardless of redundancy -- a full network outage during the update, and "
+             "OneView requires the affected compute modules to be powered off first.")
     p_upd_enc.add_argument("--force", action="store_true",
         help="Force reinstall even if already at the baseline / bypass non-disruptive validation.")
     p_upd_enc.add_argument("--execute", action="store_true",

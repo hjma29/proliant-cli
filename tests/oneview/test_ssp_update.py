@@ -8,6 +8,8 @@ task handling, and the plan-vs-execute / ordering / failure branches.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from proliant.oneview import ssp_update
@@ -392,7 +394,7 @@ class FakeClient:
     def __init__(
         self, *, task_state="Completed", profile=None,
         le_get_response=None, children_tasks=None, blocked_until_forced=False,
-        own_task_errors=None, raw_lis=None, li_firmware=None,
+        own_task_errors=None, raw_lis=None, li_firmware=None, task_children=None,
     ):
         self.task_state = task_state
         self._profile = profile or PROFILE_RAW
@@ -401,6 +403,11 @@ class FakeClient:
         self._own_task_errors = own_task_errors
         self._raw_lis = raw_lis or []
         self._li_firmware = li_firmware or {}
+        # Optional parentTaskUri -> [child task dict] map, so a test can build a
+        # multi-level task tree and prove _task_block_reason descends past the
+        # direct children to a grandchild's taskErrors. When None, every
+        # parentTaskUri filter returns the flat _children_tasks list (legacy).
+        self._task_children = task_children
         # When True: the first PATCH always comes back "Warning" with the
         # baseline unchanged (simulating OneView's validation guard); a
         # second PATCH (retried with force, i.e. validation bypassed) comes
@@ -430,6 +437,10 @@ class FakeClient:
         if uri.endswith("/firmware") and uri in self._li_firmware:
             return self._li_firmware[uri]
         if uri == "/rest/tasks":
+            if self._task_children is not None and params:
+                m = re.search(r"parentTaskUri='([^']*)'", params.get("filter", ""))
+                if m:
+                    return {"members": self._task_children.get(m.group(1), [])}
             return {"members": self._children_tasks}
         if "/rest/tasks/" in uri:
             if self._blocked_until_forced:
@@ -486,6 +497,52 @@ async def test_poll_task_runs_to_completion():
                         sleeper=_noop_sleep, interval_s=1, timeout_s=100)
     assert is_task_done(t)
     assert seen[-1] == 100
+
+
+@pytest.mark.asyncio
+async def test_poll_task_retries_transient_connection_error():
+    """A transient blip (OneViewError) mid-poll must not abort the rollout --
+    OneView keeps running the task, so the poll recovers and completes."""
+    from proliant.oneview.client import OneViewError
+
+    class _C:
+        def __init__(self):
+            self.calls = 0
+
+        async def get(self, uri, params=None):
+            if uri != "/rest/tasks/x":
+                return {}  # descendant lookup: no children
+            self.calls += 1
+            if self.calls == 2:
+                raise OneViewError("Cannot reach OneView appliance: timed out")
+            if self.calls >= 3:
+                return {"uri": uri, "taskState": "Completed", "percentComplete": 100}
+            return {"uri": uri, "taskState": "Running", "percentComplete": 10}
+
+    events = []
+    t = await poll_task(_C(), "/rest/tasks/x",
+                        emit=lambda k, d: events.append(d),
+                        sleeper=_noop_sleep, interval_s=1, timeout_s=100)
+    assert is_task_done(t)
+    # A "Reconnecting" tick was surfaced during the blip, then it recovered.
+    assert any(e.get("state") == "Reconnecting" for e in events)
+    assert events[-1].get("percent") == 100
+
+
+@pytest.mark.asyncio
+async def test_poll_task_gives_up_after_sustained_disconnect():
+    """Sustained loss of contact beyond the grace window re-raises rather than
+    hanging forever."""
+    from proliant.oneview.client import OneViewError
+
+    class _C:
+        async def get(self, uri, params=None):
+            raise OneViewError("Cannot reach OneView appliance: down")
+
+    with pytest.raises(OneViewError):
+        await poll_task(_C(), "/rest/tasks/x", emit=lambda k, d: None,
+                        sleeper=_noop_sleep, interval_s=10, timeout_s=1000,
+                        reconnect_grace_s=30)
 
 
 class _ChildTaskClient:
@@ -941,11 +998,12 @@ async def test_run_execute_completed_with_actual_baseline_matching_is_applied():
 
 
 @pytest.mark.asyncio
-async def test_run_execute_blocked_then_confirmed_retries_with_force():
+async def test_run_execute_blocked_then_confirmed_retries_without_forcing():
     """Mirrors the OneView GUI's own validation-warning modal ("Review the
     warnings... click OK to proceed"): when on_validation_blocked confirms,
-    retry the *same* target once with force -- no need to abort and
-    re-invoke the whole command with --force."""
+    retry the *same* target once with only the non-disruptive validation guard
+    cleared -- NOT with forceInstallFirmware. Proceeding through the warning is
+    a separate decision from force-reinstalling, exactly as in the GUI."""
     fake = FakeClient(
         blocked_until_forced=True,
         le_get_response={"firmware": {"firmwareBaselineUri": "/rest/firmware-drivers/SSP_2023_05"}},
@@ -972,6 +1030,10 @@ async def test_run_execute_blocked_then_confirmed_retries_with_force():
     # first attempt kept validation on, retry bypassed it
     assert fake.patch_bodies[0][0]["value"]["validateIfLIFirmwareUpdateIsNonDisruptive"] is True
     assert fake.patch_bodies[1][0]["value"]["validateIfLIFirmwareUpdateIsNonDisruptive"] is False
+    # ...but proceeding through the warning must NOT escalate to force-install
+    # -- force is only ever set when the operator explicitly passes --force.
+    assert fake.patch_bodies[0][0]["value"]["forceInstallFirmware"] is False
+    assert fake.patch_bodies[1][0]["value"]["forceInstallFirmware"] is False
 
 
 @pytest.mark.asyncio
@@ -1038,16 +1100,20 @@ async def test_run_execute_passes_parallel_activation_mode_to_le_patch():
 
 
 @pytest.mark.asyncio
-async def test_run_execute_blocked_hint_suggests_parallel_mode_when_still_orchestrated():
-    """When a logical-enclosure target is blocked and the caller is still on
-    the default Orchestrated activation mode, the blocked_resolution must
-    point the operator at --activation-mode parallel -- otherwise retrying
-    with --force alone (which this same suite proves is a no-op against a
-    non-redundant fabric) looks like the only option."""
+async def test_run_execute_blocked_resolution_has_no_injected_hardware_advice():
+    """A blocked logical-enclosure update must surface ONLY OneView's own
+    reason + recommended actions -- never fabricated 'use --activation-mode
+    parallel' / 'power off the servers' guidance. Proceeding through the same
+    warning (as the GUI does) can complete an Orchestrated update on a
+    partially non-redundant fabric, so prescribing Parallel-with-outage as the
+    only path was wrong and is no longer injected."""
     fake = FakeClient(
         blocked_until_forced=True,
         le_get_response={"firmware": {"firmwareBaselineUri": "/rest/firmware-drivers/SSP_2023_05"}},
-        children_tasks=[{"taskErrors": [{"details": "Non-redundant fabric."}]}],
+        children_tasks=[{"taskErrors": [{
+            "details": "Non-redundant fabric.",
+            "recommendedActions": ["Configure redundant connectivity for the uplink set."],
+        }]}],
     )
     res = await run_ssp_apply(
         lambda: fake, baseline=_newest(),
@@ -1056,14 +1122,18 @@ async def test_run_execute_blocked_hint_suggests_parallel_mode_when_still_orches
         on_validation_blocked=lambda info: False,
     )
     assert res["status"] == "blocked"
-    assert "--activation-mode parallel" in res["results"][-1]["blocked_resolution"]
+    resolution = res["results"][-1]["blocked_resolution"] or ""
+    # OneView's own recommended action is shown verbatim...
+    assert "Configure redundant connectivity" in resolution
+    # ...and nothing prescriptive is fabricated on top of it.
+    assert "--activation-mode parallel" not in resolution
+    assert "power off" not in resolution.lower()
 
 
 @pytest.mark.asyncio
-async def test_run_execute_blocked_no_parallel_hint_when_already_parallel():
-    """If the caller already retried with --activation-mode parallel and it
-    still gets blocked (e.g. some other validation issue), don't suggest
-    switching to the mode that's already in effect."""
+async def test_run_execute_blocked_on_decline_never_force_installs():
+    """Declining the validation-warning prompt stops after a single attempt
+    and never silently escalates to forceInstallFirmware."""
     fake = FakeClient(
         blocked_until_forced=True,
         le_get_response={"firmware": {"firmwareBaselineUri": "/rest/firmware-drivers/SSP_2023_05"}},
@@ -1074,10 +1144,10 @@ async def test_run_execute_blocked_no_parallel_hint_when_already_parallel():
         le_targets=[normalize_le(LE_RAW)], profile_targets=[],
         execute=True, confirm=lambda plan: True, sleeper=_noop_sleep,
         on_validation_blocked=lambda info: False,
-        interconnect_activation_mode="Parallel",
     )
     assert res["status"] == "blocked"
-    assert "--activation-mode parallel" not in res["results"][-1]["blocked_resolution"]
+    assert len(fake.patch_bodies) == 1
+    assert fake.patch_bodies[0][0]["value"]["forceInstallFirmware"] is False
 
 
 # ── _task_block_reason / _clean_embedded_refs (matches OneView's own GUI text) ─
@@ -1160,4 +1230,31 @@ async def test_task_block_reason_falls_back_to_message_when_details_is_null():
     ]}])
     reason = await ssp_update._task_block_reason(fake, "/rest/tasks/le-task")
     assert reason["warning"] == "the real warning body"
+
+
+@pytest.mark.asyncio
+async def test_task_block_reason_descends_to_grandchild_task_errors():
+    # Reproduces the real live tree: "Logical enclosure firmware update"
+    # (no errors) -> "Update firmware" (per-LI, no errors) -> "Update firmware"
+    # (the VALIDATION_FAILED_FOR_LOGICAL_INTERCONNECT at depth 2). The reason
+    # must be pulled from the grandchild, not left blank as it was when only
+    # direct children were checked.
+    fake = FakeClient(task_children={
+        "/rest/tasks/le-task": [{"uri": "/rest/tasks/li", "taskErrors": []}],
+        "/rest/tasks/li": [{
+            "uri": "/rest/tasks/li-validate",
+            "taskErrors": [{
+                "errorCode": "VALIDATION_FAILED_FOR_LOGICAL_INTERCONNECT",
+                "message": "The logical interconnect does not have redundant "
+                           "connectivity configured for one or more uplink sets: "
+                           '{"name":"pvlan-uplinkset","uri":"/rest/x"}.',
+                "recommendedActions": ["Ensure redundancy is available for all "
+                                       "the logical interconnect uplink sets."],
+            }],
+        }],
+    })
+    reason = await ssp_update._task_block_reason(fake, "/rest/tasks/le-task")
+    assert "does not have redundant connectivity" in reason["warning"]
+    assert "pvlan-uplinkset" in reason["warning"]  # embedded ref blob collapsed to name
+    assert "Ensure redundancy is available" in reason["resolution"]
 

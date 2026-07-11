@@ -601,9 +601,13 @@ async def _task_block_reason(client: "OneViewClient", task_uri: str) -> dict[str
     ``message`` as a fallback, since OneView puts the real explanation in
     whichever field the parent/child task shape leaves free) is the warning
     body, and ``recommendedActions`` is the "Resolution:" steps. Some task
-    shapes instead carry this on a child task (``parentTaskUri=<task_uri>``),
-    checked as a fallback. Never raises: this is a diagnostic nicety layered
-    on top of the baseline-mismatch check that actually decides pass/fail.
+    shapes instead carry this on a *descendant* task, not the polled one: e.g.
+    "Logical enclosure firmware update" -> "Update firmware" (per-LI) ->
+    "Update firmware" (the actual ``VALIDATION_FAILED_FOR_LOGICAL_INTERCONNECT``
+    at depth 2). The whole subtree is walked breadth-first (bounded depth) so
+    that message surfaces instead of leaving the operator with a blank reason.
+    Never raises: this is a diagnostic nicety layered on top of the
+    baseline-mismatch check that actually decides pass/fail.
     """
     async def _errors_of(uri: str) -> list[dict]:
         try:
@@ -613,8 +617,24 @@ async def _task_block_reason(client: "OneViewClient", task_uri: str) -> dict[str
 
     errs = await _errors_of(task_uri)
     if not errs:
-        for child in await _child_tasks(client, task_uri):
-            errs.extend(child.get("taskErrors") or [])
+        # Descend the task tree level by level, stopping at the first level
+        # that yields any taskErrors. The trees OneView builds here are shallow
+        # (3-4 levels); the depth cap and the ``seen`` set keep this bounded and
+        # cycle-proof even if the API ever returns a task as its own ancestor.
+        frontier = [task_uri]
+        seen = {task_uri}
+        depth = 0
+        while frontier and not errs and depth < 4:
+            depth += 1
+            next_frontier: list[str] = []
+            for parent_uri in frontier:
+                for child in await _child_tasks(client, parent_uri):
+                    errs.extend(child.get("taskErrors") or [])
+                    child_uri = child.get("uri")
+                    if child_uri and child_uri not in seen:
+                        seen.add(child_uri)
+                        next_frontier.append(child_uri)
+            frontier = next_frontier
 
     warnings: list[str] = []
     resolutions: list[str] = []
@@ -705,6 +725,7 @@ async def poll_task(
     sleeper: Callable[[float], Any],
     interval_s: float,
     timeout_s: float,
+    reconnect_grace_s: float = 300.0,
 ) -> dict[str, Any]:
     """Poll a task to a terminal state, emitting ``task-progress`` each tick.
 
@@ -715,10 +736,41 @@ async def poll_task(
     rollout -- but done/failed detection below always uses the un-enriched
     root task, since a child task finishing early doesn't mean the rollout as
     a whole is done.
+
+    Tolerates transient loss of contact with the appliance. A firmware rollout
+    is exactly when brief management-network blips are most likely (interconnect
+    modules and frame link modules reboot as they flash), and OneView keeps
+    running the task server-side regardless of whether the CLI can reach it at
+    that instant -- so a single failed poll must not abort the whole monitored
+    update. On a connection error the poll is retried (surfacing a
+    "Reconnecting…" tick) until contact is regained; only sustained failure for
+    longer than ``reconnect_grace_s`` (or the overall ``timeout_s``) gives up
+    and re-raises.
     """
+    from proliant.oneview.client import OneViewError
+
     waited = 0.0
+    unreachable_for = 0.0
     while True:
-        task = normalize_task(await client.get(task_uri))
+        try:
+            raw = await client.get(task_uri)
+        except OneViewError as exc:
+            # Transient blip -- retry rather than aborting the rollout the
+            # appliance is still running. Give up only after sustained loss.
+            unreachable_for += interval_s
+            if unreachable_for > reconnect_grace_s or waited >= timeout_s:
+                raise
+            emit("task-progress", {
+                "state": "Reconnecting",
+                "stage": "Lost contact with the appliance, retrying…",
+                "percent": None,
+                "resource": "",
+            })
+            await sleeper(interval_s)
+            waited += interval_s
+            continue
+        unreachable_for = 0.0
+        task = normalize_task(raw)
         display = task if is_task_done(task) else await _enrich_with_active_descendant(client, task)
         emit("task-progress", display)
         if is_task_done(task):
@@ -816,17 +868,16 @@ async def run_ssp_apply(
 
     ``interconnect_activation_mode`` mirrors the OneView SDK's own
     ``-InterconnectActivationMode``: ``"Orchestrated"`` (default) flashes one
-    redundant side of each Logical Interconnect at a time so the fabric stays
-    up, but *requires* real redundancy to do so -- a Logical Interconnect with
-    no redundant partner will keep failing its own non-disruptive validation
-    no matter how many times ``force``/``on_validation_blocked`` bypass the
-    LE-level guard, since that per-LI check isn't gated by the LE's
-    ``forceInstallFirmware``/``validateIfLIFirmwareUpdateIsNonDisruptive``
-    fields at all (confirmed live: identical "does not have redundant
-    connectivity" sub-task failure on every retry). ``"Parallel"`` flashes
-    every interconnect at once regardless of redundancy -- the only way to
-    actually push firmware onto a non-redundant fabric -- at the cost of a
-    real network outage during the update.
+    side of each redundant Logical Interconnect pair at a time so the fabric
+    stays up. If an uplink set isn't redundant, OneView raises its
+    non-disruptive validation *warning* (a brief interruption on those uplinks
+    is possible) -- but, exactly as in the GUI, proceeding through that warning
+    (``on_validation_blocked`` -> ``True``, which clears
+    ``validateIfLIFirmwareUpdateIsNonDisruptive`` without touching
+    ``forceInstallFirmware``) can still complete the update. ``"Parallel"``
+    flashes every interconnect at once regardless of redundancy, at the cost of
+    a real network outage during the update, and OneView requires the affected
+    compute modules to be powered off first.
     """
     import asyncio
 
@@ -916,9 +967,17 @@ async def run_ssp_apply(
             ``"unverified"``.
             """
             force_this = force
+            # "Proceed through the non-disruptive validation warning" is a
+            # SEPARATE decision from "force-reinstall the firmware": the OneView
+            # GUI's own "Review the warnings... click OK to proceed" only clears
+            # validateIfLIFirmwareUpdateIsNonDisruptive -- it does NOT set
+            # forceInstallFirmware. --force turns on both guards up front; the
+            # interactive proceed below turns on only the validation bypass and
+            # leaves forceInstallFirmware exactly as the operator chose.
+            bypass_validation = force
             already_offered = False
             while True:
-                resp = await do_request(force_this)
+                resp = await do_request(force_this, bypass_validation)
                 task = await _await_task(
                     client, resp, emit, sleeper, poll_interval_s, task_timeout_s
                 )
@@ -957,37 +1016,31 @@ async def run_ssp_apply(
                     if not changed:
                         reason = await _task_block_reason(client, task["uri"])
                         if (
-                            not force_this and not already_offered
+                            not bypass_validation and not already_offered
                             and on_validation_blocked is not None
                             and on_validation_blocked({
                                 "kind": kind, "name": name,
                                 "reason": reason["warning"], "resolution": reason["resolution"],
                             })
                         ):
-                            force_this = True
+                            # Proceed exactly as the GUI does: clear the
+                            # non-disruptive validation guard, but do NOT
+                            # escalate to forceInstallFirmware -- force is only
+                            # ever set when the operator explicitly asked for it.
+                            bypass_validation = True
                             already_offered = True
                             emit("applying", {"kind": kind, "name": name, "retry": True})
                             continue
-                        resolution = reason["resolution"]
-                        if kind == "logical-enclosure" and interconnect_activation_mode.lower() == "orchestrated":
-                            # Orchestrated mode's own non-disruptive guard on
-                            # a Logical Interconnect isn't overridable by the
-                            # LE-level force/validate-bypass flags at all --
-                            # confirmed live: the same "does not have
-                            # redundant connectivity" sub-task failure recurs
-                            # identically no matter how many times this is
-                            # retried with force=True. Only Parallel mode
-                            # (disruptive) can actually apply it.
-                            hint = (
-                                "If this fabric is genuinely non-redundant, Orchestrated "
-                                "activation mode cannot apply this update non-disruptively "
-                                "no matter how many times --force is retried. Re-run with "
-                                "--activation-mode parallel to force it through (expect a "
-                                "brief network outage), or fix the redundancy issue above first."
-                            )
-                            resolution = f"{resolution}\n\n{hint}" if resolution else hint
+                        # Surface OneView's own reason + recommended actions
+                        # verbatim (the same text the GUI's warning modal
+                        # shows). Do not editorialize with hardware advice
+                        # (e.g. "power off servers" / "only Parallel works") --
+                        # that guidance was wrong: proceeding through this same
+                        # warning can complete an Orchestrated update on a
+                        # partially non-redundant fabric, just as it does in the
+                        # GUI. Let OneView's recommendedActions speak for itself.
                         task["blocked_reason"] = reason["warning"]
-                        task["blocked_resolution"] = resolution
+                        task["blocked_resolution"] = reason["resolution"]
                         return "blocked", task
                 elif actual_checker is not None:
                     # Don't trust a plain "Completed" report unconditionally
@@ -1020,18 +1073,15 @@ async def run_ssp_apply(
         for le in changing_les:
             emit("applying", {"kind": "logical-enclosure", "name": le["name"]})
 
-            async def _le_request(force_flag: bool, le=le) -> dict[str, Any]:
-                # --force also bypasses OneView's non-disruptive validation
-                # guard -- otherwise a non-redundant fabric makes OneView
-                # silently no-op the update rather than apply it. That guard
-                # is enforced by the "Orchestrated" per-LI update itself,
-                # though, not just the LE-level flags -- a genuinely
-                # non-redundant Logical Interconnect keeps failing even with
-                # force=True, and only interconnect_activation_mode="Parallel"
-                # can actually push firmware onto it (disruptively).
+            async def _le_request(force_flag: bool, bypass_validation: bool, le=le) -> dict[str, Any]:
+                # forceInstallFirmware (re-flash even if already at the target)
+                # and validateIfLIFirmwareUpdateIsNonDisruptive (OneView's
+                # non-redundant-fabric guard) are INDEPENDENT knobs -- passed
+                # separately so "proceed through the validation warning" matches
+                # the GUI exactly: guard off, force untouched.
                 patch = build_le_firmware_patch(
                     baseline_uri, scope=scope, force=force_flag,
-                    validate_nondisruptive=not force_flag,
+                    validate_nondisruptive=not bypass_validation,
                     update_mode=interconnect_activation_mode,
                 )
                 return await client.patch(le["uri"], patch, headers={"If-Match": "*"})
@@ -1053,7 +1103,10 @@ async def run_ssp_apply(
         for prof in changing_profs:
             emit("applying", {"kind": "server-profile", "name": prof["name"]})
 
-            async def _profile_request(force_flag: bool, prof=prof) -> dict[str, Any]:
+            async def _profile_request(force_flag: bool, bypass_validation: bool, prof=prof) -> dict[str, Any]:
+                # Server-profile firmware has no non-disruptive-validation guard
+                # to bypass (that's a Logical-Interconnect concept); accept
+                # bypass_validation for a uniform do_request signature, unused.
                 full = await client.get(prof["uri"])
                 body = build_profile_firmware_put(
                     full, baseline_uri, install_type=install_type, force=force_flag

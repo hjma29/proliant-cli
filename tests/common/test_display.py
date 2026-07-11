@@ -5,6 +5,7 @@ import pytest
 
 from proliant.common.display import (
     OutputMode,
+    ensure_utf8_stdio,
     get_console,
     get_output_mode,
     make_table,
@@ -109,6 +110,60 @@ class TestMakeTable:
         t = make_table("T", ("A", {}), ("B", {}))
         t.add_row("hello", "world")
         assert t.row_count == 1
+
+
+class TestEnsureUtf8Stdio:
+    """ensure_utf8_stdio makes redirected/piped output UTF-8 safe on Windows."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_flag(self, monkeypatch):
+        # Force each test to re-run the (normally once-only) reconfigure.
+        import proliant.common.display as disp
+        monkeypatch.setattr(disp, "_utf8_stdio_done", False)
+        yield
+
+    def _fake_stream(self, calls, name, *, raises=None):
+        class _S:
+            def reconfigure(self, **kw):
+                calls.append((name, kw))
+                if raises is not None:
+                    raise raises
+        return _S()
+
+    def test_reconfigures_stdout_and_stderr_to_utf8(self, monkeypatch):
+        import proliant.common.display as disp
+        calls: list = []
+        monkeypatch.setattr(disp.sys, "stdout", self._fake_stream(calls, "stdout"))
+        monkeypatch.setattr(disp.sys, "stderr", self._fake_stream(calls, "stderr"))
+        ensure_utf8_stdio()
+        assert ("stdout", {"encoding": "utf-8", "errors": "replace"}) in calls
+        assert ("stderr", {"encoding": "utf-8", "errors": "replace"}) in calls
+
+    def test_is_idempotent(self, monkeypatch):
+        import proliant.common.display as disp
+        calls: list = []
+        monkeypatch.setattr(disp.sys, "stdout", self._fake_stream(calls, "stdout"))
+        monkeypatch.setattr(disp.sys, "stderr", self._fake_stream(calls, "stderr"))
+        ensure_utf8_stdio()
+        ensure_utf8_stdio()
+        # Only the first call reconfigures — 2 streams, once each.
+        assert len(calls) == 2
+
+    def test_stream_without_reconfigure_is_skipped(self, monkeypatch):
+        import proliant.common.display as disp
+        monkeypatch.setattr(disp.sys, "stdout", object())  # no reconfigure attr
+        monkeypatch.setattr(disp.sys, "stderr", object())
+        ensure_utf8_stdio()  # must not raise
+
+    def test_reconfigure_error_is_swallowed(self, monkeypatch):
+        import proliant.common.display as disp
+        calls: list = []
+        monkeypatch.setattr(disp.sys, "stdout",
+                            self._fake_stream(calls, "stdout", raises=ValueError("nope")))
+        monkeypatch.setattr(disp.sys, "stderr",
+                            self._fake_stream(calls, "stderr", raises=OSError("nope")))
+        ensure_utf8_stdio()  # must not raise
+        assert len(calls) == 2
 
 
 class TestPrintJson:

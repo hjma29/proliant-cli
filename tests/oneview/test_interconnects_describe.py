@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 
 from proliant.oneview import interconnects as ic
@@ -359,3 +361,85 @@ async def test_describe_interconnect_not_found_lists_known_names():
     client = FakeClient(_base_collections(), _singles())
     with pytest.raises(ValueError, match="Known: Enclosure-01, interconnect 6"):
         await ic.describe_interconnect(client, "no such interconnect")
+
+
+# ── CLI rendering matches the GUI's plain 3-field firmware display ────────────
+
+class _FakeCM:
+    """Async context manager yielding a dummy client for _load_client patches."""
+
+    def __init__(self, client):
+        self._client = client
+
+    async def __aenter__(self):
+        return self._client
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+def _sample_describe_result(*, firmware_up_to_date):
+    """A minimal describe_interconnect()-shaped dict, matching the fields
+    _async_interconnects_describe actually reads."""
+    general = {
+        "logical_interconnect": "LE01-LIG-VC100",
+        "power": "On",
+        "state": "Configured",
+        "firmware_baseline_name": "HPE Synergy Service Pack SY-2023.05.01",
+        "firmware_baseline_uri": "/rest/firmware-drivers/SSP_2023_05",
+        "firmware_version_from_baseline": "2.6.0.1001",
+        "installed_firmware_version": "2.6.0.1001",
+        "installed_spp_name": "HPE Synergy Service Pack SY-2023.05.01",
+        "installed_spp_uri": "/rest/firmware-drivers/SSP_2023_05",
+        "firmware_up_to_date": firmware_up_to_date,
+        "mgmt_interface": "none",
+        "stacking_domain_id": "1",
+        "stacking_member_id": "3",
+        "stacking_domain_role": "Standby",
+        "host_name": "",
+        "ipv4": "", "ipv4_type": "",
+        "ipv6": "", "ipv6_type": "",
+    }
+    return {
+        "name": "Enclosure-01, interconnect 3",
+        "status": "OK",
+        "state": "Configured",
+        "uri": "/rest/interconnects/ic-3",
+        "general": general,
+        "hardware": {
+            "product_name": "", "location": "", "mgmt_mac": "", "base_wwn": "",
+            "serial_number": "", "part_number": "", "spare_part_number": "", "health": "",
+        },
+        "link_ports": [], "uplink_ports": [], "downlink_ports": [],
+        "utilization": {
+            "cpu_pct": None, "memory_used_mb": None, "memory_capacity_mb": None,
+            "memory_pct": None, "power_avg_w": None, "power_capacity_w": None,
+            "temperature_f": None,
+        },
+        "remote_support": {"enabled": False, "state": "Disabled"},
+    }
+
+
+def test_cli_describe_renders_gui_matching_firmware_fields(capsys):
+    """Matches the GUI's own 'General' page: plain Firmware baseline /
+    Firmware version from baseline / Installed firmware version -- no
+    invented "target baseline (not yet applied)" concept when nothing is
+    actually being updated."""
+    from proliant.oneview import cli
+
+    async def _fake_describe(_client, _name):
+        return _sample_describe_result(firmware_up_to_date=False)
+
+    with patch.object(cli, "_load_client", lambda name=None: _FakeCM(object())), \
+         patch("proliant.oneview.interconnects.describe_interconnect", _fake_describe):
+        cli.main(["interconnects", "describe", "Enclosure-01, interconnect 3"])
+
+    out = capsys.readouterr().out
+    assert "Firmware baseline:" in out
+    assert "HPE Synergy Service Pack SY-2023.05.01" in out
+    assert "Firmware version from baseline:" in out
+    assert "Installed firmware version:" in out
+    assert "Target baseline" not in out
+    assert "Installed SPP" not in out
+    assert "not yet applied" not in out
+

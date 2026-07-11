@@ -288,6 +288,17 @@ def test_build_le_firmware_patch_shape():
     assert val["logicalInterconnectUpdateMode"] == "Orchestrated"
 
 
+def test_build_le_firmware_patch_parallel_activation_mode():
+    """update_mode="Parallel" (mirrors -InterconnectActivationMode Parallel)
+    must flow straight through to the wire -- this is the only mode that
+    flashes a non-redundant Logical Interconnect regardless of validation."""
+    patch = build_le_firmware_patch(
+        "/rest/firmware-drivers/SSP_2026_01", scope=LE_SCOPE_SHARED, force=True,
+        update_mode="Parallel",
+    )
+    assert patch[0]["value"]["logicalInterconnectUpdateMode"] == "Parallel"
+
+
 def test_build_profile_firmware_put_preserves_and_overrides():
     body = build_profile_firmware_put(
         PROFILE_RAW, "/rest/firmware-drivers/SSP_2026_01",
@@ -464,6 +475,8 @@ async def test_poll_task_runs_to_completion():
             self.n = 0
 
         async def get(self, uri, params=None):
+            if uri != "/rest/tasks/x":
+                return {}  # the deepest-active-descendant lookup: no children
             self.n += 1
             state = "Completed" if self.n >= 2 else "Running"
             return {"uri": uri, "taskState": state, "percentComplete": self.n * 50}
@@ -473,6 +486,139 @@ async def test_poll_task_runs_to_completion():
                         sleeper=_noop_sleep, interval_s=1, timeout_s=100)
     assert is_task_done(t)
     assert seen[-1] == 100
+
+
+class _ChildTaskClient:
+    """Simulates OneView's nested task tree: querying ``/rest/tasks`` with a
+    ``parentTaskUri`` filter returns children whose own ``uri`` maps into
+    ``tasks_by_parent`` for the *next* level down, mirroring how the GUI's
+    task tree nests ("Logical enclosure firmware update" -> "Update
+    enclosure firmware" -> "Update frame link module firmware")."""
+
+    def __init__(self, root_task: dict, tasks_by_parent: dict[str, list[dict]]):
+        self._root = root_task
+        self._by_parent = tasks_by_parent
+
+    async def get(self, uri, params=None):
+        if uri == "/rest/tasks":
+            parent = (params or {}).get("filter", "")
+            for parent_uri, children in self._by_parent.items():
+                if parent_uri in parent:
+                    return {"members": children}
+            return {"members": []}
+        if uri == self._root["uri"]:
+            return self._root
+        return {}
+
+
+@pytest.mark.asyncio
+async def test_deepest_active_descendant_finds_nested_running_child():
+    """Reproduces the live GUI screenshot: the root task's own percent is
+    stuck at 0 while a grandchild task ("Update frame link module firmware")
+    is the one actually carrying the real phase text + percent."""
+    root = {"uri": "/rest/tasks/root", "taskState": "Running", "percentComplete": 0}
+    child = {
+        "uri": "/rest/tasks/child", "taskState": "Running", "percentComplete": 10,
+        "progressUpdates": [{"statusUpdate": "Update enclosure firmware."}],
+    }
+    grandchild = {
+        "uri": "/rest/tasks/grandchild", "taskState": "Running", "percentComplete": 30,
+        "progressUpdates": [{"statusUpdate": "Update frame link module firmware (force install)."}],
+        "associatedResource": {"resourceName": "Enclosure-01"},
+    }
+    client = _ChildTaskClient(root, {
+        "/rest/tasks/root": [child],
+        "/rest/tasks/child": [grandchild],
+    })
+    deepest = await ssp_update._deepest_active_descendant(client, normalize_task(root))
+    assert deepest is not None
+    assert deepest["stage"] == "Update frame link module firmware (force install)."
+    assert deepest["percent"] == 30
+    assert deepest["resource"] == "Enclosure-01"
+
+
+@pytest.mark.asyncio
+async def test_deepest_active_descendant_none_when_no_children():
+    client = _ChildTaskClient({"uri": "/rest/tasks/root"}, {})
+    deepest = await ssp_update._deepest_active_descendant(
+        client, normalize_task({"uri": "/rest/tasks/root"}),
+    )
+    assert deepest is None
+
+
+@pytest.mark.asyncio
+async def test_enrich_with_active_descendant_overlays_display_fields_only():
+    root = {"uri": "/rest/tasks/root", "taskState": "Running", "percentComplete": 0, "name": "Root"}
+    grandchild = {
+        "uri": "/rest/tasks/grandchild", "taskState": "Running", "percentComplete": 30,
+        "progressUpdates": [{"statusUpdate": "Update frame link module firmware."}],
+    }
+    client = _ChildTaskClient(root, {
+        "/rest/tasks/root": [{"uri": "/rest/tasks/child", "taskState": "Running", "percentComplete": 10}],
+        "/rest/tasks/child": [grandchild],
+    })
+    task = normalize_task(root)
+    enriched = await ssp_update._enrich_with_active_descendant(client, task)
+    assert enriched["percent"] == 30
+    assert enriched["stage"] == "Update frame link module firmware."
+    # root's own identity fields are untouched -- only display fields overlaid
+    assert enriched["uri"] == task["uri"]
+    assert enriched["state"] == task["state"]
+    assert enriched["name"] == "Root"
+
+
+@pytest.mark.asyncio
+async def test_enrich_with_active_descendant_never_raises_on_error():
+    class _Boom:
+        async def get(self, uri, params=None):
+            raise RuntimeError("boom")
+
+    task = normalize_task({"uri": "/rest/tasks/root", "taskState": "Running"})
+    enriched = await ssp_update._enrich_with_active_descendant(_Boom(), task)
+    assert enriched == task
+
+
+@pytest.mark.asyncio
+async def test_poll_task_emits_enriched_display_but_returns_root_state():
+    """The bar should show the deepest descendant's phase text/percent on
+    each in-progress tick, but the final returned task (used for
+    done/failed detection) reflects only the root task."""
+    root_running = {"uri": "/rest/tasks/root", "taskState": "Running", "percentComplete": 0}
+    root_done = {"uri": "/rest/tasks/root", "taskState": "Completed", "percentComplete": 100}
+    grandchild = {
+        "uri": "/rest/tasks/grandchild", "taskState": "Running", "percentComplete": 45,
+        "progressUpdates": [{"statusUpdate": "Update frame link module firmware."}],
+    }
+
+    class _C:
+        def __init__(self):
+            self.n = 0
+
+        async def get(self, uri, params=None):
+            if uri == "/rest/tasks/root":
+                self.n += 1
+                return root_running if self.n == 1 else root_done
+            if uri == "/rest/tasks":
+                parent = (params or {}).get("filter", "")
+                if "root" in parent:
+                    return {"members": [
+                        {"uri": "/rest/tasks/child", "taskState": "Running", "percentComplete": 10},
+                    ]}
+                if "child" in parent:
+                    return {"members": [grandchild]}
+            return {}
+
+    seen = []
+    t = await poll_task(
+        _C(), "/rest/tasks/root", emit=lambda k, d: seen.append(d),
+        sleeper=_noop_sleep, interval_s=1, timeout_s=100,
+    )
+    assert is_task_done(t)
+    assert t["percent"] == 100  # final returned task: root's own, unenriched
+    # the in-progress tick was enriched with the descendant's own phase/percent
+    assert seen[0]["percent"] == 45
+    assert seen[0]["stage"] == "Update frame link module firmware."
+    assert seen[-1]["percent"] == 100  # terminal tick: root's own, unenriched
 
 
 @pytest.mark.asyncio
@@ -782,6 +928,74 @@ async def test_run_execute_blocked_without_callback_no_retry():
     )
     assert res["status"] == "blocked"
     assert len(fake.patch_bodies) == 1
+
+
+@pytest.mark.asyncio
+async def test_run_execute_defaults_to_orchestrated_activation_mode():
+    fake = FakeClient()
+    await run_ssp_apply(
+        lambda: fake, baseline=_newest(),
+        le_targets=[normalize_le(LE_RAW)], profile_targets=[],
+        execute=True, confirm=lambda plan: True, sleeper=_noop_sleep,
+    )
+    assert fake.patch_bodies[0][0]["value"]["logicalInterconnectUpdateMode"] == "Orchestrated"
+
+
+@pytest.mark.asyncio
+async def test_run_execute_passes_parallel_activation_mode_to_le_patch():
+    """--activation-mode parallel (interconnect_activation_mode="Parallel")
+    must reach the actual LE PATCH body, not just be accepted and ignored."""
+    fake = FakeClient()
+    await run_ssp_apply(
+        lambda: fake, baseline=_newest(),
+        le_targets=[normalize_le(LE_RAW)], profile_targets=[],
+        execute=True, confirm=lambda plan: True, sleeper=_noop_sleep,
+        interconnect_activation_mode="Parallel",
+    )
+    assert fake.patch_bodies[0][0]["value"]["logicalInterconnectUpdateMode"] == "Parallel"
+
+
+@pytest.mark.asyncio
+async def test_run_execute_blocked_hint_suggests_parallel_mode_when_still_orchestrated():
+    """When a logical-enclosure target is blocked and the caller is still on
+    the default Orchestrated activation mode, the blocked_resolution must
+    point the operator at --activation-mode parallel -- otherwise retrying
+    with --force alone (which this same suite proves is a no-op against a
+    non-redundant fabric) looks like the only option."""
+    fake = FakeClient(
+        blocked_until_forced=True,
+        le_get_response={"firmware": {"firmwareBaselineUri": "/rest/firmware-drivers/SSP_2023_05"}},
+        children_tasks=[{"taskErrors": [{"details": "Non-redundant fabric."}]}],
+    )
+    res = await run_ssp_apply(
+        lambda: fake, baseline=_newest(),
+        le_targets=[normalize_le(LE_RAW)], profile_targets=[],
+        execute=True, confirm=lambda plan: True, sleeper=_noop_sleep,
+        on_validation_blocked=lambda info: False,
+    )
+    assert res["status"] == "blocked"
+    assert "--activation-mode parallel" in res["results"][-1]["blocked_resolution"]
+
+
+@pytest.mark.asyncio
+async def test_run_execute_blocked_no_parallel_hint_when_already_parallel():
+    """If the caller already retried with --activation-mode parallel and it
+    still gets blocked (e.g. some other validation issue), don't suggest
+    switching to the mode that's already in effect."""
+    fake = FakeClient(
+        blocked_until_forced=True,
+        le_get_response={"firmware": {"firmwareBaselineUri": "/rest/firmware-drivers/SSP_2023_05"}},
+        children_tasks=[{"taskErrors": [{"details": "Non-redundant fabric."}]}],
+    )
+    res = await run_ssp_apply(
+        lambda: fake, baseline=_newest(),
+        le_targets=[normalize_le(LE_RAW)], profile_targets=[],
+        execute=True, confirm=lambda plan: True, sleeper=_noop_sleep,
+        on_validation_blocked=lambda info: False,
+        interconnect_activation_mode="Parallel",
+    )
+    assert res["status"] == "blocked"
+    assert "--activation-mode parallel" not in res["results"][-1]["blocked_resolution"]
 
 
 # ── _task_block_reason / _clean_embedded_refs (matches OneView's own GUI text) ─

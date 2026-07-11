@@ -114,6 +114,10 @@ proliant oneview update enclosure <LE-name> --baseline <ssp> --scope shared-infr
 #   --scope shared-infra-and-profiles   also updates every server profile in this enclosure's compute modules
 proliant oneview update enclosure <LE-name> --execute    # apply it (reboots interconnects, and compute if selected)
 #   The plan shows an OneView<->SSP compatibility note (per HPE's Synergy Software Releases matrix).
+proliant oneview update enclosure <LE-name> --execute --activation-mode parallel
+#   --activation-mode orchestrated (default)  one redundant side at a time, non-disruptive -- requires real redundancy
+#   --activation-mode parallel                flashes every interconnect at once regardless of redundancy (disruptive;
+#                                              the only way to force firmware onto a genuinely non-redundant fabric)
 proliant oneview update appliance readiness              # pre-upgrade readiness report
 proliant oneview update appliance run --from-dir <dir>   # pick + stage an appliance software update
 proliant oneview update appliance run --image <file> --execute   # stage + install (reboots the appliance)

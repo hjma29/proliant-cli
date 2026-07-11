@@ -60,6 +60,7 @@ class TestParserWiring:
             "--baseline", "SY-2026.01.02",
             "--scope", "shared-infra-and-profiles",
             "--install-type", "firmware-and-drivers",
+            "--activation-mode", "parallel",
             "--force", "--execute", "--yes",
         ])
         assert args.func is _cmd_update_enclosure
@@ -67,6 +68,7 @@ class TestParserWiring:
         assert args.baseline == "SY-2026.01.02"
         assert args.scope == "shared-infra-and-profiles"
         assert args.install_type == "firmware-and-drivers"
+        assert args.activation_mode == "parallel"
         assert args.force and args.execute and args.yes
 
     def test_parser_update_enclosure_defaults(self):
@@ -76,6 +78,7 @@ class TestParserWiring:
         assert args.func is _cmd_update_enclosure
         assert args.baseline is None
         assert args.scope == "shared-infra"
+        assert args.activation_mode == "orchestrated"
         assert args.execute is False  # plan by default
 
     def test_parser_update_appliance_run_parses(self):

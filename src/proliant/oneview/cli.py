@@ -1226,38 +1226,32 @@ async def _async_interconnects_describe(name: str) -> None:
     g = ic["general"]
     h = ic["hardware"]
 
-    baseline = g["firmware_baseline_name"] or "—"
-    if g["firmware_version_from_baseline"]:
-        baseline += f"  (bundled version: {g['firmware_version_from_baseline']})"
     ipv4 = f"{g['ipv4']} ({g['ipv4_type']})" if g["ipv4"] else "—"
     ipv6 = f"{g['ipv6']} ({g['ipv6_type']})" if g["ipv6"] else "—"
 
-    # When the LE's assigned baseline hasn't actually landed on this
-    # interconnect yet, show both values distinctly (mirrors the GUI's
-    # "Installed: X -> Selected: update to Y") instead of one ambiguous
-    # "Firmware baseline" line that looks like it's already been applied.
-    if g["firmware_up_to_date"] is False:
-        fw_lines = [
-            f"Installed SPP:         {g['installed_spp_name'] or '—'}",
-            f"Installed firmware:    {g['installed_firmware_version'] or '—'}",
-            f"Target baseline:       {baseline}  [yellow](not yet applied)[/yellow]",
-        ]
-    else:
-        fw_lines = [
-            f"Firmware baseline:     {baseline}",
-            f"Installed firmware:    {g['installed_firmware_version'] or '—'}",
-        ]
+    # Mirror the GUI's "General" page exactly: it always shows these three
+    # plain fields (Firmware baseline / Firmware version from baseline /
+    # Installed firmware version) with no separate "target"/"not yet
+    # applied" concept -- a mismatch between the baseline's version and the
+    # installed version is simply visible by comparing the two lines, same
+    # as the GUI. There is no update in progress here, so inventing a
+    # "target baseline" field doesn't apply and only confuses live testing.
+    fw_lines = [
+        f"Firmware baseline:              {g['firmware_baseline_name'] or '—'}",
+        f"Firmware version from baseline: {g['firmware_version_from_baseline'] or '—'}",
+        f"Installed firmware version:     {g['installed_firmware_version'] or '—'}",
+    ]
 
     details = [
         f"[bold]{ic['name']}[/bold]",
         f"Status: {_status_style(ic['status'])}  |  State: {_state_style(ic['state'])}  |  Power: {_power_style(g['power'])}",
-        f"Logical interconnect:  {g['logical_interconnect'] or '—'}",
+        f"Logical interconnect:            {g['logical_interconnect'] or '—'}",
         *fw_lines,
-        f"Management interface:  {g['mgmt_interface']}",
-        f"Stacking:              domain {g['stacking_domain_id'] or '—'} / member {g['stacking_member_id'] or '—'} ({g['stacking_domain_role'] or '—'})",
-        f"Host name:             {g['host_name'] or '—'}",
-        f"IPv4:                  {ipv4}",
-        f"IPv6:                  {ipv6}",
+        f"Management interface:            {g['mgmt_interface']}",
+        f"Stacking:                        domain {g['stacking_domain_id'] or '—'} / member {g['stacking_member_id'] or '—'} ({g['stacking_domain_role'] or '—'})",
+        f"Host name:                       {g['host_name'] or '—'}",
+        f"IPv4:                            {ipv4}",
+        f"IPv6:                            {ipv6}",
     ]
     console.print(Panel("\n".join(details), title="General", border_style="cyan"))
 
@@ -2509,6 +2503,8 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
 
     install_type = INSTALL_TYPES.get(getattr(args, "install_type", None) or "")
     execute = bool(getattr(args, "execute", False))
+    activation_mode = getattr(args, "activation_mode", None) or "orchestrated"
+    interconnect_activation_mode = "Parallel" if activation_mode == "parallel" else "Orchestrated"
 
     bars: dict = {}
 
@@ -2616,7 +2612,14 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
         compute_ct = sum(1 for r in plan.get("server_profiles", []) if r.get("will_change"))
         impact = []
         if infra_ct:
-            impact.append("[red]Interconnects will reboot (one redundant side at a time).[/red]")
+            if interconnect_activation_mode == "Parallel":
+                impact.append(
+                    "[bold red]Parallel activation: ALL interconnects flash at the same "
+                    "time — expect a network outage during the update, regardless of "
+                    "redundancy.[/bold red]"
+                )
+            else:
+                impact.append("[red]Interconnects will reboot (one redundant side at a time).[/red]")
         if compute_ct:
             impact.append(
                 f"[red]{compute_ct} compute module(s) will power-cycle — ensure hosts are ready "
@@ -2678,6 +2681,7 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
             factory,
             baseline=baseline, le_targets=les, profile_targets=profs,
             scope=LE_SCOPE_SHARED, install_type=install_type, force=bool(getattr(args, "force", False)),
+            interconnect_activation_mode=interconnect_activation_mode,
             execute=execute, confirm=confirm if execute else None,
             on_validation_blocked=on_validation_blocked if execute else None, on_event=on_event,
             poll_interval_s=_SSP_POLL_S, task_timeout_s=_SSP_TASK_TIMEOUT_S,
@@ -3264,6 +3268,8 @@ examples:
   proliant oneview update enclosure LE01 --baseline SY-2026.01.02 --scope shared-infra-and-profiles
                                                           Plan shared infra + every profile in LE01
   proliant oneview update enclosure LE01 --execute        Apply it (reboots interconnects/compute)
+  proliant oneview update enclosure LE01 --execute --activation-mode parallel
+                                                          Force through a non-redundant fabric (disruptive)
   proliant oneview update appliance readiness             Pre-upgrade readiness report
   proliant oneview update appliance cleanup                Preview unused firmware baselines
   proliant oneview update appliance cleanup --yes           Delete unused baselines (free disk)
@@ -3472,6 +3478,15 @@ examples:
     p_upd_enc.add_argument("--install-type", choices=("firmware-only", "firmware-and-drivers", "firmware-offline"),
         help="Compute install type override when --scope includes profiles (default: keep "
              "each profile's existing setting).")
+    p_upd_enc.add_argument("--activation-mode", choices=("orchestrated", "parallel"),
+        default="orchestrated",
+        help="Interconnect activation mode (matches OneView's own -InterconnectActivationMode). "
+             "'orchestrated' (default) flashes one redundant side at a time so the fabric stays "
+             "up, but requires real redundancy -- a non-redundant Logical Interconnect keeps "
+             "failing its own validation no matter how many times --force is retried. "
+             "'parallel' flashes every interconnect at once regardless of redundancy -- the "
+             "only way to force firmware onto a non-redundant fabric -- at the cost of a real "
+             "network outage during the update.")
     p_upd_enc.add_argument("--force", action="store_true",
         help="Force reinstall even if already at the baseline / bypass non-disruptive validation.")
     p_upd_enc.add_argument("--execute", action="store_true",

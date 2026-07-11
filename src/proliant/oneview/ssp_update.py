@@ -577,6 +577,19 @@ def _clean_embedded_refs(text: str) -> str:
     return _EMBEDDED_REF_RE.sub(_replace, text)
 
 
+async def _child_tasks(client: "OneViewClient", parent_task_uri: str) -> list[dict]:
+    """Direct children of *parent_task_uri* (``parentTaskUri`` filter). Never
+    raises -- returns ``[]`` on any error, since every caller treats this as a
+    best-effort enrichment, not something to fail the whole operation over."""
+    try:
+        data = await client.get(
+            "/rest/tasks", params={"filter": f"parentTaskUri='{parent_task_uri}'", "count": 50},
+        )
+    except Exception:  # noqa: BLE001 - best-effort
+        return []
+    return data.get("members", []) or []
+
+
 async def _task_block_reason(client: "OneViewClient", task_uri: str) -> dict[str, str]:
     """Best-effort structured reason a ``Warning`` task actually changed nothing.
 
@@ -600,13 +613,7 @@ async def _task_block_reason(client: "OneViewClient", task_uri: str) -> dict[str
 
     errs = await _errors_of(task_uri)
     if not errs:
-        try:
-            data = await client.get(
-                "/rest/tasks", params={"filter": f"parentTaskUri='{task_uri}'", "count": 50},
-            )
-        except Exception:  # noqa: BLE001 - best-effort; caller still reports "blocked"
-            data = {}
-        for child in data.get("members", []) or []:
+        for child in await _child_tasks(client, task_uri):
             errs.extend(child.get("taskErrors") or [])
 
     warnings: list[str] = []
@@ -627,6 +634,69 @@ async def _task_block_reason(client: "OneViewClient", task_uri: str) -> dict[str
     return {"warning": "\n\n".join(warnings), "resolution": "\n\n".join(resolutions)}
 
 
+async def _deepest_active_descendant(
+    client: "OneViewClient", root: dict, *, max_depth: int = 5,
+) -> dict[str, Any] | None:
+    """Find the most granular currently-active step under *root*'s task.
+
+    OneView's own multi-phase rollouts nest tasks -- e.g. the GUI's own task
+    tree shows "Logical enclosure firmware update" -> "Update enclosure
+    firmware" (per-enclosure) -> "Update frame link module firmware" -- and
+    the real, customer-meaningful phase text and per-phase percent usually
+    live on a *descendant* task while the root task's own
+    ``percentComplete``/``progressUpdates`` stay flat at 0% for the whole
+    multi-minute rollout. Descends the ``parentTaskUri`` chain picking
+    whichever child is still ``Running`` (or, if none, the most recently
+    touched one) at each level, so the CLI's single progress bar can show
+    "Update frame link module firmware  30%" instead of sitting at a
+    motionless "0%" the entire time. Returns ``None`` if there's no
+    descendant with anything more informative than the root already has (so
+    callers can just keep showing the root's own state). Never raises --
+    display-only enrichment, not load-bearing for success/failure detection.
+    """
+    node_uri = root.get("uri", "")
+    best: dict[str, Any] | None = None
+    depth = 0
+    while node_uri and depth < max_depth:
+        children = await _child_tasks(client, node_uri)
+        if not children:
+            break
+
+        def _rank(c: dict) -> tuple:
+            running = (c.get("taskState") or "").lower() == "running"
+            return (running, c.get("modified") or c.get("created") or "")
+
+        chosen = normalize_task(max(children, key=_rank))
+        if not chosen["stage"] and chosen["percent"] is None:
+            break  # this level has nothing more informative to show
+        best = chosen
+        node_uri = chosen["uri"]
+        depth += 1
+    return best
+
+
+async def _enrich_with_active_descendant(client: "OneViewClient", task: dict) -> dict:
+    """Overlay the deepest active descendant's stage/resource/percent onto
+    *task* for display, e.g. so the bar shows "Update frame link module
+    firmware  30%" sourced from a child task instead of the root task's own
+    flat "0%". Leaves *task*'s own ``state``/``uri`` untouched -- those still
+    drive done/failed detection off the authoritative root task."""
+    try:
+        deepest = await _deepest_active_descendant(client, task)
+    except Exception:  # noqa: BLE001 - best-effort, display-only
+        deepest = None
+    if deepest is None:
+        return task
+    merged = dict(task)
+    if deepest.get("stage"):
+        merged["stage"] = deepest["stage"]
+    if deepest.get("resource"):
+        merged["resource"] = deepest["resource"]
+    if deepest.get("percent") is not None:
+        merged["percent"] = deepest["percent"]
+    return merged
+
+
 async def poll_task(
     client: "OneViewClient",
     task_uri: str,
@@ -636,11 +706,21 @@ async def poll_task(
     interval_s: float,
     timeout_s: float,
 ) -> dict[str, Any]:
-    """Poll a task to a terminal state, emitting ``task-progress`` each tick."""
+    """Poll a task to a terminal state, emitting ``task-progress`` each tick.
+
+    Each emitted tick is enriched with the deepest active descendant task's
+    own stage/percent (see ``_enrich_with_active_descendant``) so the display
+    reflects OneView's real current phase (e.g. "Update frame link module
+    firmware  30%") instead of the root task's own flat 0% for the whole
+    rollout -- but done/failed detection below always uses the un-enriched
+    root task, since a child task finishing early doesn't mean the rollout as
+    a whole is done.
+    """
     waited = 0.0
     while True:
         task = normalize_task(await client.get(task_uri))
-        emit("task-progress", task)
+        display = task if is_task_done(task) else await _enrich_with_active_descendant(client, task)
+        emit("task-progress", display)
         if is_task_done(task):
             return task
         if waited >= timeout_s:
@@ -687,6 +767,7 @@ async def run_ssp_apply(
     scope: str = LE_SCOPE_SHARED,
     install_type: str | None = None,
     force: bool = False,
+    interconnect_activation_mode: str = "Orchestrated",
     execute: bool = False,
     confirm: Callable[[dict], bool] | None = None,
     on_validation_blocked: Callable[[dict], bool] | None = None,
@@ -725,6 +806,20 @@ async def run_ssp_apply(
     that *same* target with the guard bypassed (no need to re-run the whole
     command with ``--force``); returning ``False`` (or passing no callback)
     stops with ``status == "blocked"``.
+
+    ``interconnect_activation_mode`` mirrors the OneView SDK's own
+    ``-InterconnectActivationMode``: ``"Orchestrated"`` (default) flashes one
+    redundant side of each Logical Interconnect at a time so the fabric stays
+    up, but *requires* real redundancy to do so -- a Logical Interconnect with
+    no redundant partner will keep failing its own non-disruptive validation
+    no matter how many times ``force``/``on_validation_blocked`` bypass the
+    LE-level guard, since that per-LI check isn't gated by the LE's
+    ``forceInstallFirmware``/``validateIfLIFirmwareUpdateIsNonDisruptive``
+    fields at all (confirmed live: identical "does not have redundant
+    connectivity" sub-task failure on every retry). ``"Parallel"`` flashes
+    every interconnect at once regardless of redundancy -- the only way to
+    actually push firmware onto a non-redundant fabric -- at the cost of a
+    real network outage during the update.
     """
     import asyncio
 
@@ -843,8 +938,26 @@ async def run_ssp_apply(
                             already_offered = True
                             emit("applying", {"kind": kind, "name": name, "retry": True})
                             continue
+                        resolution = reason["resolution"]
+                        if kind == "logical-enclosure" and interconnect_activation_mode.lower() == "orchestrated":
+                            # Orchestrated mode's own non-disruptive guard on
+                            # a Logical Interconnect isn't overridable by the
+                            # LE-level force/validate-bypass flags at all --
+                            # confirmed live: the same "does not have
+                            # redundant connectivity" sub-task failure recurs
+                            # identically no matter how many times this is
+                            # retried with force=True. Only Parallel mode
+                            # (disruptive) can actually apply it.
+                            hint = (
+                                "If this fabric is genuinely non-redundant, Orchestrated "
+                                "activation mode cannot apply this update non-disruptively "
+                                "no matter how many times --force is retried. Re-run with "
+                                "--activation-mode parallel to force it through (expect a "
+                                "brief network outage), or fix the redundancy issue above first."
+                            )
+                            resolution = f"{resolution}\n\n{hint}" if resolution else hint
                         task["blocked_reason"] = reason["warning"]
-                        task["blocked_resolution"] = reason["resolution"]
+                        task["blocked_resolution"] = resolution
                         return "blocked", task
                 return None, task
 
@@ -855,10 +968,16 @@ async def run_ssp_apply(
             async def _le_request(force_flag: bool, le=le) -> dict[str, Any]:
                 # --force also bypasses OneView's non-disruptive validation
                 # guard -- otherwise a non-redundant fabric makes OneView
-                # silently no-op the update rather than apply it.
+                # silently no-op the update rather than apply it. That guard
+                # is enforced by the "Orchestrated" per-LI update itself,
+                # though, not just the LE-level flags -- a genuinely
+                # non-redundant Logical Interconnect keeps failing even with
+                # force=True, and only interconnect_activation_mode="Parallel"
+                # can actually push firmware onto it (disruptively).
                 patch = build_le_firmware_patch(
                     baseline_uri, scope=scope, force=force_flag,
                     validate_nondisruptive=not force_flag,
+                    update_mode=interconnect_activation_mode,
                 )
                 return await client.patch(le["uri"], patch, headers={"If-Match": "*"})
 

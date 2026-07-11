@@ -2736,7 +2736,7 @@ def _wizard_choice(
     if allow_back:
         hint += ", b=back"
     hint += ", c=cancel"
-    default_hint = f"  [dim](default {default_index + 1})[/dim]" if default_index is not None else ""
+    default_hint = f"  (default {default_index + 1})" if default_index is not None else ""
     while True:
         raw = console.input(f"Select ({hint}){default_hint}: ", markup=False).strip().lower()
         if not raw:

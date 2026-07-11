@@ -793,6 +793,13 @@ async def run_ssp_apply(
                           (e.g. a non-redundant-fabric guard), and the operator
                           declined to proceed anyway -- the last ``results``
                           entry carries ``blocked_reason``/``blocked_resolution``.
+      ``unverified``     OneView reported the task as plain "Completed", but
+                          re-checking what's actually installed didn't confirm
+                          it landed -- the last ``results`` entry carries
+                          ``unverified_reason``. Unlike ``blocked``, this is
+                          not auto-retried with force (no known reason force
+                          would help); treat it as "verify manually" rather
+                          than "definitely failed".
 
     Mirrors the OneView GUI's own "Review the warnings. If these conditions
     are acceptable, click OK to proceed." flow: each target is first
@@ -891,10 +898,22 @@ async def run_ssp_apply(
             can't determine an answer (e.g. server profiles, whose firmware
             pointer does reflect the real state).
 
+            A plain "Completed" task (when *actual_checker* is given) also
+            gets one cross-check -- verified live, a ``--activation-mode
+            parallel`` apply reported "Completed" after only ~12s, fast
+            enough that it raised doubt about whether it was real. Unlike
+            "Warning", OneView gives no known validation reason to retry with
+            force here, so a disagreement isn't auto-retried -- it's surfaced
+            as an honest ``"unverified"`` result instead, after giving
+            OneView's own internal state one brief moment to catch up (the LI
+            ``/firmware`` sub-resource can lag the task's own terminal state
+            by a few seconds).
+
             Offers ``on_validation_blocked`` a chance to retry with the guard
             bypassed -- exactly once, since a second block means forcing
             didn't help. Returns ``(status, task)`` where *status* is
-            ``None`` (success), ``"failed"``, or ``"blocked"``.
+            ``None`` (success), ``"failed"``, ``"blocked"``, or
+            ``"unverified"``.
             """
             force_this = force
             already_offered = False
@@ -959,6 +978,31 @@ async def run_ssp_apply(
                         task["blocked_reason"] = reason["warning"]
                         task["blocked_resolution"] = resolution
                         return "blocked", task
+                elif actual_checker is not None:
+                    # Don't trust a plain "Completed" report unconditionally
+                    # either -- cross-check once, and if it disagrees, give
+                    # OneView's own internal state one brief chance to catch
+                    # up before treating it as a real discrepancy (unlike the
+                    # "Warning" branch above, force-retrying isn't offered
+                    # here: there's no known validation reason it would help,
+                    # and retrying an update OneView already called complete
+                    # risks a redundant disruptive re-flash).
+                    emit("task-progress", {
+                        **task, "stage": "Verifying the update actually applied…",
+                    })
+                    actual = await actual_checker()
+                    changed = same_baseline(actual, baseline_uri) if actual is not None else None
+                    if changed is False:
+                        await sleeper(5)
+                        actual = await actual_checker()
+                        changed = same_baseline(actual, baseline_uri) if actual is not None else None
+                    if changed is False:
+                        task["unverified_reason"] = (
+                            "OneView reported this update as completed, but the actual "
+                            "installed baseline did not reflect it when re-checked "
+                            "immediately afterward."
+                        )
+                        return "unverified", task
                 return None, task
 
         # (a) shared infrastructure first

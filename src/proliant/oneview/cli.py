@@ -2954,6 +2954,26 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
             "(or pass [bold]--force[/bold]/[bold]--yes[/bold] to skip the prompt), or fix "
             "the reported issue first."
         )
+    elif status == "unverified":
+        # OneView itself reported "Completed" -- unlike "blocked" there's no
+        # known validation reason to retry with force, so this isn't treated
+        # as a failure, just an honest "we couldn't confirm it" instead of a
+        # blind "SSP apply complete".
+        done = result.get("results", [])
+        last = done[-1] if done else {}
+        reason = last.get("unverified_reason") or (
+            "OneView reported this update as completed, but re-checking the actual "
+            "installed baseline did not confirm it."
+        )
+        console.print(
+            f"\n[yellow]SSP apply reported complete but could not be verified[/yellow] on "
+            f"[bold]{last.get('name', '?')}[/bold].\n"
+            f"[dim]{reason}[/dim]\n"
+            "This can happen if OneView's internal state takes a moment to catch up after "
+            "a task finishes. Check [bold]proliant oneview interconnects describe[/bold] or "
+            "the OneView UI Activity log to confirm the real installed firmware before "
+            "trusting this result."
+        )
 
 
 async def _cmd_update_enclosure(args: argparse.Namespace) -> None:

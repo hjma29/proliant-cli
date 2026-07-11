@@ -859,6 +859,65 @@ async def test_run_execute_warning_with_baseline_changed_still_applied():
 
 
 @pytest.mark.asyncio
+async def test_run_execute_completed_but_actually_unchanged_reports_unverified():
+    """OneView reporting a plain 'Completed' task (not 'Warning') isn't
+    unconditionally trustworthy either -- verified live, a
+    --activation-mode parallel apply reported 'Completed' after only ~12s,
+    fast enough to raise doubt. If the LI-actual cross-check disagrees even
+    after a brief grace re-check, this must surface as 'unverified' rather
+    than a blind 'SSP apply complete'."""
+    newest = _newest()
+    fake = FakeClient(
+        task_state="Completed",
+        raw_lis=[{"uri": "/rest/logical-interconnects/li-1", "enclosureUris": ["/rest/enclosures/enc-1"]}],
+        li_firmware={
+            "/rest/logical-interconnects/li-1/firmware": {
+                "sppUri": "/rest/firmware-drivers/SSP_2023_05",  # still the OLD spp actually installed
+            },
+        },
+    )
+    sleeps: list[float] = []
+
+    async def _tracking_sleep(s):
+        sleeps.append(s)
+
+    res = await run_ssp_apply(
+        lambda: fake, baseline=newest,
+        le_targets=[normalize_le(LE_RAW)], profile_targets=[],
+        execute=True, confirm=lambda plan: True, sleeper=_tracking_sleep,
+    )
+    assert res["status"] == "unverified"
+    assert "did not reflect it" in res["results"][-1]["unverified_reason"]
+    # gave OneView's own state one brief grace period before deciding
+    assert sleeps == [5]
+
+
+@pytest.mark.asyncio
+async def test_run_execute_completed_with_actual_baseline_matching_is_applied():
+    """Sanity check for the new 'Completed' cross-check: when the LI-actual
+    baseline genuinely does match the target, still reports 'applied' with
+    no unnecessary grace-period sleep."""
+    newest = _newest()
+    fake = FakeClient(
+        task_state="Completed",
+        raw_lis=[{"uri": "/rest/logical-interconnects/li-1", "enclosureUris": ["/rest/enclosures/enc-1"]}],
+        li_firmware={"/rest/logical-interconnects/li-1/firmware": {"sppUri": newest["uri"]}},
+    )
+    sleeps: list[float] = []
+
+    async def _tracking_sleep(s):
+        sleeps.append(s)
+
+    res = await run_ssp_apply(
+        lambda: fake, baseline=newest,
+        le_targets=[normalize_le(LE_RAW)], profile_targets=[],
+        execute=True, confirm=lambda plan: True, sleeper=_tracking_sleep,
+    )
+    assert res["status"] == "applied"
+    assert sleeps == []
+
+
+@pytest.mark.asyncio
 async def test_run_execute_blocked_then_confirmed_retries_with_force():
     """Mirrors the OneView GUI's own validation-warning modal ("Review the
     warnings... click OK to proceed"): when on_validation_blocked confirms,

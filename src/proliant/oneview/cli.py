@@ -2501,19 +2501,32 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
         if kind == "plan":
             _render_ssp_plan(console, payload)
         elif kind == "applying":
-            from rich.progress import (
-                BarColumn, Progress, SpinnerColumn, TaskProgressColumn,
-                TextColumn, TimeElapsedColumn,
-            )
             label = "Shared infra" if payload.get("kind") == "logical-enclosure" else "Compute"
             bars["label"] = f"{label}: {payload.get('name')}"
-            p = Progress(
-                SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
-                BarColumn(), TaskProgressColumn(), TimeElapsedColumn(), console=console,
-            )
-            p.start()
-            bars["bar"] = p
-            bars["task"] = p.add_task(f"[bold]{bars['label']}[/bold]", total=100)
+            desc = f"[bold]{bars['label']}[/bold]"
+            p = bars.get("bar")
+            if p is not None:
+                # Reuse the same Progress/Live instance across targets and
+                # retries instead of stop()-ing and re-start()-ing a brand
+                # new one each time. Rich only allows one *active* Live per
+                # Console — repeatedly tearing one down and standing up a
+                # new one (especially right around a console.input() prompt
+                # for the validation-warning confirm) has caused garbled,
+                # overlapping terminal output in practice. reset() clears
+                # the percent/elapsed-time clock for the new target.
+                p.reset(bars["task"], total=100, completed=0, description=desc)
+            else:
+                from rich.progress import (
+                    BarColumn, Progress, SpinnerColumn, TaskProgressColumn,
+                    TextColumn, TimeElapsedColumn,
+                )
+                p = Progress(
+                    SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
+                    BarColumn(), TaskProgressColumn(), TimeElapsedColumn(), console=console,
+                )
+                p.start()
+                bars["bar"] = p
+                bars["task"] = p.add_task(desc, total=100)
         elif kind == "task-progress":
             p = bars.get("bar")
             if p is None:
@@ -2537,7 +2550,21 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
             else:
                 p.update(bars["task"], description=desc)
         elif kind == "applied":
-            _stop_bar()
+            # Print a permanent one-line result for this target (Rich lets you
+            # print "above" an active Progress/Live using the same console),
+            # then leave the bar running so the *next* target's "applying"
+            # event can reset() it in place rather than stop/start a new one.
+            name = payload.get("name", "?")
+            state = (payload.get("state") or "").lower()
+            if state == "completed":
+                console.print(f"[green]✓[/green] {name} updated.", highlight=False)
+            elif state == "warning":
+                console.print(f"[yellow]⚠[/yellow] {name} finished with a warning.", highlight=False)
+            else:
+                console.print(
+                    f"[red]✗[/red] {name} — {payload.get('state') or payload.get('status') or 'error'}.",
+                    highlight=False,
+                )
 
     def confirm(plan: dict) -> bool:
         if getattr(args, "yes", False):

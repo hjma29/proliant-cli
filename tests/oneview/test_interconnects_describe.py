@@ -325,12 +325,15 @@ async def test_describe_interconnect_utilization_and_remote_support():
 
 
 @pytest.mark.asyncio
-async def test_describe_interconnect_shows_pending_target_when_not_yet_applied():
+async def test_describe_interconnect_ignores_pending_le_target_not_yet_applied():
     # Reproduces the live bug report: an LE-level SSP rollout was requested
     # (assigning a newer baseline) but never actually landed on the
-    # interconnect -- the LE's "assigned baseline" must not be conflated with
-    # what's really installed (per the LI /firmware sub-resource + the
-    # interconnect's own live firmwareVersion, which both still show old).
+    # interconnect. The LE's own "assigned baseline" pointer is only a
+    # *request* marker -- it's set the instant an update is requested and
+    # never rolls back if that update fails/is blocked/never finishes -- so
+    # "Firmware baseline" must be sourced from the LI's own /firmware
+    # sub-resource (what's actually installed), not this stale LE pointer,
+    # even while a newer rollout is pending against it.
     newer_baseline_uri = "/rest/firmware-drivers/ssp2"
     collections = _base_collections()
     collections["/rest/logical-enclosures"] = [{
@@ -349,10 +352,70 @@ async def test_describe_interconnect_shows_pending_target_when_not_yet_applied()
     d = await ic.describe_interconnect(client, "Enclosure-01, interconnect 6")
     g = d["general"]
 
-    assert g["firmware_baseline_name"] == "HPE Synergy Service Pack SY-2025.10.01"
-    assert g["firmware_version_from_baseline"] == "2.9.1.1001"
+    # Still shows the real, actually-installed baseline (2023.05.01) -- NOT
+    # the pending/requested one (2025.10.01) that never actually landed.
+    assert g["firmware_baseline_name"] == "HPE Synergy Service Pack SY-2023.05.01"
+    assert g["firmware_version_from_baseline"] == "2.6.0.1001"
     assert g["installed_firmware_version"] == "2.6.0.1001"
     assert g["installed_spp_name"] == "HPE Synergy Service Pack SY-2023.05.01"
+    assert g["firmware_up_to_date"] is True
+
+
+@pytest.mark.asyncio
+async def test_describe_interconnect_reflects_newer_spp_once_li_firmware_tracks_it():
+    # Once a rollout actually lands, the LI's own /firmware sub-resource's
+    # sppUri moves to the new baseline -- "Firmware baseline" must follow it.
+    newer_baseline_uri = "/rest/firmware-drivers/ssp2"
+    collections = _base_collections()
+    collections["/rest/firmware-drivers"] = collections["/rest/firmware-drivers"] + [{
+        "uri": newer_baseline_uri, "name": "HPE Synergy Service Pack", "version": "SY-2025.10.01",
+        "fwComponents": [
+            {"name": "HPE Virtual Connect SE 100Gb F32 Module for Synergy Firmware install package",
+             "componentVersion": "2.9.1.1001"},
+        ],
+    }]
+    singles = _singles()
+    singles[f"{LI_URI}/firmware"] = {
+        "sppName": "HPE Synergy Service Pack SY-2025.10.01",
+        "sppUri": newer_baseline_uri,
+        "interconnects": [
+            {"interconnectUri": IC_URI, "installedFw": "2.9.1.1001", "desiredFw": "2.9.1.1001", "state": "Active"},
+        ],
+    }
+    collections["/rest/interconnects"] = [
+        {**raw, "firmwareVersion": "2.9.1.1001"} for raw in collections["/rest/interconnects"]
+    ]
+    client = FakeClient(collections, singles)
+
+    d = await ic.describe_interconnect(client, "Enclosure-01, interconnect 6")
+    g = d["general"]
+
+    assert g["firmware_baseline_name"] == "HPE Synergy Service Pack SY-2025.10.01"
+    assert g["firmware_version_from_baseline"] == "2.9.1.1001"
+    assert g["installed_firmware_version"] == "2.9.1.1001"
+    assert g["firmware_up_to_date"] is True
+
+
+@pytest.mark.asyncio
+async def test_describe_interconnect_detects_genuine_out_of_sync_component():
+    # A real mismatch (not just a stale LE pointer): the LI's own /firmware
+    # sub-resource already tracks a baseline, but this interconnect's own
+    # live firmwareVersion still lags that baseline's specified version --
+    # e.g. a partial/failed per-module flash. firmware_up_to_date must still
+    # catch this.
+    client = FakeClient(_base_collections(), _singles())
+    collections = _base_collections()
+    collections["/rest/interconnects"] = [
+        {**raw, "firmwareVersion": "2.0.0.0000"} for raw in collections["/rest/interconnects"]
+    ]
+    client = FakeClient(collections, _singles())
+
+    d = await ic.describe_interconnect(client, "Enclosure-01, interconnect 6")
+    g = d["general"]
+
+    assert g["firmware_baseline_name"] == "HPE Synergy Service Pack SY-2023.05.01"
+    assert g["firmware_version_from_baseline"] == "2.6.0.1001"
+    assert g["installed_firmware_version"] == "2.0.0.0000"
     assert g["firmware_up_to_date"] is False
 
 

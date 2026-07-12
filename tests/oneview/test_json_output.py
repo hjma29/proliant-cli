@@ -135,11 +135,19 @@ class TestOneviewParserJson:
         args = parser.parse_args(["firmware", "repository"])
         assert args.func is _cmd_firmware_repository_list
 
-    def test_parser_firmware_compliance_list_parses(self):
-        from proliant.oneview.cli import _build_parser, _cmd_firmware_compliance_list
+    def test_parser_compliance_list_parses(self):
+        from proliant.oneview.cli import _build_parser, _cmd_compliance_list
         parser = _build_parser()
-        args = parser.parse_args(["firmware", "compliance"])
-        assert args.func is _cmd_firmware_compliance_list
+        args = parser.parse_args(["compliance", "list"])
+        assert args.func is _cmd_compliance_list
+
+    def test_parser_compliance_describe_parses(self):
+        from proliant.oneview.cli import _build_parser, _cmd_compliance_describe
+        parser = _build_parser()
+        args = parser.parse_args(["compliance", "describe", "aci-FM-host1", "--baseline", "SY-2026.01.02"])
+        assert args.func is _cmd_compliance_describe
+        assert args.name == "aci-FM-host1"
+        assert args.baseline == "SY-2026.01.02"
 
 
 class TestOneviewJsonServers:
@@ -198,9 +206,55 @@ FAKE_REPOSITORIES = [
 ]
 
 FAKE_COMPLIANCE = [
-    {"hardware": "Enclosure-01, bay 1", "model": "Synergy 480 Gen10", "logical_resource": "aci-FM-host1",
-     "bundle_name": "SPP 2023.05", "bundle_version": "SY-2023.05.01",
-     "update_required": True, "components_needing_update": 3, "components_total": 56},
+    {
+        "kind": "server-profile",
+        "resource_name": "aci-FM-host1",
+        "hardware": "Enclosure-01, bay 1",
+        "model": "Synergy 480 Gen10",
+        "current_baseline": {"uri": "/rest/firmware-drivers/fw1", "name": "SPP 2023.05", "version": "SY-2023.05.01", "label": "SPP 2023.05 SY-2023.05.01"},
+        "current_baseline_label": "SPP 2023.05 SY-2023.05.01",
+        "target_baseline": {"uri": "/rest/firmware-drivers/fw2", "name": "SPP 2026.01", "version": "SY-2026.01.02", "label": "SPP 2026.01 SY-2026.01.02"},
+        "target_baseline_label": "SPP 2026.01 SY-2026.01.02",
+        "update_required": True,
+        "components_needing_update": 3,
+        "components_total": 56,
+        "components": [
+            {"name": "System ROM", "location": "", "current_version": "U46 v2.52", "target_version": "U46 v2.70", "update_required": True},
+            {"name": "iLO", "location": "", "current_version": "3.00", "target_version": "3.00", "update_required": False},
+        ],
+    },
+    {
+        "kind": "frame-link-module",
+        "resource_name": "Enclosure-01, frame link module 1",
+        "hardware": "",
+        "model": "HPE Synergy Frame Link Module",
+        "current_baseline": {"uri": "/rest/firmware-drivers/fw1", "name": "SPP 2023.05", "version": "SY-2023.05.01", "label": "SPP 2023.05 SY-2023.05.01"},
+        "current_baseline_label": "SPP 2023.05 SY-2023.05.01",
+        "target_baseline": {"uri": "/rest/firmware-drivers/fw2", "name": "SPP 2026.01", "version": "SY-2026.01.02", "label": "SPP 2026.01 SY-2026.01.02"},
+        "target_baseline_label": "SPP 2026.01 SY-2026.01.02",
+        "update_required": True,
+        "components_needing_update": 1,
+        "components_total": 1,
+        "components": [
+            {"name": "HPE Synergy Frame Link Module", "location": "Bay 1", "current_version": "1.0.0", "target_version": "1.2.3", "update_required": True},
+        ],
+    },
+    {
+        "kind": "interconnect",
+        "resource_name": "Enclosure-01, interconnect 3",
+        "hardware": "",
+        "model": "HPE Virtual Connect SE 100Gb F32 Module for Synergy",
+        "current_baseline": {"uri": "/rest/firmware-drivers/fw1", "name": "SPP 2023.05", "version": "SY-2023.05.01", "label": "SPP 2023.05 SY-2023.05.01"},
+        "current_baseline_label": "SPP 2023.05 SY-2023.05.01",
+        "target_baseline": {"uri": "/rest/firmware-drivers/fw2", "name": "SPP 2026.01", "version": "SY-2026.01.02", "label": "SPP 2026.01 SY-2026.01.02"},
+        "target_baseline_label": "SPP 2026.01 SY-2026.01.02",
+        "update_required": True,
+        "components_needing_update": 1,
+        "components_total": 1,
+        "components": [
+            {"name": "HPE Virtual Connect SE 100Gb F32 Module for Synergy", "location": "", "current_version": "2.6.0.1001", "target_version": "2.9.1.1001", "update_required": True},
+        ],
+    },
 ]
 
 
@@ -239,7 +293,7 @@ class TestOneviewJsonFirmwareCompliance:
         with patch("proliant.oneview.cli._load_client", return_value=_make_mock_client()), \
              patch("proliant.oneview.firmware.list_compliance",
                    new_callable=AsyncMock, return_value=FAKE_COMPLIANCE):
-            cli.main(["--json", "firmware", "compliance"])
+            cli.main(["--json", "compliance", "list"])
 
         captured = capsys.readouterr()
         result = json.loads(captured.out)
@@ -247,15 +301,96 @@ class TestOneviewJsonFirmwareCompliance:
 
     def test_firmware_compliance_list_table_shows_status(self, capsys):
         from proliant.oneview import cli
+        from proliant.oneview.cli import _short_baseline_label
 
         with patch("proliant.oneview.cli._load_client", return_value=_make_mock_client()), \
              patch("proliant.oneview.firmware.list_compliance",
                    new_callable=AsyncMock, return_value=FAKE_COMPLIANCE):
-            cli.main(["firmware", "compliance"])
+            cli.main(["compliance", "list"])
 
         captured = capsys.readouterr()
         assert "aci-FM-host1" in captured.out
-        assert "3/56" in captured.out
+        assert "BIOS:" in captured.out
+        assert "Enclosure-01, FLM 1" in captured.out
+        assert "Enclosure-01, IC 3" in captured.out
+        assert _short_baseline_label("SPP SY-2023.05.01 SY-2023.05.01") == "2023.05.01"
+        assert "SY-2023.05.01" not in captured.out
+        assert "Type" not in captured.out
+        assert "Components" not in captured.out
+        assert "System ROM" not in captured.out
+
+    def test_server_version_summary_prefers_real_bios_and_ilo_firmware(self):
+        from proliant.oneview.cli import _firmware_version_summary
+
+        row = {
+            "kind": "server-profile",
+            "components": [
+                {
+                    "name": "Redundant System ROM",
+                    "current_version": "I42 v2.68 (07/14/2022)",
+                    "target_version": "unknown",
+                    "update_required": False,
+                },
+                {
+                    "name": "ilo-driver",
+                    "current_version": "700.10.7.5.2-1OEM.700.1.0.15843807",
+                    "target_version": "unknown",
+                    "update_required": False,
+                },
+                {
+                    "name": "System ROM",
+                    "current_version": "I42 v2.78 (03/16/2023)",
+                    "target_version": "v3.60 (08/06/2025)",
+                    "update_required": True,
+                },
+                {
+                    "name": "iLO 5",
+                    "current_version": "2.81 Mar 07 2023",
+                    "target_version": "3.17",
+                    "update_required": True,
+                },
+            ],
+        }
+
+        current = _firmware_version_summary(row, target=False)
+        target = _firmware_version_summary(row, target=True)
+
+        assert "BIOS:I42 v2.78 (03/16/2023)" in current
+        assert "iLO:2.81 Mar 07 2023" in current
+        assert "BIOS:v3.60 (08/06/2025)" in target
+        assert "iLO:3.17" in target
+        assert "I42 v2.68" not in current
+        assert "700.10" not in current
+        assert "unknown" not in target
+
+    def test_compliance_describe_table_shows_component_details(self, capsys):
+        from proliant.oneview import cli
+
+        with patch("proliant.oneview.cli._load_client", return_value=_make_mock_client()), \
+             patch("proliant.oneview.firmware.list_compliance",
+                   new_callable=AsyncMock, return_value=FAKE_COMPLIANCE):
+            cli.main(["compliance", "describe", "aci-FM-host1"])
+
+        captured = capsys.readouterr()
+        assert "aci-FM-host1" in captured.out
+        assert "Component Firmware" in captured.out
+        assert "System ROM" in captured.out
+        assert "U46 v2.70" in captured.out
+        assert "iLO" in captured.out
+        assert "3.00" in captured.out
+
+    def test_compliance_describe_json_returns_one_resource(self, capsys):
+        from proliant.oneview import cli
+
+        with patch("proliant.oneview.cli._load_client", return_value=_make_mock_client()), \
+             patch("proliant.oneview.firmware.list_compliance",
+                   new_callable=AsyncMock, return_value=FAKE_COMPLIANCE):
+            cli.main(["--json", "compliance", "describe", "aci-FM-host1"])
+
+        captured = capsys.readouterr()
+        result = json.loads(captured.out)
+        assert result["resource_name"] == "aci-FM-host1"
+        assert len(result["components"]) == 2
 
 
 class TestOneviewMacDescribe:

@@ -98,6 +98,11 @@ proliant oneview uplinksets list
 proliant oneview uplinksets describe <name>
 proliant oneview server-profiles list
 proliant oneview server-profiles describe <name>
+proliant oneview power shutdown profile <name>              # graceful shutdown via assigned server hardware
+proliant oneview power off server "Enclosure-01, bay 6"     # force power off server hardware
+proliant oneview power on server --enclosure Enclosure-01 --bay 6
+proliant oneview power cycle interconnect "Enclosure-01, interconnect 6" --yes
+proliant oneview power cycle flm Enclosure-01 1 --yes       # hard eFuse power-cycle a frame link module
 proliant oneview mac list --address <mac>
 proliant oneview mac list --network-name <name>
 proliant oneview mac describe <mac>
@@ -106,7 +111,9 @@ proliant oneview interconnects describe <name>          # ports, utilization, fi
 proliant oneview appliances list                        # list configured appliances (* = active)
 proliant oneview appliances describe [name]             # appliance General page (HA nodes, memory, uptime, firmware)
 proliant oneview firmware bundles                        # registered SPP/SSP baselines
-proliant oneview firmware compliance                     # per-server compliance vs newer baselines
+proliant oneview compliance list                         # resource compliance vs latest SSP/SPP baseline
+proliant oneview compliance list --baseline SY-2026.01.02
+proliant oneview compliance describe aci-FM-host1        # per-component version comparison
 proliant oneview release                                 # HPE Synergy Software Releases matrix (Composer <-> recommended/supported SSP)
 proliant oneview activity                                # recent tasks + alerts, newest first (mirrors the GUI Activity page)
 proliant oneview activity --resource <name> --limit 30   # filter the feed to one resource (e.g. LE01, Enclosure-01)

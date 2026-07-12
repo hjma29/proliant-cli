@@ -40,6 +40,7 @@ examples:
   proliant com reports memory                               Memory part-number breakdown across fleet
   proliant oneview server-profiles list                     List all OneView server profiles
   proliant oneview server-profiles describe <server profile name>  Show details for one profile
+  proliant oneview power shutdown profile <server profile name>    Gracefully shut down a profile's server
   proliant oneview mac describe <mac address>               Trace a MAC address through the fabric
   proliant spp list                                         List available gen12 SPP versions
   proliant spp inspect gen12 2026.03.00.00                  Analyse a gen12 SPP catalog
@@ -667,6 +668,7 @@ _proliant__oneview() {
         networksets)     _arguments '1: :(list describe)' ;;
         uplinksets)      _arguments '1: :(list describe)' ;;
         server-profiles) _arguments '1: :(list describe)' ;;
+        power)           _arguments '1: :(on off shutdown cycle reset)' '2: :(server profile interconnect flm)' ;;
         reports)         _arguments '1: :(memory)' ;;
       esac ;;
   esac
@@ -681,6 +683,7 @@ _proliant__oneview_cmds() {
     'networksets:Network sets (list, describe)'
     'uplinksets:Uplink sets (list, describe)'
     'server-profiles:Server profiles (list, describe)'
+    'power:Server and Synergy bay power operations'
     'reports:Fleet hardware reports (memory)'
   )
   _describe 'command' cmds

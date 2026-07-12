@@ -6,7 +6,8 @@ Usage:
     proliant oneview servers firmware list [--server NAME]
     proliant oneview firmware bundles
     proliant oneview firmware repository
-    proliant oneview firmware compliance
+    proliant oneview compliance list
+    proliant oneview compliance describe <resource name>
 """
 
 # PYTHON_ARGCOMPLETE_OK
@@ -372,6 +373,67 @@ def _oneview_interconnect_name_completer(prefix: str, **kwargs) -> list[str]:
         return [n for n in names if n.lower().startswith(prefix.lower())]
     except Exception:
         return []
+
+
+def _add_power_common_flags(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--dry-run", action="store_true", dest="dry_run",
+                        help="Show the OneView request without sending it")
+    parser.add_argument("--yes", action="store_true",
+                        help="Confirm eFuse hard power-cycle operations")
+
+
+def _add_power_action_parser(subparsers, action_name: str, help_text: str) -> None:
+    action_parser = subparsers.add_parser(action_name, help=help_text)
+    targets = action_parser.add_subparsers(dest="power_target", metavar="TARGET")
+    targets.required = True
+
+    p_server = targets.add_parser(
+        "server",
+        aliases=["servers"],
+        help="Target server hardware by name or enclosure bay",
+    )
+    p_server.set_defaults(func=_cmd_power, power_target_type="server")
+    server_name_arg = p_server.add_argument("name", metavar="NAME", nargs="?",
+        help="Server hardware name (omit when using --enclosure/--bay)")
+    server_name_arg.completer = _oneview_server_name_completer
+    server_enclosure_arg = p_server.add_argument("--enclosure", metavar="NAME",
+        help="Target server hardware by enclosure name")
+    server_enclosure_arg.completer = _oneview_enclosure_name_completer
+    server_bay_arg = p_server.add_argument("--bay", metavar="N", type=int,
+        help="Target server hardware by bay number with --enclosure")
+    server_bay_arg.completer = suppress_file_completion()
+    _add_power_common_flags(p_server)
+
+    p_profile = targets.add_parser("profile", help="Target the server assigned to a server profile")
+    p_profile.set_defaults(func=_cmd_power, power_target_type="profile")
+    profile_name_arg = p_profile.add_argument("name", metavar="NAME", help="Server profile name")
+    profile_name_arg.completer = _oneview_profile_name_completer
+    _add_power_common_flags(p_profile)
+
+    p_interconnect = targets.add_parser(
+        "interconnect",
+        aliases=["icm"],
+        help="Target an interconnect by name or enclosure bay (cycle/reset only)",
+    )
+    p_interconnect.set_defaults(func=_cmd_power, power_target_type="interconnect")
+    interconnect_name_arg = p_interconnect.add_argument("name", metavar="NAME", nargs="?",
+        help="Interconnect name (omit when using --enclosure/--bay)")
+    interconnect_name_arg.completer = _oneview_interconnect_name_completer
+    interconnect_enclosure_arg = p_interconnect.add_argument("--enclosure", metavar="NAME",
+        help="Target interconnect by enclosure name")
+    interconnect_enclosure_arg.completer = _oneview_enclosure_name_completer
+    interconnect_bay_arg = p_interconnect.add_argument("--bay", metavar="N", type=int,
+        help="Target interconnect by bay number with --enclosure")
+    interconnect_bay_arg.completer = suppress_file_completion()
+    _add_power_common_flags(p_interconnect)
+
+    p_flm = targets.add_parser("flm", help="Target a frame link module bay (cycle/reset only)")
+    p_flm.set_defaults(func=_cmd_power, power_target_type="flm")
+    flm_enclosure_arg = p_flm.add_argument("enclosure", metavar="ENCLOSURE", help="Enclosure name")
+    flm_enclosure_arg.completer = _oneview_enclosure_name_completer
+    flm_bay_arg = p_flm.add_argument("bay", metavar="BAY", type=int, help="Frame link module bay number")
+    flm_bay_arg.completer = suppress_file_completion()
+    _add_power_common_flags(p_flm)
 
 
 def _power_style(state: str) -> str:
@@ -1342,6 +1404,70 @@ async def _async_interconnects_describe(name: str) -> None:
 
 async def _cmd_interconnects_describe(args: argparse.Namespace) -> None:
     await _async_interconnects_describe(args.name)
+
+
+# ── proliant oneview power ─────────────────────────────────────────────────────
+
+def _power_request_description(args: argparse.Namespace) -> str:
+    target_type = getattr(args, "power_target_type", "")
+    action = getattr(args, "power_action", "")
+    if target_type == "flm":
+        return f"{action} {target_type} {args.enclosure} bay {args.bay}"
+    name = getattr(args, "name", None)
+    if name:
+        return f"{action} {target_type} {name}"
+    enclosure = getattr(args, "enclosure", None)
+    bay = getattr(args, "bay", None)
+    return f"{action} {target_type} {enclosure or '?'} bay {bay or '?'}"
+
+
+def _render_power_result(result: dict) -> None:
+    from rich.markup import escape
+
+    console = get_console()
+    status = result.get("status", "")
+    target = escape(str(result.get("target", "target")))
+    target_type = escape(str(result.get("target_type", "target")))
+    action_label = escape(str(result.get("action_label", result.get("action", "power action"))))
+    method = escape(str(result.get("method", "")))
+
+    if status == "dry-run":
+        console.print(f"[yellow]Dry run:[/yellow] would {action_label} {target_type} [bold]{target}[/bold] via {method}.")
+        console.print(f"[dim]URL:[/dim] {escape(str(result.get('url', '')))}")
+        console.print_json(data=result.get("payload"))
+        return
+
+    console.print(f"[green]✓[/green] Requested {action_label} for {target_type} [bold]{target}[/bold] via {method}.")
+    task_uri = result.get("task_uri")
+    if task_uri:
+        console.print(f"[dim]Task:[/dim] {escape(str(task_uri))}")
+
+
+async def _cmd_power(args: argparse.Namespace) -> None:
+    from proliant.oneview.power import is_hard_cycle_action, run_power_action
+
+    action = args.power_action
+    if is_hard_cycle_action(action) and not args.dry_run and not args.yes:
+        raise ValueError("cycle/reset uses OneView eFuse for a hard power-cycle; rerun with --yes or use --dry-run")
+
+    async with _load_client() as client:
+        desc = _power_request_description(args)
+        with get_console().status(f"[dim]Issuing OneView power action ({desc})…[/dim]"):
+            result = await run_power_action(
+                client,
+                action,
+                args.power_target_type,
+                name=getattr(args, "name", None),
+                enclosure=getattr(args, "enclosure", None),
+                bay=getattr(args, "bay", None),
+                dry_run=args.dry_run,
+            )
+
+    if getattr(args, "json_output", False) or get_output_mode() == OutputMode.JSON:
+        print_json(result)
+        return
+
+    _render_power_result(result)
 
 
 # ── proliant oneview mac list ─────────────────────────────────────────────────
@@ -2576,51 +2702,255 @@ async def _cmd_firmware_repository_list(args: argparse.Namespace) -> None:
     await _async_firmware_repository_list()
 
 
-async def _async_firmware_compliance_list() -> None:
+def _resource_kind_label(kind: str) -> str:
+    return {
+        "server-profile": "Profile",
+        "frame-link-module": "FLM",
+        "interconnect": "IC",
+    }.get(kind, kind)
+
+
+def _short_baseline_label(label: str) -> str:
+    text = str(label or "").strip()
+    if not text or text == "—":
+        return "—"
+    match = re.search(r"(?:SY-)?(\d{4}\.\d{2}\.\d{2}(?:\.\d{2})?)", text)
+    return match.group(1) if match else text
+
+
+def _short_firmware_resource_name(row: dict[str, Any]) -> str:
+    name = row.get("resource_name") or "—"
+    kind = row.get("kind") or ""
+    if kind == "frame-link-module":
+        return re.sub(r"\bframe link module\b", "FLM", name, flags=re.IGNORECASE)
+    if kind == "interconnect":
+        return re.sub(r"\binterconnect\b", "IC", name, flags=re.IGNORECASE)
+    return name
+
+
+def _plain_component_name(component: dict[str, Any]) -> str:
+    return str(component.get("name") or "").lower()
+
+
+def _known_firmware_version(version: Any) -> str:
+    text = str(version or "").strip()
+    if text.lower() in {"unknown", "n/a", "na", "none"}:
+        return ""
+    return text
+
+
+def _firmware_component_role(component: dict[str, Any]) -> str:
+    name = _plain_component_name(component)
+    tokens = set(re.findall(r"[a-z0-9]+", name))
+    if "ilo" in tokens or {"integrated", "lights", "out"} <= tokens:
+        if {"driver", "drivers"} & tokens or "ilorest" in name:
+            return ""
+        return "iLO"
+    if "redundant" in tokens and "rom" in tokens:
+        return ""
+    if "bios" in tokens or "rom" in tokens:
+        return "BIOS"
+    return ""
+
+
+def _firmware_version_style(current: str, target: str) -> str:
+    cur = _known_firmware_version(current)
+    tgt = _known_firmware_version(target)
+    if cur and tgt and cur == tgt:
+        return "green"
+    if cur or tgt:
+        return "yellow"
+    return "dim"
+
+
+def _component_update_style(update_required: bool | None) -> str:
+    if update_required is True:
+        return "[yellow]Update[/yellow]"
+    if update_required is False:
+        return "[green]Current[/green]"
+    return "[dim]Unknown[/dim]"
+
+
+def _styled_firmware_version(label: str, version: str, style: str) -> str:
+    value = _known_firmware_version(version) or "—"
+    text = f"{label}:{value}" if label else value
+    return f"[{style}]{text}[/]"
+
+
+def _server_component_score(component: dict[str, Any], role: str) -> int:
+    name = _plain_component_name(component)
+    tokens = set(re.findall(r"[a-z0-9]+", name))
+    score = 0
+    if _known_firmware_version(component.get("target_version")):
+        score += 20
+    if component.get("update_required") is True:
+        score += 10
+    if role == "BIOS" and {"system", "rom"} <= tokens:
+        score += 30
+    if role == "iLO" and re.search(r"\bilo\s*\d+\b", name, flags=re.IGNORECASE):
+        score += 30
+    return score
+
+
+def _server_version_summary(components: list[dict[str, Any]], *, target: bool) -> str:
+    by_role: dict[str, dict[str, Any]] = {}
+    for component in components:
+        role = _firmware_component_role(component)
+        if not role:
+            continue
+        if role not in by_role or _server_component_score(component, role) > _server_component_score(by_role[role], role):
+            by_role[role] = component
+
+    segments: list[str] = []
+    for role in ("BIOS", "iLO"):
+        component = by_role.get(role)
+        if not component:
+            continue
+        current_version = _known_firmware_version(component.get("current_version"))
+        target_version = _known_firmware_version(component.get("target_version"))
+        style = _firmware_version_style(current_version, target_version)
+        value = target_version if target else current_version
+        segments.append(_styled_firmware_version(role, value, style))
+    return " ".join(segments) if segments else "—"
+
+
+def _single_component_version_summary(components: list[dict[str, Any]], *, target: bool) -> str:
+    component = components[0] if components else {}
+    current_version = _known_firmware_version(component.get("current_version"))
+    target_version = _known_firmware_version(component.get("target_version"))
+    style = _firmware_version_style(current_version, target_version)
+    value = target_version if target else current_version
+    return _styled_firmware_version("", value, style)
+
+
+def _firmware_version_summary(row: dict[str, Any], *, target: bool) -> str:
+    components = row.get("components") or []
+    if row.get("kind") == "server-profile":
+        return _server_version_summary(components, target=target)
+    return _single_component_version_summary(components, target=target)
+
+
+def _row_matches_resource(row: dict[str, Any], name: str) -> bool:
+    query = (name or "").strip().lower()
+    if not query:
+        return False
+    candidates = {
+        (row.get("resource_name") or "").lower(),
+        _short_firmware_resource_name(row).lower(),
+    }
+    return query in candidates
+
+
+def _find_compliance_resource(rows: list[dict[str, Any]], name: str) -> dict[str, Any]:
+    matches = [row for row in rows if _row_matches_resource(row, name)]
+    if len(matches) == 1:
+        return matches[0]
+    if matches:
+        names = ", ".join(row.get("resource_name") or "" for row in matches)
+        raise ValueError(f"Resource name '{name}' is ambiguous. Matches: {names}")
+    known = ", ".join(row.get("resource_name") or "" for row in rows)
+    raise ValueError(f"Compliance resource '{name}' not found. Known resources: {known}")
+
+
+async def _fetch_compliance_rows(args: argparse.Namespace) -> list[dict[str, Any]]:
     from proliant.oneview.firmware import list_compliance
 
+    baseline = getattr(args, "baseline", None)
+    target_desc = f"baseline {baseline}" if baseline else "latest registered SSP/SPP"
     async with _load_client() as client:
-        with get_console().status("[dim]Checking compliance against candidate firmware bundles…[/dim]"):
-            rows = await list_compliance(client)
+        with get_console().status(f"[dim]Checking firmware compliance against {target_desc}…[/dim]"):
+            return await list_compliance(client, baseline=baseline)
 
+
+async def _async_compliance_list(args: argparse.Namespace) -> None:
+    rows = await _fetch_compliance_rows(args)
     if get_output_mode() == OutputMode.JSON:
         print_json(rows)
         return
 
     console = get_console()
     if not rows:
-        console.print("[green]No newer unused firmware bundles to check compliance against — "
-                       "every managed server is already current with the newest assigned baseline.[/green]")
+        console.print("[yellow]No firmware compliance resources found.[/yellow]")
+        return
+
+    target_label = _short_baseline_label(rows[0]["target_baseline_label"])
+    table = make_table(
+        f"Firmware Compliance vs {target_label}  ({len(rows)} resources)",
+        ("Resource", {"min_width": 24, "no_wrap": True}),
+        ("Current BL", {"no_wrap": True}),
+        ("Target BL", {"no_wrap": True}),
+        ("Current Version", {"no_wrap": True}),
+        ("Target Version", {"no_wrap": True}),
+    )
+    for r in rows:
+        table.add_row(
+            _short_firmware_resource_name(r),
+            _short_baseline_label(r["current_baseline_label"]),
+            _short_baseline_label(r["target_baseline_label"]),
+            _firmware_version_summary(r, target=False),
+            _firmware_version_summary(r, target=True),
+        )
+    console.print(table)
+
+
+def _render_compliance_describe(row: dict[str, Any]) -> None:
+    console = get_console()
+    console.print(Panel(
+        f"[bold]{row.get('resource_name') or '—'}[/bold]\n"
+        f"Type:             {_resource_kind_label(row.get('kind') or '')}\n"
+        f"Current baseline: {_short_baseline_label(row.get('current_baseline_label') or '')}\n"
+        f"Target baseline:  {_short_baseline_label(row.get('target_baseline_label') or '')}",
+        title="Firmware Compliance",
+        border_style="cyan",
+    ))
+
+    components = row.get("components") or []
+    if not components:
+        console.print("[yellow]No component firmware details returned for this resource.[/yellow]")
         return
 
     table = make_table(
-        f"Firmware Compliance  ({len(rows)})",
-        ("Hardware", {"no_wrap": True}),
-        ("Model", {"no_wrap": True}),
-        ("Logical Resource", {"no_wrap": True}),
-        ("Firmware Bundle", {}),
-        ("Update Required", {"no_wrap": True}),
-        ("Components", {"justify": "right", "no_wrap": True}),
+        f"Component Firmware  ({len(components)})",
+        ("Component", {"min_width": 28}),
+        ("Location", {"no_wrap": True}),
+        ("Current Version", {"no_wrap": True}),
+        ("Target Version", {"no_wrap": True}),
+        ("Status", {"justify": "center", "no_wrap": True}),
     )
-    for r in rows:
-        bundle = f"{r['bundle_name']} ({r['bundle_version']})" if r["bundle_name"] else "—"
-        required = "[yellow]Yes[/yellow]" if r["update_required"] else "[green]No[/green]"
-        components = f"{r['components_needing_update']}/{r['components_total']}"
-        table.add_row(_short_server_name(r["hardware"]), r["model"], r["logical_resource"],
-                      bundle, required, components)
+    for component in components:
+        current = component.get("current_version") or ""
+        target = component.get("target_version") or ""
+        style = _firmware_version_style(current, target)
+        table.add_row(
+            component.get("name") or "Unknown component",
+            component.get("location") or "—",
+            _styled_firmware_version("", current, style),
+            _styled_firmware_version("", target, style),
+            _component_update_style(component.get("update_required")),
+        )
     console.print(table)
-    console.print(
-        "[dim]Each row checks a server against one candidate bundle — a registered baseline newer "
-        "than what's currently assigned anywhere (see 'oneview update appliance cleanup'). 'Components' is the "
-        "real count of firmware/software components needing an update out of those evaluated, from "
-        "OneView's own compliance engine. The GUI's Update Category (Recommended/Optional) and "
-        "Estimated Update Time are computed internally and aren't exposed via the REST API.[/dim]",
-        highlight=False,
-    )
 
 
-async def _cmd_firmware_compliance_list(args: argparse.Namespace) -> None:
-    await _async_firmware_compliance_list()
+async def _async_compliance_describe(args: argparse.Namespace) -> None:
+    rows = await _fetch_compliance_rows(args)
+    try:
+        row = _find_compliance_resource(rows, args.name)
+    except ValueError as exc:
+        get_console().print(f"[red]Error:[/red] {exc}")
+        sys.exit(1)
+
+    if get_output_mode() == OutputMode.JSON:
+        print_json(row)
+        return
+    _render_compliance_describe(row)
+
+
+async def _cmd_compliance_list(args: argparse.Namespace) -> None:
+    await _async_compliance_list(args)
+
+
+async def _cmd_compliance_describe(args: argparse.Namespace) -> None:
+    await _async_compliance_describe(args)
 
 
 # ── proliant oneview update enclosure (SSP baseline rollout) ──────────────────
@@ -3807,12 +4137,19 @@ examples:
   proliant oneview servers firmware list --server "Enc1, bay 1"
   proliant oneview firmware bundles                      Registered SPP/SSP bundles
   proliant oneview firmware repository                   Internal + external repositories
-  proliant oneview firmware compliance                   Compliance vs newer candidate bundles
+  proliant oneview compliance list                       Firmware compliance vs latest or selected baseline
+  proliant oneview compliance describe aci-FM-host1      Per-component firmware comparison for one resource
   proliant oneview networks list                         All ethernet networks
   proliant oneview networks describe VLAN-160            Network overview + fabric mapping
   proliant oneview networksets list                      All network sets
   proliant oneview uplinksets list                       All uplink sets
   proliant oneview server-profiles list                  All server profiles
+  proliant oneview power shutdown profile "ocp-host-1"   Gracefully shut down a profile's server
+  proliant oneview power off server "Enclosure-01, bay 6"
+                                                          Force power off server hardware
+  proliant oneview power cycle interconnect "Enclosure-01, interconnect 6" --yes
+                                                          Hard eFuse power-cycle an interconnect bay
+  proliant oneview power cycle flm Enclosure-01 1 --yes   Hard eFuse power-cycle a frame link module
   proliant oneview li list                               Logical interconnects
   proliant oneview lig list                              Logical interconnect groups
   proliant oneview interconnects list                    Interconnect hardware
@@ -3879,7 +4216,7 @@ examples:
     server_arg.completer = _oneview_server_name_completer
     p_srv_fw_list.set_defaults(func=_cmd_firmware_list)
 
-    p_firmware = sub.add_parser("firmware", help="Appliance firmware bundles, repositories, and compliance")
+    p_firmware = sub.add_parser("firmware", help="Appliance firmware bundles and repositories")
     s_firmware = p_firmware.add_subparsers(dest="what", metavar="ACTION")
     s_firmware.required = True
 
@@ -3891,9 +4228,25 @@ examples:
         help="List firmware repositories (Internal + external)")
     p_fw_repo.set_defaults(func=_cmd_firmware_repository_list)
 
-    p_fw_compliance = s_firmware.add_parser("compliance",
-        help="Firmware compliance vs newer candidate bundles (per server)")
-    p_fw_compliance.set_defaults(func=_cmd_firmware_compliance_list)
+    p_compliance = sub.add_parser("compliance", help="Firmware compliance list and per-resource details")
+    s_compliance = p_compliance.add_subparsers(dest="what", metavar="ACTION")
+    s_compliance.required = True
+    p_compliance_list = s_compliance.add_parser("list",
+        help="List firmware compliance vs latest or selected SSP/SPP baseline")
+    compliance_list_baseline = p_compliance_list.add_argument("--baseline", metavar="VERSION|NAME",
+        help="Target registered SSP/SPP baseline (default: newest registered ServicePack bundle)")
+    compliance_list_baseline.completer = _oneview_ssp_baseline_completer  # type: ignore[attr-defined]
+    p_compliance_list.set_defaults(func=_cmd_compliance_list)
+
+    p_compliance_desc = s_compliance.add_parser("describe",
+        help="Show per-component firmware comparison for one compliance resource")
+    compliance_desc_name = p_compliance_desc.add_argument("name", metavar="RESOURCE",
+        help="Resource name from 'proliant oneview compliance list'")
+    compliance_desc_name.completer = _oneview_profile_name_completer
+    compliance_desc_baseline = p_compliance_desc.add_argument("--baseline", metavar="VERSION|NAME",
+        help="Target registered SSP/SPP baseline (default: newest registered ServicePack bundle)")
+    compliance_desc_baseline.completer = _oneview_ssp_baseline_completer  # type: ignore[attr-defined]
+    p_compliance_desc.set_defaults(func=_cmd_compliance_describe)
 
     p_networks = sub.add_parser("networks", help="List or describe ethernet networks")
     s_networks = p_networks.add_subparsers(dest="what", metavar="ACTION")
@@ -3936,6 +4289,37 @@ examples:
     p_sp_desc_name = p_sp_desc.add_argument("name", metavar="NAME", help="Name of the server profile")
     p_sp_desc_name.completer = _oneview_profile_name_completer
     p_sp_desc.set_defaults(func=_cmd_describe, resource="server-profile")
+
+    p_power = sub.add_parser(
+        "power",
+        help="Power OneView-managed servers and Synergy bays",
+        description=(
+            "Power OneView-managed server hardware or server profiles, and eFuse "
+            "Synergy enclosure bays for hard power-cycle operations."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  proliant oneview power shutdown profile ocp-host-1\n"
+            "  proliant oneview power off server \"Enclosure-01, bay 6\"\n"
+            "  proliant oneview power on server --enclosure Enclosure-01 --bay 6\n"
+            "  proliant oneview power cycle interconnect \"Enclosure-01, interconnect 6\" --yes\n"
+            "  proliant oneview power cycle flm Enclosure-01 1 --yes\n\n"
+            "Notes:\n"
+            "  on/off/shutdown use OneView server-hardware powerState and are supported for server/profile targets.\n"
+            "  cycle/reset use OneView enclosure eFuse and require --yes unless --dry-run is used."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    s_power = p_power.add_subparsers(dest="power_action", metavar="ACTION")
+    s_power.required = True
+    for action_name, help_text in {
+        "on": "Power on server hardware",
+        "off": "Force power off server hardware",
+        "shutdown": "Gracefully shut down server hardware",
+        "cycle": "Hard eFuse power-cycle a Synergy bay",
+        "reset": "Alias for cycle (hard eFuse power-cycle)",
+    }.items():
+        _add_power_action_parser(s_power, action_name, help_text)
 
     # ── logical interconnects ─────────────────────────────────────────────
     p_li = sub.add_parser("li", help="List logical interconnects")

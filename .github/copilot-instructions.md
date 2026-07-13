@@ -97,6 +97,21 @@ proliant version
 - Use `--dry-run` when testing upgrade paths against live servers
 - httpx timeout: connect=10s, read=60s
 
+## Hard rules for OneView live operations
+
+**Never bypass the LE firmware PATCH path with a direct LI `/firmware` PUT.**
+
+The OneView firmware update chain is: `PATCH /rest/logical-enclosures/{id}` (sets the baseline on the LE) → OneView internally cascades to `PUT /rest/logical-interconnects/{id}/firmware`. Calling the LI `/firmware` PUT directly bypasses the LE task chain — it does NOT appear in the GUI Activity log, cannot be cancelled via the API, leaves the LI in `Staging_Failed` / `Critical` state if anything goes wrong, and requires a full GUI "Reapply configuration" to recover. Learned the hard way: a direct LI PUT left Bay6 half-staged for 45+ minutes and locked the entire LI.
+
+**If the LE PATCH is not cascading to the LI, investigate why — do not work around it with direct LI API calls.**
+
+Common reasons the LE PATCH silently skips the IC flash:
+- LI is `NOT_CONSISTENT` with LIG (LIG missing uplink sets that exist in LI)
+- An ongoing task on the enclosure (e.g. server re-discovery after eFuse) locks operations
+- The LI `/firmware` sub-resource `sppUri` already matches the target (OneView thinks it's done)
+
+**For any disruptive Synergy operation (firmware update, eFuse, reapply), always use the CLI's documented path or the GUI. Never fire raw API calls at live hardware to work around a problem.**
+
 ## Release process
 
 Before tagging a release, always update `CHANGELOG.md` first:

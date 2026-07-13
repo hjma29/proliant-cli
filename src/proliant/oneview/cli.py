@@ -918,18 +918,45 @@ async def _async_describe_uplinkset(name: str) -> None:
         title="Uplink Set", border_style="cyan",
     ))
 
-    # Ports table
+    # Ports table — matches GUI columns: Uplink / State / Op Speed / Req Speed /
+    # Auto-neg / FEC / LAG / Connected To
     port_table = make_table(
         "Ports",
-        ("Bay",   {"justify": "center", "no_wrap": True}),
-        ("Port",  {"no_wrap": True}),
-        ("Speed", {"no_wrap": True}),
-        ("FEC",   {"no_wrap": True}),
+        ("Uplink",        {"no_wrap": True}),
+        ("State",         {"no_wrap": True}),
+        ("Op Speed",      {"justify": "right", "no_wrap": True}),
+        ("Req Speed",     {"justify": "right", "no_wrap": True}),
+        ("Auto-neg",      {"no_wrap": True}),
+        ("FEC",           {"no_wrap": True}),
+        ("LAG",           {"no_wrap": True}),
+        ("Connected To",  {"no_wrap": True}),
         box_style=box.SIMPLE_HEAD,
         header_style="bold",
     )
     for p in u["ports"]:
-        port_table.add_row(p["bay"], p["port"], p["speed"], p["fec"])
+        state = p["link_state"]
+        if "active" in state:
+            state_s = f"[green]{state}[/green]"
+        elif "standby" in state:
+            state_s = f"[yellow]{state}[/yellow]"
+        elif state.lower() in ("unlinked", "—"):
+            state_s = f"[dim]{state}[/dim]"
+        else:
+            state_s = state
+        op = p["op_speed"]
+        op_s = f"{op} Gb/s" if op and op != "unknown" else f"[dim]{op or '—'}[/dim]"
+        req = p["req_speed"].replace("Speed", "").replace("G", "") if p["req_speed"] else "Auto"
+        req_s = f"{req} Gb/s" if req not in ("Auto", "") else f"[dim]{req}[/dim]"
+        port_table.add_row(
+            f"Bay{p['bay']}:{p['port']}",
+            state_s,
+            op_s,
+            req_s,
+            p["auto_neg"] or "—",
+            p["fec"] or "—",
+            p["lag"],
+            p["connected_to"],
+        )
     get_console().print(port_table)
 
     # Networks table

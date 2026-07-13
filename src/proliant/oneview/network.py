@@ -153,10 +153,13 @@ async def list_uplink_sets(client: "OneViewClient") -> list[dict]:
 
 async def describe_uplink_set(client: "OneViewClient", name: str) -> dict:
     """Return full detail for a single uplink set, with resolved names."""
-    raw_uplinks, raw_nets, raw_lis = await asyncio.gather(
+    from proliant.oneview.interconnects import _connected_to, parse_port_speed
+
+    raw_uplinks, raw_nets, raw_lis, raw_ics = await asyncio.gather(
         client.get_all("/rest/uplink-sets"),
         client.get_all("/rest/ethernet-networks"),
         client.get_all("/rest/logical-interconnects"),
+        client.get_all("/rest/interconnects"),
     )
     matched = [u for u in raw_uplinks if u.get("name", "").lower() == name.lower()]
     if not matched:
@@ -167,17 +170,44 @@ async def describe_uplink_set(client: "OneViewClient", name: str) -> dict:
     net_map = {n["uri"]: n for n in raw_nets}
     li_map  = {li["uri"]: li.get("name", "") for li in raw_lis}
 
-    # Resolve ports
+    # Build a lookup from (bay_number_str, port_name) -> live IC port object
+    ic_port_map: dict[tuple[str, str], dict] = {}
+    for ic in raw_ics:
+        for p in ic.get("ports", []):
+            bay_str = str(ic.get("interconnectLocation", {})
+                          .get("locationEntries", [{}])[0].get("value", ""))
+            # bayNumber is the most reliable field
+            bay_num = str(p.get("bayNumber", ""))
+            pname   = p.get("portName", "")
+            if bay_num and pname:
+                ic_port_map[(bay_num, pname)] = p
+
+    # Resolve ports — join configured (desired) data with live operational data
     ports = []
     for p in u.get("portConfigInfos", []):
         entries = p.get("location", {}).get("locationEntries", [])
         bay  = next((e["value"] for e in entries if e["type"] == "Bay"), "")
         port = next((e["value"] for e in entries if e["type"] == "Port"), "")
+        live = ic_port_map.get((bay, port), {})
+        # LACP/link state: portStatus="Linked" + portStatusReason="Active"/"StandBy"
+        port_status  = live.get("portStatus", "")
+        status_reason = live.get("portStatusReason", "")
+        if port_status == "Linked" and status_reason in ("Active", "StandBy"):
+            link_state = f"Linked {status_reason.lower()}"
+        elif port_status:
+            link_state = port_status
+        else:
+            link_state = "—"
         ports.append({
-            "bay":   bay,
-            "port":  port,
-            "speed": p.get("desiredSpeed", ""),
-            "fec":   p.get("desiredFecMode", ""),
+            "bay":          bay,
+            "port":         port,
+            "link_state":   link_state,
+            "op_speed":     parse_port_speed(live.get("operationalSpeed", "")),
+            "req_speed":    p.get("desiredSpeed", ""),
+            "auto_neg":     live.get("autoNegStatus", ""),
+            "fec":          live.get("fecModeStatus", "") or p.get("desiredFecMode", ""),
+            "lag":          live.get("lagName") or "none",
+            "connected_to": _connected_to(live.get("neighbor")),
         })
 
     # Resolve member networks

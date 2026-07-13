@@ -3710,8 +3710,12 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
             )
         if last.get("blocked_forced"):
             # The operator already forced it (chose B or passed --force) and
-            # OneView STILL refused -- so "force it again" is a dead end. Steer
-            # them to the paths that can actually update a single-legged fabric.
+            # OneView STILL refused. Two distinct root causes:
+            #   1. Uplink not redundant — one live leg, Orchestrated can't sequence it
+            #   2. Downlink not redundant — server profiles have single-homed NICs;
+            #      Orchestrated can't flash the IC they're on without dropping them
+            # Distinguish by whether uplink details are present.
+            has_uplink_detail = bool(last.get("blocked_uplinks"))
             if interconnect_activation_mode == "Parallel":
                 console.print(
                     "You already forced this in [bold]Parallel[/bold] mode and OneView still "
@@ -3719,7 +3723,7 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
                     "OneView UI Activity log and the uplink/interconnect health above before "
                     "retrying."
                 )
-            else:
+            elif has_uplink_detail:
                 console.print(
                     "Forcing did [bold]not[/bold] help: an [bold]Orchestrated[/bold] update flashes "
                     "one redundant leg at a time, so it cannot update a fabric that has only one "
@@ -3729,6 +3733,22 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
                     "  • re-run with [bold]--activation-mode parallel[/bold] to flash all "
                     "interconnects at once — this [red]will drop the fabric[/red] (and any server "
                     "profiles riding it) for the duration of the update."
+                )
+            else:
+                # Downlink-only block: uplinks are fine, but server profiles have
+                # single-homed NICs. Orchestrated mode can't flash an IC without
+                # dropping any profile whose only downlink is on that IC.
+                console.print(
+                    "Forcing did [bold]not[/bold] help: the block is [bold]downlink[/bold] "
+                    "redundancy, not uplink. The server profile(s) listed above have single-homed "
+                    "NIC connections — [bold]Orchestrated[/bold] mode cannot flash an interconnect "
+                    "without dropping them. To proceed, either:\n"
+                    "  • [green]configure NIC teaming/bonding[/green] on the affected server "
+                    "profile(s) so each profile has connections on both ICs — then re-run "
+                    "(non-disruptive); or\n"
+                    "  • re-run with [bold]--activation-mode parallel[/bold] to flash all "
+                    "interconnects at once — the affected server profiles will [red]briefly lose "
+                    "network connectivity[/red] during the IC reboot."
                 )
         else:
             console.print(

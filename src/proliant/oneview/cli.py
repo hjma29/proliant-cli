@@ -2471,18 +2471,19 @@ async def _async_activity_detail(args: argparse.Namespace) -> None:
         tree_token = None
     watch = getattr(args, "watch", False)
     json_mode = getattr(args, "json_output", False) or get_output_mode() == OutputMode.JSON
+    lookup_count = max(500, int(getattr(args, "limit", 20) or 20))
 
     async with _load_client() as client:
         with console.status("[dim]Locating operation…[/dim]"):
             if watch:
                 target = await find_active_task(
-                    client, resource=resource, token=tree_token)
+                    client, resource=resource, token=tree_token, count=lookup_count)
                 if target is None:
                     target = await find_task(
-                        client, resource=resource, token=tree_token)
+                        client, resource=resource, token=tree_token, count=lookup_count)
             else:
                 target = await find_task(
-                    client, resource=resource, token=tree_token)
+                    client, resource=resource, token=tree_token, count=lookup_count)
 
         if target is None:
             console.print("[yellow]No matching operation found in recent activity.[/yellow]")

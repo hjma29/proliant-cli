@@ -352,6 +352,50 @@ async def test_find_task_token_matches_name_or_resource():
     assert await act.find_task(_C(), token="zzz-nope") is None
 
 
+@pytest.mark.asyncio
+async def test_find_task_uses_requested_lookup_count():
+    class _C:
+        def __init__(self):
+            self.calls = []
+
+        async def get(self, uri, params=None):
+            self.calls.append((uri, params))
+            return {"members": [
+                {"name": "Logical enclosure firmware update", "taskState": "Warning",
+                 "parentTaskUri": "", "created": "2026-07-11T06:00:01Z",
+                 "associatedResource": {"resourceName": "LE01"}},
+            ]}
+
+    client = _C()
+    row = await act.find_task(client, token="LE01", count=250)
+    assert row is not None and row["resource"] == "LE01"
+    assert client.calls == [
+        (act.TASKS_URI, {"count": 250, "sort": "created:descending"}),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_find_active_task_uses_requested_lookup_count():
+    class _C:
+        def __init__(self):
+            self.calls = []
+
+        async def get(self, uri, params=None):
+            self.calls.append((uri, params))
+            return {"members": [
+                {"name": "Logical enclosure firmware update", "taskState": "Running",
+                 "parentTaskUri": "", "created": "2026-07-11T06:00:01Z",
+                 "associatedResource": {"resourceName": "LE01"}},
+            ]}
+
+    client = _C()
+    row = await act.find_active_task(client, token="LE01", count=250)
+    assert row is not None and row["resource"] == "LE01"
+    assert client.calls == [
+        (act.TASKS_URI, {"count": 250, "sort": "created:descending"}),
+    ]
+
+
 def test_format_elapsed_uses_now():
     from datetime import datetime, timezone
     start = "2026-07-11T06:00:00Z"

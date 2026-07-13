@@ -356,7 +356,7 @@ def tree_is_terminal(node: dict | None) -> bool:
 
 async def find_active_task(
     client: "Any", *, resource: str | None = None, name_contains: str | None = None,
-    token: str | None = None,
+    token: str | None = None, count: int = 500,
 ) -> dict[str, Any] | None:
     """Newest still-running top-level task, for ``activity --watch`` to follow.
 
@@ -365,51 +365,57 @@ async def find_active_task(
     name substring. ``token`` matches EITHER the task name or the resource
     (what the operator sees in the feed's Name / Resource columns).
     """
-    try:
-        data = await client.get(TASKS_URI, params={"count": 40, "sort": "created:descending"})
-    except Exception:  # noqa: BLE001 - best-effort
-        return None
-    for raw in (data or {}).get("members") or []:
+    for raw in await _recent_task_members(client, count):
         if (raw.get("parentTaskUri") or "").strip():
             continue
         if (raw.get("taskState") or "").lower() not in _ACTIVE_TASK_STATES:
             continue
         row = normalize_task(raw)
-        if resource and resource.lower() not in row["resource"].lower():
-            continue
-        if name_contains and name_contains.lower() not in row["name"].lower():
-            continue
-        if token:
-            tok = token.lower()
-            if tok not in row["name"].lower() and tok not in row["resource"].lower():
-                continue
-        return row
+        if _task_row_matches(row, resource=resource, name_contains=name_contains, token=token):
+            return row
     return None
 
 
 async def find_task(
     client: "Any", *, resource: str | None = None, name_contains: str | None = None,
-    token: str | None = None,
+    token: str | None = None, count: int = 500,
 ) -> dict[str, Any] | None:
     """Newest top-level task matching the filters, running or not (for a
     one-shot ``activity --tree``). Falls back to the most recent top-level task
     when no filter is given. ``token`` matches EITHER the task name or the
     resource (what the operator sees in the feed's Name / Resource columns)."""
-    try:
-        data = await client.get(TASKS_URI, params={"count": 40, "sort": "created:descending"})
-    except Exception:  # noqa: BLE001 - best-effort
-        return None
-    for raw in (data or {}).get("members") or []:
+    for raw in await _recent_task_members(client, count):
         if (raw.get("parentTaskUri") or "").strip():
             continue
         row = normalize_task(raw)
-        if resource and resource.lower() not in row["resource"].lower():
-            continue
-        if name_contains and name_contains.lower() not in row["name"].lower():
-            continue
-        if token:
-            tok = token.lower()
-            if tok not in row["name"].lower() and tok not in row["resource"].lower():
-                continue
-        return row
+        if _task_row_matches(row, resource=resource, name_contains=name_contains, token=token):
+            return row
     return None
+
+
+async def _recent_task_members(client: "Any", count: int) -> list[dict]:
+    try:
+        data = await client.get(
+            TASKS_URI,
+            params={"count": max(1, count), "sort": "created:descending"},
+        )
+    except Exception:  # noqa: BLE001 - best-effort
+        return []
+    return (data or {}).get("members") or []
+
+
+def _task_row_matches(
+    row: dict[str, Any], *,
+    resource: str | None = None,
+    name_contains: str | None = None,
+    token: str | None = None,
+) -> bool:
+    if resource and resource.lower() not in row["resource"].lower():
+        return False
+    if name_contains and name_contains.lower() not in row["name"].lower():
+        return False
+    if token:
+        tok = token.lower()
+        if tok not in row["name"].lower() and tok not in row["resource"].lower():
+            return False
+    return True

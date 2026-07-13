@@ -375,65 +375,88 @@ def _oneview_interconnect_name_completer(prefix: str, **kwargs) -> list[str]:
         return []
 
 
-def _add_power_common_flags(parser: argparse.ArgumentParser) -> None:
+def _add_power_common_flags(parser: argparse.ArgumentParser, *, include_yes: bool) -> None:
     parser.add_argument("--dry-run", action="store_true", dest="dry_run",
                         help="Show the OneView request without sending it")
-    parser.add_argument("--yes", action="store_true",
-                        help="Confirm eFuse hard power-cycle operations")
+    if include_yes:
+        parser.add_argument("--yes", action="store_true",
+                            help="Confirm eFuse hard power-cycle operations")
+
+
+def _add_power_target_parsers(
+    parent_parser: argparse.ArgumentParser,
+    func,
+    *,
+    targets: tuple[str, ...] = ("server", "profile", "interconnect", "flm"),
+    include_yes: bool = False,
+) -> None:
+    """Attach TARGET subparsers to a parser.
+
+    Shared between ``proliant oneview power <action>`` (graceful on/off/
+    shutdown, which only apply to server/profile targets, and never need a
+    ``--yes`` confirmation) and the top-level ``proliant oneview efuse``
+    command (a hard power-cycle, available for all four target types and
+    always requiring ``--yes`` unless ``--dry-run`` is used).
+    """
+    targets_parser = parent_parser.add_subparsers(dest="power_target", metavar="TARGET")
+    targets_parser.required = True
+
+    if "server" in targets:
+        p_server = targets_parser.add_parser(
+            "server",
+            aliases=["servers"],
+            help="Target server hardware by name or enclosure bay",
+        )
+        p_server.set_defaults(func=func, power_target_type="server")
+        server_name_arg = p_server.add_argument("name", metavar="NAME", nargs="?",
+            help="Server hardware name (omit when using --enclosure/--bay)")
+        server_name_arg.completer = _oneview_server_name_completer
+        server_enclosure_arg = p_server.add_argument("--enclosure", metavar="NAME",
+            help="Target server hardware by enclosure name")
+        server_enclosure_arg.completer = _oneview_enclosure_name_completer
+        server_bay_arg = p_server.add_argument("--bay", metavar="N", type=int,
+            help="Target server hardware by bay number with --enclosure")
+        server_bay_arg.completer = suppress_file_completion()
+        _add_power_common_flags(p_server, include_yes=include_yes)
+
+    if "profile" in targets:
+        p_profile = targets_parser.add_parser("profile", help="Target the server assigned to a server profile")
+        p_profile.set_defaults(func=func, power_target_type="profile")
+        profile_name_arg = p_profile.add_argument("name", metavar="NAME", help="Server profile name")
+        profile_name_arg.completer = _oneview_profile_name_completer
+        _add_power_common_flags(p_profile, include_yes=include_yes)
+
+    if "interconnect" in targets:
+        p_interconnect = targets_parser.add_parser(
+            "interconnect",
+            aliases=["icm"],
+            help="Target an interconnect by name or enclosure bay",
+        )
+        p_interconnect.set_defaults(func=func, power_target_type="interconnect")
+        interconnect_name_arg = p_interconnect.add_argument("name", metavar="NAME", nargs="?",
+            help="Interconnect name (omit when using --enclosure/--bay)")
+        interconnect_name_arg.completer = _oneview_interconnect_name_completer
+        interconnect_enclosure_arg = p_interconnect.add_argument("--enclosure", metavar="NAME",
+            help="Target interconnect by enclosure name")
+        interconnect_enclosure_arg.completer = _oneview_enclosure_name_completer
+        interconnect_bay_arg = p_interconnect.add_argument("--bay", metavar="N", type=int,
+            help="Target interconnect by bay number with --enclosure")
+        interconnect_bay_arg.completer = suppress_file_completion()
+        _add_power_common_flags(p_interconnect, include_yes=include_yes)
+
+    if "flm" in targets:
+        p_flm = targets_parser.add_parser("flm", help="Target a frame link module bay")
+        p_flm.set_defaults(func=func, power_target_type="flm")
+        flm_enclosure_arg = p_flm.add_argument("enclosure", metavar="ENCLOSURE", help="Enclosure name")
+        flm_enclosure_arg.completer = _oneview_enclosure_name_completer
+        flm_bay_arg = p_flm.add_argument("bay", metavar="BAY", type=int, help="Frame link module bay number")
+        flm_bay_arg.completer = suppress_file_completion()
+        _add_power_common_flags(p_flm, include_yes=include_yes)
 
 
 def _add_power_action_parser(subparsers, action_name: str, help_text: str) -> None:
     action_parser = subparsers.add_parser(action_name, help=help_text)
-    targets = action_parser.add_subparsers(dest="power_target", metavar="TARGET")
-    targets.required = True
-
-    p_server = targets.add_parser(
-        "server",
-        aliases=["servers"],
-        help="Target server hardware by name or enclosure bay",
-    )
-    p_server.set_defaults(func=_cmd_power, power_target_type="server")
-    server_name_arg = p_server.add_argument("name", metavar="NAME", nargs="?",
-        help="Server hardware name (omit when using --enclosure/--bay)")
-    server_name_arg.completer = _oneview_server_name_completer
-    server_enclosure_arg = p_server.add_argument("--enclosure", metavar="NAME",
-        help="Target server hardware by enclosure name")
-    server_enclosure_arg.completer = _oneview_enclosure_name_completer
-    server_bay_arg = p_server.add_argument("--bay", metavar="N", type=int,
-        help="Target server hardware by bay number with --enclosure")
-    server_bay_arg.completer = suppress_file_completion()
-    _add_power_common_flags(p_server)
-
-    p_profile = targets.add_parser("profile", help="Target the server assigned to a server profile")
-    p_profile.set_defaults(func=_cmd_power, power_target_type="profile")
-    profile_name_arg = p_profile.add_argument("name", metavar="NAME", help="Server profile name")
-    profile_name_arg.completer = _oneview_profile_name_completer
-    _add_power_common_flags(p_profile)
-
-    p_interconnect = targets.add_parser(
-        "interconnect",
-        aliases=["icm"],
-        help="Target an interconnect by name or enclosure bay (cycle/reset only)",
-    )
-    p_interconnect.set_defaults(func=_cmd_power, power_target_type="interconnect")
-    interconnect_name_arg = p_interconnect.add_argument("name", metavar="NAME", nargs="?",
-        help="Interconnect name (omit when using --enclosure/--bay)")
-    interconnect_name_arg.completer = _oneview_interconnect_name_completer
-    interconnect_enclosure_arg = p_interconnect.add_argument("--enclosure", metavar="NAME",
-        help="Target interconnect by enclosure name")
-    interconnect_enclosure_arg.completer = _oneview_enclosure_name_completer
-    interconnect_bay_arg = p_interconnect.add_argument("--bay", metavar="N", type=int,
-        help="Target interconnect by bay number with --enclosure")
-    interconnect_bay_arg.completer = suppress_file_completion()
-    _add_power_common_flags(p_interconnect)
-
-    p_flm = targets.add_parser("flm", help="Target a frame link module bay (cycle/reset only)")
-    p_flm.set_defaults(func=_cmd_power, power_target_type="flm")
-    flm_enclosure_arg = p_flm.add_argument("enclosure", metavar="ENCLOSURE", help="Enclosure name")
-    flm_enclosure_arg.completer = _oneview_enclosure_name_completer
-    flm_bay_arg = p_flm.add_argument("bay", metavar="BAY", type=int, help="Frame link module bay number")
-    flm_bay_arg.completer = suppress_file_completion()
-    _add_power_common_flags(p_flm)
+    _add_power_target_parsers(action_parser, _cmd_power, targets=("server", "profile"), include_yes=False)
 
 
 def _power_style(state: str) -> str:
@@ -1437,7 +1460,7 @@ async def _cmd_interconnects_describe(args: argparse.Namespace) -> None:
 
 def _power_request_description(args: argparse.Namespace) -> str:
     target_type = getattr(args, "power_target_type", "")
-    action = getattr(args, "power_action", "")
+    action = getattr(args, "power_action", "efuse")
     if target_type == "flm":
         return f"{action} {target_type} {args.enclosure} bay {args.bay}"
     name = getattr(args, "name", None)
@@ -1471,18 +1494,39 @@ def _render_power_result(result: dict) -> None:
 
 
 async def _cmd_power(args: argparse.Namespace) -> None:
-    from proliant.oneview.power import is_hard_cycle_action, run_power_action
-
-    action = args.power_action
-    if is_hard_cycle_action(action) and not args.dry_run and not args.yes:
-        raise ValueError("cycle/reset uses OneView eFuse for a hard power-cycle; rerun with --yes or use --dry-run")
+    from proliant.oneview.power import run_power_action
 
     async with _load_client() as client:
         desc = _power_request_description(args)
         with get_console().status(f"[dim]Issuing OneView power action ({desc})…[/dim]"):
             result = await run_power_action(
                 client,
-                action,
+                args.power_action,
+                args.power_target_type,
+                name=getattr(args, "name", None),
+                enclosure=getattr(args, "enclosure", None),
+                bay=getattr(args, "bay", None),
+                dry_run=args.dry_run,
+            )
+
+    if getattr(args, "json_output", False) or get_output_mode() == OutputMode.JSON:
+        print_json(result)
+        return
+
+    _render_power_result(result)
+
+
+async def _cmd_efuse(args: argparse.Namespace) -> None:
+    from proliant.oneview.efuse import run_efuse_action
+
+    if not args.dry_run and not args.yes:
+        raise ValueError("eFuse performs a hard power-cycle; rerun with --yes or use --dry-run")
+
+    async with _load_client() as client:
+        desc = _power_request_description(args)
+        with get_console().status(f"[dim]Issuing OneView eFuse power-cycle ({desc})…[/dim]"):
+            result = await run_efuse_action(
+                client,
                 args.power_target_type,
                 name=getattr(args, "name", None),
                 enclosure=getattr(args, "enclosure", None),
@@ -4235,9 +4279,9 @@ examples:
   proliant oneview power shutdown profile "ocp-host-1"   Gracefully shut down a profile's server
   proliant oneview power off server "Enclosure-01, bay 6"
                                                           Force power off server hardware
-  proliant oneview power cycle interconnect "Enclosure-01, interconnect 6" --yes
+  proliant oneview efuse interconnect "Enclosure-01, interconnect 6" --yes
                                                           Hard eFuse power-cycle an interconnect bay
-  proliant oneview power cycle flm Enclosure-01 1 --yes   Hard eFuse power-cycle a frame link module
+  proliant oneview efuse flm Enclosure-01 1 --yes         Hard eFuse power-cycle a frame link module
   proliant oneview li list                               Logical interconnects
   proliant oneview lig list                              Logical interconnect groups
   proliant oneview interconnects list                    Interconnect hardware
@@ -4380,21 +4424,20 @@ examples:
 
     p_power = sub.add_parser(
         "power",
-        help="Power OneView-managed servers and Synergy bays",
+        help="Gracefully power OneView-managed servers on/off",
         description=(
-            "Power OneView-managed server hardware or server profiles, and eFuse "
-            "Synergy enclosure bays for hard power-cycle operations."
+            "Power OneView-managed server hardware or server profiles on, off, "
+            "or gracefully shut down, via OneView's server-hardware powerState "
+            "API. For a hard power-cycle, use 'proliant oneview efuse' instead."
         ),
         epilog=(
             "Examples:\n"
             "  proliant oneview power shutdown profile ocp-host-1\n"
             "  proliant oneview power off server \"Enclosure-01, bay 6\"\n"
-            "  proliant oneview power on server --enclosure Enclosure-01 --bay 6\n"
-            "  proliant oneview power cycle interconnect \"Enclosure-01, interconnect 6\" --yes\n"
-            "  proliant oneview power cycle flm Enclosure-01 1 --yes\n\n"
-            "Notes:\n"
-            "  on/off/shutdown use OneView server-hardware powerState and are supported for server/profile targets.\n"
-            "  cycle/reset use OneView enclosure eFuse and require --yes unless --dry-run is used."
+            "  proliant oneview power on server --enclosure Enclosure-01 --bay 6\n\n"
+            "Note: on/off/shutdown use OneView server-hardware powerState and are\n"
+            "      supported for server/profile targets only. For a hard\n"
+            "      power-cycle (Synergy bay eFuse), use 'proliant oneview efuse'."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -4404,10 +4447,36 @@ examples:
         "on": "Power on server hardware",
         "off": "Force power off server hardware",
         "shutdown": "Gracefully shut down server hardware",
-        "cycle": "Hard eFuse power-cycle a Synergy bay",
-        "reset": "Alias for cycle (hard eFuse power-cycle)",
     }.items():
         _add_power_action_parser(s_power, action_name, help_text)
+
+    p_efuse = sub.add_parser(
+        "efuse",
+        help="Hard eFuse power-cycle a Synergy bay",
+        description=(
+            "Hard eFuse power-cycle an OneView-managed Synergy bay: server "
+            "hardware, a server profile's assigned server, an interconnect, "
+            "or a frame link module (FLM). This PATCHes the enclosure "
+            "resource's bayPowerState to 'E-Fuse', the same mechanism "
+            "OneView's own GUI uses for a hard reset -- distinct from the "
+            "graceful on/off/shutdown actions under 'proliant oneview power', "
+            "which use the server-hardware powerState resource instead. "
+            "eFuse is purely a hard power-cycle: it has no on/off concept."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  proliant oneview efuse server \"Enclosure-01, bay 6\" --yes\n"
+            "  proliant oneview efuse server --enclosure Enclosure-01 --bay 6 --yes\n"
+            "  proliant oneview efuse profile ocp-host-1 --yes\n"
+            "  proliant oneview efuse interconnect \"Enclosure-01, interconnect 6\" --yes\n"
+            "  proliant oneview efuse flm Enclosure-01 1 --yes\n\n"
+            "Note: eFuse is a hard power-cycle, equivalent to physically "
+            "removing and reseating a bay. It always requires --yes unless "
+            "--dry-run is used."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    _add_power_target_parsers(p_efuse, _cmd_efuse, include_yes=True)
 
     # ── logical interconnects ─────────────────────────────────────────────
     p_li = sub.add_parser("li", help="List logical interconnects")

@@ -101,8 +101,10 @@ proliant oneview server-profiles describe <name>
 proliant oneview power shutdown profile <name>              # graceful shutdown via assigned server hardware
 proliant oneview power off server "Enclosure-01, bay 6"     # force power off server hardware
 proliant oneview power on server --enclosure Enclosure-01 --bay 6
-proliant oneview power cycle interconnect "Enclosure-01, interconnect 6" --yes
-proliant oneview power cycle flm Enclosure-01 1 --yes       # hard eFuse power-cycle a frame link module
+proliant oneview efuse server "Enclosure-01, bay 6" --yes   # hard eFuse power-cycle a Synergy bay
+proliant oneview efuse profile <name> --yes                 # eFuse the server assigned to a profile
+proliant oneview efuse interconnect "Enclosure-01, interconnect 6" --yes
+proliant oneview efuse flm Enclosure-01 1 --yes             # hard eFuse power-cycle a frame link module
 proliant oneview mac list --address <mac>
 proliant oneview mac list --network-name <name>
 proliant oneview mac describe <mac>

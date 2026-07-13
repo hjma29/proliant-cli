@@ -41,6 +41,9 @@ src/proliant/
   oneview/
     cli.py              proliant oneview commands: servers/firmware/networks/profiles/appliances
     config.py           OneView appliance sections in the same inventory.ini ([oneview] or type = oneview)
+    power.py            Graceful on/off/shutdown only, via server-hardware powerState (server/profile targets)
+    efuse.py            Hard eFuse power-cycle only (PATCH enclosure bayPowerState="E-Fuse"); 'oneview efuse'
+    targets.py          Shared server/profile/interconnect lookup + name-or-enclosure/bay resolution helpers
   spp/                  proliant spp list/inspect/diff — SPP catalog + fwpkg inspection
   setup/
     wizard.py           `proliant setup` interactive inventory.ini wizard + malformed-file recovery
@@ -80,6 +83,10 @@ proliant version
 - COM token cache: `~/.config/proliant-cli/com/token.json`.
 - `proliant ilo` upgrade order is iLO first, then BIOS, then everything else, with a
   ~90s wait after an iLO flash for it to restart before continuing.
+- `proliant oneview power`/`efuse` never talk to blade iLOs via Redfish directly — both
+  go through OneView's own REST API (`server-hardware powerState` PUT, or enclosure
+  `bayPowerState` PATCH for eFuse). OneView owns/rotates iLO admin creds for managed
+  Synergy hardware, so this CLI has no separate Redfish path to it.
 
 ---
 

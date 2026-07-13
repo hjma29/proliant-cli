@@ -8,7 +8,6 @@ from proliant.oneview.power import run_power_action
 ENC_URI = "/rest/enclosures/enc1"
 SERVER_URI = "/rest/server-hardware/sh1"
 PROFILE_URI = "/rest/server-profiles/sp1"
-IC_URI = "/rest/interconnects/ic6"
 
 
 class FakeClient:
@@ -16,7 +15,6 @@ class FakeClient:
         self._collections = collections
         self._singles = singles or {}
         self.puts: list[tuple[str, dict]] = []
-        self.patches: list[tuple[str, list[dict]]] = []
 
     async def get_all(self, uri: str) -> list[dict]:
         return self._collections.get(uri, [])
@@ -27,10 +25,6 @@ class FakeClient:
     async def put(self, uri: str, body: dict) -> dict:
         self.puts.append((uri, body))
         return {"uri": "/rest/tasks/power-task"}
-
-    async def patch(self, uri: str, body: list[dict], **kwargs) -> dict:
-        self.patches.append((uri, body))
-        return {"uri": "/rest/tasks/efuse-task"}
 
 
 def _server(**overrides) -> dict:
@@ -96,56 +90,20 @@ async def test_force_off_server_by_location_uses_press_and_hold():
 
 
 @pytest.mark.asyncio
-async def test_cycle_interconnect_uses_enclosure_efuse_patch():
-    client = FakeClient(
-        collections={
-            "/rest/interconnects": [{
-                "name": "Enclosure-01, interconnect 6",
-                "uri": IC_URI,
-                "interconnectLocation": {
-                    "locationEntries": [
-                        {"type": "Enclosure", "value": ENC_URI},
-                        {"type": "Bay", "value": "6"},
-                    ],
-                },
-            }],
-        },
-        singles={ENC_URI: _enclosure()},
-    )
-
-    result = await run_power_action(
-        client,
-        "cycle",
-        "interconnect",
-        name="Enclosure-01, interconnect 6",
-    )
-
-    assert client.patches == [
-        (ENC_URI, [{"op": "replace", "path": "/interconnectBays/6/bayPowerState", "value": "E-Fuse"}])
-    ]
-    assert result["method"] == "enclosure eFuse"
-    assert result["component"] == "ICM"
-
-
-@pytest.mark.asyncio
-async def test_cycle_flm_uses_manager_bay_efuse_patch():
-    client = FakeClient(collections={"/rest/enclosures": [_enclosure()]})
-
-    result = await run_power_action(client, "cycle", "flm", enclosure="Enclosure-01", bay=1)
-
-    assert client.patches == [
-        (ENC_URI, [{"op": "replace", "path": "/managerBays/1/bayPowerState", "value": "E-Fuse"}])
-    ]
-    assert result["target"] == "Enclosure-01, frame link module 1"
-    assert result["component"] == "FLM"
-
-
-@pytest.mark.asyncio
 async def test_shutdown_interconnect_is_not_supported():
     client = FakeClient(collections={})
 
     with pytest.raises(ValueError, match="does not expose 'shutdown' for interconnect"):
         await run_power_action(client, "shutdown", "interconnect", name="Enclosure-01, interconnect 6")
+
+
+@pytest.mark.asyncio
+async def test_cycle_action_is_not_supported_use_efuse_instead():
+    """cycle/reset were removed from power in favor of 'proliant oneview efuse'."""
+    client = FakeClient(collections={})
+
+    with pytest.raises(ValueError, match="Use 'proliant oneview efuse' for a hard power-cycle"):
+        await run_power_action(client, "cycle", "server", name="Enclosure-01, bay 6")
 
 
 def test_parser_power_shutdown_profile_parses():
@@ -173,15 +131,28 @@ def test_parser_power_server_by_location_parses():
     assert args.bay == 6
 
 
-def test_parser_power_cycle_flm_requires_yes_flag_available():
-    from proliant.oneview.cli import _build_parser, _cmd_power
+def test_parser_power_has_no_yes_flag():
+    """power never needs --yes since it's graceful-only; --yes is efuse-only."""
+    from proliant.oneview.cli import _build_parser
 
     parser = _build_parser()
-    args = parser.parse_args(["power", "cycle", "flm", "Enclosure-01", "1", "--yes"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["power", "on", "server", "Enclosure-01, bay 6", "--yes"])
 
-    assert args.func is _cmd_power
-    assert args.power_action == "cycle"
-    assert args.power_target_type == "flm"
-    assert args.enclosure == "Enclosure-01"
-    assert args.bay == 1
-    assert args.yes is True
+
+def test_parser_power_cycle_action_rejected():
+    """cycle/reset are no longer valid power actions; use 'oneview efuse' instead."""
+    from proliant.oneview.cli import _build_parser
+
+    parser = _build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["power", "cycle", "flm", "Enclosure-01", "1", "--yes"])
+
+
+def test_parser_power_has_no_interconnect_or_flm_targets():
+    """power only exposes server/profile targets; interconnect/flm are efuse-only."""
+    from proliant.oneview.cli import _build_parser
+
+    parser = _build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["power", "on", "flm", "Enclosure-01", "1"])

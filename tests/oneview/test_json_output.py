@@ -319,6 +319,38 @@ class TestOneviewJsonFirmwareCompliance:
         assert "Components" not in captured.out
         assert "System ROM" not in captured.out
 
+    def test_known_firmware_version_unifies_embedded_date_formats(self):
+        from proliant.oneview.cli import _known_firmware_version
+
+        assert _known_firmware_version("I42 v2.78 (03/16/2023)") == "I42 v2.78 (2023.03.16)"
+        assert _known_firmware_version("2.81 Mar 07 2023") == "2.81 2023.03.07"
+        assert _known_firmware_version("v3.60 (08/06/2025)") == "v3.60 (2025.08.06)"
+        assert _known_firmware_version("5.03.00") == "5.03.00"
+        assert _known_firmware_version("unknown") == ""
+
+    def test_firmware_version_style_greens_only_a_newer_target(self):
+        from proliant.oneview.cli import _firmware_version_style
+
+        # Target newer than current -> green only for the target column.
+        assert _firmware_version_style("I42 v2.78 (2023.03.16)", "v3.60 (2025.08.06)", is_target=True) == "green"
+        assert _firmware_version_style("I42 v2.78 (2023.03.16)", "v3.60 (2025.08.06)", is_target=False) == "white"
+        assert _firmware_version_style("2.81 2023.03.07", "3.17", is_target=True) == "green"
+
+        # Equal versions (already compliant) -> white, never green.
+        assert _firmware_version_style("5.03.00", "5.03.00", is_target=True) == "white"
+        assert _firmware_version_style("5.03.00", "5.03.00", is_target=False) == "white"
+
+        # Target older/equal or unparsable -> white.
+        assert _firmware_version_style("3.60", "2.78", is_target=True) == "white"
+        assert _firmware_version_style("unknown", "unknown", is_target=True) == "white"
+
+    def test_single_component_version_summary_wraps_nothing_but_colors_newer_target(self):
+        from proliant.oneview.cli import _single_component_version_summary
+
+        components = [{"current_version": "2.8.0.1001", "target_version": "2.9.2.1001", "update_required": True}]
+        assert "[white]2.8.0.1001[/]" == _single_component_version_summary(components, target=False)
+        assert "[green]2.9.2.1001[/]" == _single_component_version_summary(components, target=True)
+
     def test_server_version_summary_prefers_real_bios_and_ilo_firmware(self):
         from proliant.oneview.cli import _firmware_version_summary
 
@@ -355,10 +387,14 @@ class TestOneviewJsonFirmwareCompliance:
         current = _firmware_version_summary(row, target=False)
         target = _firmware_version_summary(row, target=True)
 
-        assert "BIOS:I42 v2.78 (03/16/2023)" in current
-        assert "iLO:2.81 Mar 07 2023" in current
-        assert "BIOS:v3.60 (08/06/2025)" in target
-        assert "iLO:3.17" in target
+        assert "BIOS:I42 v2.78 (2023.03.16)" in current
+        assert "iLO:(2.81 2023.03.07)" in current
+        assert "BIOS:v3.60 (2025.08.06)" in target
+        assert "iLO:(3.17)" in target
+        assert "[white]BIOS:I42 v2.78 (2023.03.16)[/]" in current
+        assert "[white]iLO:(2.81 2023.03.07)[/]" in current
+        assert "[green]BIOS:v3.60 (2025.08.06)[/]" in target
+        assert "[green]iLO:(3.17)[/]" in target
         assert "I42 v2.68" not in current
         assert "700.10" not in current
         assert "unknown" not in target

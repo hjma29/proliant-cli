@@ -2733,11 +2733,43 @@ def _plain_component_name(component: dict[str, Any]) -> str:
     return str(component.get("name") or "").lower()
 
 
+_MONTH_ABBR_TO_NUM = {
+    "jan": "01", "feb": "02", "mar": "03", "apr": "04", "may": "05", "jun": "06",
+    "jul": "07", "aug": "08", "sep": "09", "oct": "10", "nov": "11", "dec": "12",
+}
+
+
+def _normalize_embedded_dates(text: str) -> str:
+    """Reformat dates embedded in firmware version strings to the YYYY.MM.DD
+    style used for baseline labels (e.g. "2024.11.01"), so mixed date formats
+    like "(03/16/2023)" or "Mar 07 2023" render consistently."""
+
+    def _mmddyyyy(match: re.Match[str]) -> str:
+        month, day, year = match.group(1), match.group(2), match.group(3)
+        return f"{year}.{int(month):02d}.{int(day):02d}"
+
+    def _mon_dd_yyyy(match: re.Match[str]) -> str:
+        month = _MONTH_ABBR_TO_NUM.get(match.group(1).lower())
+        if not month:
+            return match.group(0)
+        day, year = match.group(2), match.group(3)
+        return f"{year}.{month}.{int(day):02d}"
+
+    text = re.sub(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b", _mmddyyyy, text)
+    text = re.sub(
+        r"\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2})\s+(\d{4})\b",
+        _mon_dd_yyyy,
+        text,
+        flags=re.IGNORECASE,
+    )
+    return text
+
+
 def _known_firmware_version(version: Any) -> str:
     text = str(version or "").strip()
     if text.lower() in {"unknown", "n/a", "na", "none"}:
         return ""
-    return text
+    return _normalize_embedded_dates(text)
 
 
 def _firmware_component_role(component: dict[str, Any]) -> str:
@@ -2754,14 +2786,35 @@ def _firmware_component_role(component: dict[str, Any]) -> str:
     return ""
 
 
-def _firmware_version_style(current: str, target: str) -> str:
-    cur = _known_firmware_version(current)
-    tgt = _known_firmware_version(target)
-    if cur and tgt and cur == tgt:
+def _parse_version_key(text: str) -> tuple[int, ...] | None:
+    """Extract a comparable numeric version key (e.g. (2, 78)) from a firmware
+    version string, ignoring any parenthesized date and non-numeric family/board
+    codes — e.g. "I42 v2.78 (2023.03.16)" -> (2, 78)."""
+    value = _known_firmware_version(text)
+    if not value:
+        return None
+    stripped = re.sub(r"\([^)]*\)", "", value)
+    match = re.search(r"\d+(?:\.\d+){1,4}", stripped)
+    if not match:
+        return None
+    return tuple(int(part) for part in match.group(0).split("."))
+
+
+def _target_is_newer(current: str, target: str) -> bool:
+    cur_key = _parse_version_key(current)
+    tgt_key = _parse_version_key(target)
+    if cur_key is None or tgt_key is None:
+        return False
+    length = max(len(cur_key), len(tgt_key))
+    cur_key += (0,) * (length - len(cur_key))
+    tgt_key += (0,) * (length - len(tgt_key))
+    return tgt_key > cur_key
+
+
+def _firmware_version_style(current: str, target: str, *, is_target: bool) -> str:
+    if is_target and _target_is_newer(current, target):
         return "green"
-    if cur or tgt:
-        return "yellow"
-    return "dim"
+    return "white"
 
 
 def _component_update_style(update_required: bool | None) -> str:
@@ -2809,8 +2862,10 @@ def _server_version_summary(components: list[dict[str, Any]], *, target: bool) -
             continue
         current_version = _known_firmware_version(component.get("current_version"))
         target_version = _known_firmware_version(component.get("target_version"))
-        style = _firmware_version_style(current_version, target_version)
+        style = _firmware_version_style(current_version, target_version, is_target=target)
         value = target_version if target else current_version
+        if role == "iLO" and value:
+            value = f"({value})"
         segments.append(_styled_firmware_version(role, value, style))
     return " ".join(segments) if segments else "—"
 
@@ -2819,7 +2874,7 @@ def _single_component_version_summary(components: list[dict[str, Any]], *, targe
     component = components[0] if components else {}
     current_version = _known_firmware_version(component.get("current_version"))
     target_version = _known_firmware_version(component.get("target_version"))
-    style = _firmware_version_style(current_version, target_version)
+    style = _firmware_version_style(current_version, target_version, is_target=target)
     value = target_version if target else current_version
     return _styled_firmware_version("", value, style)
 
@@ -2921,12 +2976,11 @@ def _render_compliance_describe(row: dict[str, Any]) -> None:
     for component in components:
         current = component.get("current_version") or ""
         target = component.get("target_version") or ""
-        style = _firmware_version_style(current, target)
         table.add_row(
             component.get("name") or "Unknown component",
             component.get("location") or "—",
-            _styled_firmware_version("", current, style),
-            _styled_firmware_version("", target, style),
+            _styled_firmware_version("", current, _firmware_version_style(current, target, is_target=False)),
+            _styled_firmware_version("", target, _firmware_version_style(current, target, is_target=True)),
             _component_update_style(component.get("update_required")),
         )
     console.print(table)
@@ -3137,7 +3191,10 @@ async def _wizard_update_enclosure(args: argparse.Namespace) -> None:
     direction = 1
     while 0 <= i < len(_WIZARD_STEPS):
         step = _WIZARD_STEPS[i]
-        if step == "install_type" and state["scope"] != "shared-infra-and-profiles":
+        # install_type is never shown in the wizard — GUI doesn't expose it either
+        # and the default "keep existing" matches GUI behaviour.  Operators who
+        # want a non-default value must pass --install-type on the command line.
+        if step == "install_type":
             i += direction
             continue
         try:
@@ -3508,7 +3565,10 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
                 "redundancy or re-running with --activation-mode parallel.[/dim]"
             )
         ans = console.input("Your choice [A/b]: ", markup=False).strip().lower()
-        return "force" if ans in ("b", "f", "force") else "abort"
+        # "proceed" = bypass the non-disruptive validation guard only (matches
+        # the GUI's plain "OK to proceed").  We do NOT set forceInstallFirmware
+        # here — the user didn't tick "Force re-installation or downgrade".
+        return "proceed" if ans in ("b", "f", "force") else "abort"
 
     factory = _oneview_client_factory()
     try:

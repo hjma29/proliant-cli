@@ -157,10 +157,12 @@ class TestWizardFlow:
         assert called_args.force is False
         assert called_args.execute is False
 
-    def test_shared_infra_and_profiles_asks_install_type(self, monkeypatch):
+    def test_shared_infra_and_profiles_install_type_always_skipped(self, monkeypatch):
+        # install_type wizard step is always hidden (GUI doesn't expose it either;
+        # use --install-type flag for a non-default value).
         # le=1 (LE01), baseline=default, scope=2 (shared-infra-and-profiles),
-        # install_type=2 (firmware-only), activation=default, force=default, execute=default (No)
-        console = _FakeConsole(["1", "", "2", "2", "", "", ""])
+        # activation=default, force=default, execute=default (No)
+        console = _FakeConsole(["1", "", "2", "", "", ""])
         monkeypatch.setattr(cli, "get_console", lambda: console)
 
         fake_delegate = AsyncMock()
@@ -170,7 +172,7 @@ class TestWizardFlow:
         fake_delegate.assert_awaited_once()
         called_args = fake_delegate.await_args.args[0]
         assert called_args.scope == "shared-infra-and-profiles"
-        assert called_args.install_type == "firmware-only"
+        assert called_args.install_type is None
 
     def test_back_navigation_returns_to_previous_step(self, monkeypatch):
         # le=1, baseline default, scope: go back ('b') to baseline, pick baseline=2 (old),

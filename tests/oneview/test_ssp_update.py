@@ -352,6 +352,25 @@ def test_normalize_task_extracts_latest_stage_from_progress_updates():
     assert normalize_task({"taskState": "Running"})["stage"] == ""
 
 
+def test_normalize_task_cleans_embedded_refs_from_stage():
+    """OneView embeds raw {"name":...,"uri":...} JSON blobs inline in some
+    progress text (the GUI renders each as a link) -- verified live, this
+    showed up in the CLI's own progress bar as a literal
+    'Applying server hardware settings to {"name":"Enclosure-01, bay 6",
+    "uri":"/rest/server-hardware/..."}.' instead of the plain resource name.
+    normalize_task must collapse it the same way _clean_embedded_refs does
+    for task-block-reason text."""
+    t = normalize_task({
+        "uri": "/rest/tasks/1", "taskState": "Running",
+        "progressUpdates": [{
+            "id": 0,
+            "statusUpdate": 'Applying server hardware settings to '
+                            '{"name":"Enclosure-01, bay 6","uri":"/rest/server-hardware/x"}.',
+        }],
+    })
+    assert t["stage"] == "Applying server hardware settings to Enclosure-01, bay 6."
+
+
 @pytest.mark.asyncio
 async def test_await_task_treats_non_task_uri_as_synchronous_final():
     from proliant.oneview.ssp_update import _await_task
@@ -663,6 +682,43 @@ async def test_deepest_active_descendant_none_when_no_children():
         client, normalize_task({"uri": "/rest/tasks/root"}),
     )
     assert deepest is None
+
+
+@pytest.mark.asyncio
+async def test_deepest_active_descendant_ignores_stale_completed_grandchildren():
+    """Reproduces a live false '100%  Running' the CLI showed for several
+    minutes: root 'Update' (Running), its child 'Apply profile' (Running,
+    own stage 'Stage component 4/5...', own percent 0) has two grandchildren
+    that already finished ('Power on', 'Generate install set', both
+    Completed at 100%). Picking 'whichever grandchild was most recently
+    touched' as a fallback grabbed a finished, stale grandchild and overlaid
+    its 100% onto the still-running rollout. The deepest *active* node is
+    'Apply profile' itself -- there's nothing live below it -- so that's
+    what must be returned, not a completed leaf."""
+    root = {"uri": "/rest/tasks/root", "taskState": "Running", "percentComplete": 50}
+    child = {
+        "uri": "/rest/tasks/child", "taskState": "Running", "percentComplete": 0,
+        "progressUpdates": [{"statusUpdate": "Stage component 4/5 - firmware.fwpkg"}],
+    }
+    grandchild_1 = {
+        "uri": "/rest/tasks/gc1", "taskState": "Completed", "percentComplete": 100,
+        "progressUpdates": [{"statusUpdate": "Successfully powered on server."}],
+        "modified": "2026-07-14T03:22:08.632Z",
+    }
+    grandchild_2 = {
+        "uri": "/rest/tasks/gc2", "taskState": "Completed", "percentComplete": 100,
+        "progressUpdates": [{"statusUpdate": "Generating install set for the server."}],
+        "modified": "2026-07-14T03:26:13.167Z",  # most recently touched -- must NOT win
+    }
+    client = _ChildTaskClient(root, {
+        "/rest/tasks/root": [child],
+        "/rest/tasks/child": [grandchild_1, grandchild_2],
+    })
+    deepest = await ssp_update._deepest_active_descendant(client, normalize_task(root))
+    assert deepest is not None
+    assert deepest["stage"] == "Stage component 4/5 - firmware.fwpkg"
+    assert deepest["percent"] == 0
+    assert deepest["uri"] == "/rest/tasks/child"
 
 
 @pytest.mark.asyncio

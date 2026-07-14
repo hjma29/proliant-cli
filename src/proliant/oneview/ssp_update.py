@@ -493,7 +493,7 @@ def normalize_task(data: dict | None) -> dict[str, Any]:
     for u in reversed(updates):
         text = (u or {}).get("statusUpdate", "") or ""
         if text.strip():
-            stage = text.strip()
+            stage = _clean_embedded_refs(text.strip())
             break
     return {
         "uri": d.get("uri", "") or "",
@@ -842,27 +842,40 @@ async def _deepest_active_descendant(
     live on a *descendant* task while the root task's own
     ``percentComplete``/``progressUpdates`` stay flat at 0% for the whole
     multi-minute rollout. Descends the ``parentTaskUri`` chain picking
-    whichever child is still ``Running`` (or, if none, the most recently
-    touched one) at each level, so the CLI's single progress bar can show
-    "Update frame link module firmware  30%" instead of sitting at a
-    motionless "0%" the entire time. Returns ``None`` if there's no
-    descendant with anything more informative than the root already has (so
-    callers can just keep showing the root's own state). Never raises --
-    display-only enrichment, not load-bearing for success/failure detection.
+    whichever child is still ``Running`` at each level, so the CLI's single
+    progress bar can show "Update frame link module firmware  30%" instead of
+    sitting at a motionless "0%" the entire time.
+
+    Only ever descends into a level's *Running* child, never a Completed one
+    -- confirmed live: once the truly active step (e.g. "Apply profile",
+    still Running, "Stage component 4/5...") has only already-finished
+    children beneath it (e.g. "Power on", "Generate install set", both long
+    Completed at 100%), picking "whichever's most recently touched" as a
+    fallback previously grabbed that stale, finished grandchild and overlaid
+    its 100% onto the whole rollout's progress bar -- showing a contradictory
+    "100%  Running" for several more minutes while real work continued
+    underneath. Stopping at the deepest level with a genuinely active child
+    keeps the display honest (0% while staging, not a false 100%).
+
+    Returns ``None`` if there's no descendant with anything more informative
+    than the root already has (so callers can just keep showing the root's
+    own state). Never raises -- display-only enrichment, not load-bearing for
+    success/failure detection.
     """
     node_uri = root.get("uri", "")
     best: dict[str, Any] | None = None
     depth = 0
     while node_uri and depth < max_depth:
         children = await _child_tasks(client, node_uri)
-        if not children:
+        running = [c for c in children if (c.get("taskState") or "").lower() == "running"]
+        if not running:
+            # Nothing actually in flight at this level -- any leftover child
+            # is a finished, stale snapshot (see docstring). Stop here and
+            # keep the deepest *active* node found so far (possibly None).
             break
-
-        def _rank(c: dict) -> tuple:
-            running = (c.get("taskState") or "").lower() == "running"
-            return (running, c.get("modified") or c.get("created") or "")
-
-        chosen = normalize_task(max(children, key=_rank))
+        chosen = normalize_task(
+            max(running, key=lambda c: c.get("modified") or c.get("created") or "")
+        )
         if not chosen["stage"] and chosen["percent"] is None:
             break  # this level has nothing more informative to show
         best = chosen

@@ -504,14 +504,30 @@ def normalize_task(data: dict | None) -> dict[str, Any]:
         if text.strip():
             stage = _clean_embedded_refs(text.strip())
             break
+    # OneView's plain `percentComplete` stays a flat 0 for the entire
+    # duration of some task types -- confirmed live on a server-profile
+    # firmware "Apply profile" task: `percentComplete` sat at 0 the whole
+    # ~12 minutes it ran, while `computedPercentComplete` climbed (e.g. 18)
+    # as each of its `totalSteps` actually completed. That's the same
+    # step-weighted progress the GUI's own bar reads, so prefer it -- falling
+    # back to the plain field for task shapes (or older OneView versions)
+    # that only ever populate that one.
+    percent = _percent(d.get("computedPercentComplete"))
+    if percent is None:
+        percent = _percent(d.get("percentComplete"))
+    total_steps = d.get("totalSteps")
+    completed_steps = d.get("completedSteps")
+    has_steps = isinstance(total_steps, int) and total_steps > 0
     return {
         "uri": d.get("uri", "") or "",
         "name": d.get("name", "") or "",
         "state": d.get("taskState", "") or "",
         "status": d.get("taskStatus", "") or "",
-        "percent": _percent(d.get("percentComplete")),
+        "percent": percent,
         "resource": (d.get("associatedResource") or {}).get("resourceName", "") or "",
         "stage": stage,
+        "completed_steps": completed_steps if has_steps and isinstance(completed_steps, int) else None,
+        "total_steps": total_steps if has_steps else None,
     }
 
 
@@ -894,11 +910,11 @@ async def _deepest_active_descendant(
 
 
 async def _enrich_with_active_descendant(client: "OneViewClient", task: dict) -> dict:
-    """Overlay the deepest active descendant's stage/resource/percent onto
-    *task* for display, e.g. so the bar shows "Update frame link module
-    firmware  30%" sourced from a child task instead of the root task's own
-    flat "0%". Leaves *task*'s own ``state``/``uri`` untouched -- those still
-    drive done/failed detection off the authoritative root task."""
+    """Overlay the deepest active descendant's stage/resource/percent/step
+    count onto *task* for display, e.g. so the bar shows "Update frame link
+    module firmware  30%" sourced from a child task instead of the root
+    task's own flat "0%". Leaves *task*'s own ``state``/``uri`` untouched --
+    those still drive done/failed detection off the authoritative root task."""
     try:
         deepest = await _deepest_active_descendant(client, task)
     except Exception:  # noqa: BLE001 - best-effort, display-only
@@ -912,6 +928,9 @@ async def _enrich_with_active_descendant(client: "OneViewClient", task: dict) ->
         merged["resource"] = deepest["resource"]
     if deepest.get("percent") is not None:
         merged["percent"] = deepest["percent"]
+    if deepest.get("total_steps") is not None:
+        merged["completed_steps"] = deepest.get("completed_steps")
+        merged["total_steps"] = deepest.get("total_steps")
     return merged
 
 

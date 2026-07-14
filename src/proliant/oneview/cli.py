@@ -918,6 +918,25 @@ async def _cmd_profiles_list(args: argparse.Namespace) -> None:
     await _async_profiles_list()
 
 
+def _step_segment(payload: dict) -> str:
+    """A "step 15/24" progress segment from a task-progress event's
+    ``completed_steps``/``total_steps`` (see ``normalize_task()``), or ``""``
+    if this tick didn't carry step data. Some OneView task types (e.g. a
+    server-profile firmware "Apply profile" task) leave their own plain
+    ``percentComplete`` frozen at 0 for their entire run while quietly
+    completing steps underneath -- OneView's ``computedPercentComplete``
+    already accounts for this (see ``normalize_task()``), but showing the
+    raw step count alongside it makes the same "still working, here's how
+    far" detail the GUI's own subtask log conveys instead of a lone number.
+    """
+    total = payload.get("total_steps")
+    if not isinstance(total, int) or total <= 0:
+        return ""
+    completed = payload.get("completed_steps")
+    completed = completed if isinstance(completed, int) else 0
+    return f"step {completed}/{total}"
+
+
 # ── proliant oneview server-profiles reapply ──────────────────────────────────────
 
 async def _cmd_profiles_reapply(args: argparse.Namespace) -> None:
@@ -965,9 +984,12 @@ async def _cmd_profiles_reapply(args: argparse.Namespace) -> None:
             state = payload.get("state") or payload.get("status") or "working…"
             stage = payload.get("stage") or ""
             res = payload.get("resource") or ""
+            step = _step_segment(payload)
             segs = ["[bold]Server profile[/bold]", f"[cyan]{state}[/cyan]"]
             if stage:
                 segs.append(f"[dim]{stage}[/dim]")
+            if step:
+                segs.append(f"[dim]{step}[/dim]")
             if res:
                 segs.append(f"[dim]({res})[/dim]")
             desc = "  ".join(segs)
@@ -1115,9 +1137,12 @@ async def _cmd_profiles_update(args: argparse.Namespace) -> None:
             state = payload.get("state") or payload.get("status") or "working…"
             stage = payload.get("stage") or ""
             res = payload.get("resource") or ""
+            step = _step_segment(payload)
             segs = ["[bold]Server profile[/bold]", f"[cyan]{state}[/cyan]"]
             if stage:
                 segs.append(f"[dim]{stage}[/dim]")
+            if step:
+                segs.append(f"[dim]{step}[/dim]")
             if res:
                 segs.append(f"[dim]({res})[/dim]")
             desc = "  ".join(segs)
@@ -3823,6 +3848,7 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
             state = payload.get("state") or payload.get("status") or "working…"
             stage = payload.get("stage") or ""
             res = payload.get("resource") or ""
+            step = _step_segment(payload)
             label = row.get("label", "")
             segs = []
             if label:
@@ -3837,6 +3863,8 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
                 # of blending it in as dim, ordinary progress chatter.
                 state_style = "yellow" if state.lower() == "warning" else "dim"
                 segs.append(f"[{state_style}]{state}[/{state_style}]")
+            if step:
+                segs.append(f"[dim]{step}[/dim]")
             if res and res not in label:
                 segs.append(f"[dim]({res})[/dim]")
             desc = "  ".join(segs)

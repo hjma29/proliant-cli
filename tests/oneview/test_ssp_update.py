@@ -372,6 +372,42 @@ def test_normalize_task_cleans_embedded_refs_from_stage():
     assert t["stage"] == "Applying server hardware settings to Enclosure-01, bay 6."
 
 
+def test_normalize_task_prefers_computed_percent_complete():
+    """Reproduces a live server-profile firmware 'Apply profile' task: its
+    own plain percentComplete stayed a flat 0 for the whole ~12 minute run
+    (shown in the CLI as a stuck '0%'), while computedPercentComplete --
+    the same step-weighted progress the GUI's own bar reads -- climbed as
+    completedSteps advanced out of totalSteps. normalize_task must prefer
+    the computed field so the CLI's bar actually moves."""
+    t = normalize_task({
+        "uri": "/rest/tasks/1", "taskState": "Running",
+        "percentComplete": 0, "computedPercentComplete": 18,
+        "completedSteps": 15, "totalSteps": 24,
+    })
+    assert t["percent"] == 18.0
+    assert t["completed_steps"] == 15
+    assert t["total_steps"] == 24
+
+
+def test_normalize_task_falls_back_to_plain_percent_when_computed_missing():
+    """Older/other task shapes that never populate computedPercentComplete
+    must still work exactly as before."""
+    t = normalize_task({"uri": "/rest/tasks/1", "taskState": "Running", "percentComplete": 40})
+    assert t["percent"] == 40.0
+    assert t["completed_steps"] is None
+    assert t["total_steps"] is None
+
+
+def test_normalize_task_omits_steps_when_total_steps_is_zero_or_absent():
+    """totalSteps=0 (seen live on the top-level 'Update' task, which has no
+    step breakdown of its own) must not be reported as '0/0 steps'."""
+    t = normalize_task({"uri": "/rest/tasks/1", "taskState": "Running",
+                        "percentComplete": 50, "totalSteps": 0, "completedSteps": 0})
+    assert t["completed_steps"] is None
+    assert t["total_steps"] is None
+    assert normalize_task({"uri": "/rest/tasks/1"})["total_steps"] is None
+
+
 @pytest.mark.asyncio
 async def test_await_task_treats_non_task_uri_as_synchronous_final():
     from proliant.oneview.ssp_update import _await_task
@@ -790,6 +826,28 @@ async def test_enrich_with_active_descendant_overlays_display_fields_only():
     assert enriched["uri"] == task["uri"]
     assert enriched["state"] == task["state"]
     assert enriched["name"] == "Root"
+
+
+@pytest.mark.asyncio
+async def test_enrich_with_active_descendant_carries_step_count():
+    """Reproduces the live 'Apply profile' task: its own stage/percent come
+    from the deepest active descendant, and so must its step count -- the
+    root/child tasks in this chain don't carry step data at all."""
+    root = {"uri": "/rest/tasks/root", "taskState": "Running", "percentComplete": 0}
+    grandchild = {
+        "uri": "/rest/tasks/grandchild", "taskState": "Running",
+        "percentComplete": 0, "computedPercentComplete": 18,
+        "completedSteps": 15, "totalSteps": 24,
+        "progressUpdates": [{"statusUpdate": "Install firmware."}],
+    }
+    client = _ChildTaskClient(root, {
+        "/rest/tasks/root": [{"uri": "/rest/tasks/child", "taskState": "Running", "percentComplete": 0}],
+        "/rest/tasks/child": [grandchild],
+    })
+    enriched = await ssp_update._enrich_with_active_descendant(client, normalize_task(root))
+    assert enriched["percent"] == 18.0
+    assert enriched["completed_steps"] == 15
+    assert enriched["total_steps"] == 24
 
 
 @pytest.mark.asyncio

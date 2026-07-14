@@ -246,3 +246,21 @@ async def test_json_mode_never_prompts_and_prints_raw_result():
 
     assert console.input_prompts == []
     assert printed["data"]["status"] == "applied"
+
+
+def test_step_segment_renders_completed_over_total_steps():
+    """Reproduces the live 'Apply profile' task getting stuck at '0%' with
+    no other indication it's still working (see normalize_task's
+    computedPercentComplete docstring) -- the step count is the same
+    'still working, here's how far' detail the GUI's subtask log shows."""
+    assert cli._step_segment({"completed_steps": 15, "total_steps": 24}) == "step 15/24"
+
+
+def test_step_segment_defaults_completed_to_zero_when_missing():
+    assert cli._step_segment({"total_steps": 24}) == "step 0/24"
+
+
+def test_step_segment_blank_when_no_total_steps():
+    assert cli._step_segment({}) == ""
+    assert cli._step_segment({"total_steps": 0, "completed_steps": 0}) == ""
+    assert cli._step_segment({"total_steps": None}) == ""

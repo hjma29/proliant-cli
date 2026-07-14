@@ -918,6 +918,118 @@ async def _cmd_profiles_list(args: argparse.Namespace) -> None:
     await _async_profiles_list()
 
 
+# ── proliant oneview server-profiles reapply ──────────────────────────────────────
+
+async def _cmd_profiles_reapply(args: argparse.Namespace) -> None:
+    from proliant.oneview.profile_reapply import run_profile_reapply
+
+    json_mode = getattr(args, "json_output", False) or get_output_mode() == OutputMode.JSON
+    console = get_console()
+
+    bars: dict = {}
+
+    def _stop_bar() -> None:
+        p = bars.pop("bar", None)
+        bars.pop("task", None)
+        if p is not None:
+            try:
+                p.stop()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def on_event(kind: str, payload: dict) -> None:
+        if json_mode:
+            return
+        if kind == "applying":
+            desc = f"[bold]Server profile: {payload.get('name')}[/bold]"
+            p = bars.get("bar")
+            if p is not None:
+                p.reset(bars["task"], total=100, completed=0, description=desc)
+                return
+            from rich.progress import (
+                BarColumn, Progress, SpinnerColumn, TaskProgressColumn,
+                TextColumn, TimeElapsedColumn,
+            )
+            p = Progress(
+                SpinnerColumn(), TextColumn("{task.description}"),
+                BarColumn(), TaskProgressColumn(), TimeElapsedColumn(), console=console,
+            )
+            p.start()
+            bars["bar"] = p
+            bars["task"] = p.add_task(desc, total=100)
+        elif kind == "task-progress":
+            p = bars.get("bar")
+            if p is None:
+                return
+            pct = payload.get("percent")
+            state = payload.get("state") or payload.get("status") or "working…"
+            stage = payload.get("stage") or ""
+            res = payload.get("resource") or ""
+            segs = ["[bold]Server profile[/bold]", f"[cyan]{state}[/cyan]"]
+            if stage:
+                segs.append(f"[dim]{stage}[/dim]")
+            if res:
+                segs.append(f"[dim]({res})[/dim]")
+            desc = "  ".join(segs)
+            if isinstance(pct, (int, float)):
+                p.update(bars["task"], completed=pct, description=desc)
+            else:
+                p.update(bars["task"], description=desc)
+
+    def confirm(info: dict) -> bool:
+        if getattr(args, "yes", False):
+            return True
+        if json_mode:
+            return False  # never silently reconfigure hardware in scripted mode
+        name = info.get("name", "")
+        console.print(Panel(
+            f"About to reapply server profile [bold]{name}[/bold]'s stored configuration to "
+            "its assigned hardware.\nThis re-runs OneView's own profile-apply state machine "
+            "and can briefly reconfigure network/storage settings or reboot the server.",
+            title="Confirm reapply server profile", border_style="red"))
+        ans = console.input(
+            f'Type the profile name "{name}" to proceed (or anything else to abort): ',
+            markup=False,
+        )
+        return ans.strip() == name
+
+    factory = _oneview_client_factory()
+    try:
+        result = await run_profile_reapply(
+            factory, name=args.name, confirm=confirm, on_event=on_event,
+            poll_interval_s=_SSP_POLL_S, task_timeout_s=_SSP_TASK_TIMEOUT_S,
+        )
+    finally:
+        _stop_bar()
+
+    if json_mode:
+        print_json(result)
+        return
+
+    status = result.get("status")
+    name = (result.get("profile") or {}).get("name") or args.name
+    if status == "not-found":
+        console.print(f"[red]Server profile '{args.name}' not found.[/red]")
+        console.print(f"[dim]Known: {result.get('known') or 'none found'}[/dim]")
+    elif status == "aborted":
+        console.print("\n[yellow]Aborted — nothing was modified.[/yellow]")
+    elif status == "applied":
+        console.print(f"\n[green]✓ Reapplied server profile[/green] [bold]{name}[/bold].")
+    elif status == "failed":
+        last = (result.get("results") or [{}])[-1]
+        console.print(
+            f"\n[red]Reapply failed[/red] on [bold]{name}[/bold] "
+            f"({last.get('status') or last.get('state') or 'error'}).\n"
+            "See [bold]proliant oneview activity[/bold] (or the OneView UI Activity page) "
+            "for the full task detail."
+        )
+    elif status == "timeout":
+        console.print(
+            f"\n[yellow]Reapply did not finish within the timeout[/yellow] on [bold]{name}[/bold] "
+            "— check [bold]proliant oneview activity[/bold] for its current progress."
+        )
+
+
 # ── proliant oneview noun-verb detail commands ────────────────────────────────────
 
 async def _async_describe_uplinkset(name: str) -> None:
@@ -4491,7 +4603,7 @@ examples:
     p_ul_desc_name.completer = _oneview_uplinkset_name_completer
     p_ul_desc.set_defaults(func=_cmd_describe, resource="uplinkset")
 
-    p_profiles = sub.add_parser("server-profiles", help="List or describe server profiles")
+    p_profiles = sub.add_parser("server-profiles", help="List, describe, or reapply server profiles")
     s_profiles = p_profiles.add_subparsers(dest="what", metavar="ACTION")
     s_profiles.required = True
     p_sp_list = s_profiles.add_parser("list", help="List all server profiles")
@@ -4500,6 +4612,21 @@ examples:
     p_sp_desc_name = p_sp_desc.add_argument("name", metavar="NAME", help="Name of the server profile")
     p_sp_desc_name.completer = _oneview_profile_name_completer
     p_sp_desc.set_defaults(func=_cmd_describe, resource="server-profile")
+    p_sp_reapply = s_profiles.add_parser("reapply",
+        help="Reapply a server profile's stored configuration to its assigned hardware",
+        description="Push the server profile's current, already-stored configuration back onto "
+                    "its assigned server hardware -- the CLI equivalent of the OneView GUI's "
+                    "'Reapply configuration' action. Nothing about the profile itself changes; "
+                    "this makes OneView reconcile whatever is actually out of sync on the live "
+                    "hardware (network/storage settings, BIOS, boot order, firmware consistency), "
+                    "which is what clears alerts like 'Reapply the server profile'.")
+    p_sp_reapply_name = p_sp_reapply.add_argument("name", metavar="NAME",
+        help="Name of the server profile")
+    p_sp_reapply_name.completer = _oneview_profile_name_completer
+    p_sp_reapply.add_argument("--yes", action="store_true",
+        help="Skip the type-to-confirm prompt. This reconfigures live hardware and can trigger "
+             "a reboot -- use with care.")
+    p_sp_reapply.set_defaults(func=_cmd_profiles_reapply)
 
     p_power = sub.add_parser(
         "power",

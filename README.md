@@ -98,6 +98,10 @@ proliant oneview uplinksets list
 proliant oneview uplinksets describe <name>
 proliant oneview server-profiles list
 proliant oneview server-profiles describe <name>
+proliant oneview server-profiles reapply <name>              # push the profile's stored config back onto its hardware
+proliant oneview server-profiles reapply <name> --yes        # skip the type-to-confirm prompt
+#   Same effect as the GUI's 'Reapply configuration' action -- clears alerts like "Reapply the
+#   server profile" (e.g. after a hardware re-insertion or eFuse) without changing any setting.
 proliant oneview power shutdown profile <name>              # graceful shutdown via assigned server hardware
 proliant oneview power off server "Enclosure-01, bay 6"     # force power off server hardware
 proliant oneview power on server --enclosure Enclosure-01 --bay 6

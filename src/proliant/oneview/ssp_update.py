@@ -1017,6 +1017,7 @@ async def run_ssp_apply(
     poll_interval_s: float = 20.0,
     task_timeout_s: float = 90 * 60,
     verify_timeout_s: float = 5 * 60,
+    profile_concurrency: int = 1,
     appliance_version: str = "",
     baselines: list[dict] | None = None,
 ) -> dict[str, Any]:
@@ -1078,6 +1079,24 @@ async def run_ssp_apply(
     regardless of redundancy, at the cost of a real network outage during the
     update, and OneView requires the affected compute modules to be powered off
     first.
+
+    ``profile_concurrency`` controls how many server-profile firmware PUTs run
+    at once (default 1 -- fully sequential). Researched against HPE's own
+    tools before adding this: there is no OneView bulk/batch firmware API for
+    server profiles at all -- the PowerShell library, Python SDK, and Ansible
+    collection all serialize one ``PUT /rest/server-profiles/{id}`` at a time,
+    and even OneView's own ``SharedInfrastructureAndServerProfiles`` LE-cascade
+    documents placing each hypervisor into maintenance mode *serially*.
+    Firmware only actually lands on hardware one step at a time regardless
+    (iSUT/RBSU processes one server), so concurrency here doesn't make the
+    real work faster -- it only overlaps the wall-clock wait across multiple
+    *independent* servers. OneView publishes no concurrent-task ceiling, so
+    keep this modest for large fleets rather than firing everything at once.
+    Profiles are processed in waves of up to ``profile_concurrency``: each
+    wave's requests are submitted together and all polled to completion
+    before the next wave starts (so a failure surfaces after its wave
+    finishes, not mid-wave -- the remaining *already-launched* servers in
+    that wave are not abandoned partway through a reboot cycle).
     """
     import asyncio
 
@@ -1133,6 +1152,7 @@ async def run_ssp_apply(
         async def _apply_with_retry(
             kind: str, name: str, resource_uri: str, do_request: Callable[[bool], Any],
             actual_checker: Callable[[], Any] | None = None,
+            emit: Callable[[str, dict], Any] = emit,
         ) -> tuple[str | None, dict[str, Any]]:
             """Run *do_request(force_flag)*, polling to completion.
 
@@ -1325,14 +1345,29 @@ async def run_ssp_apply(
                 "logical-enclosure", le["name"], le["uri"], _le_request,
                 actual_checker=_le_actual_checker,
             )
-            results.append({"kind": "logical-enclosure", "name": le["name"], **task})
+            # kind/name always identify the *requested target*, not whatever
+            # (possibly empty, in tests) "name" the task body itself carries --
+            # merge task fields first so kind/name can't be silently
+            # overwritten by them.
+            results.append({**task, "kind": "logical-enclosure", "name": le["name"]})
             emit("applied", results[-1])
             if status is not None:
                 return {"status": status, "plan": plan, "results": results}
 
-        # (b) compute (server profiles)
-        for prof in changing_profs:
-            emit("applying", {"kind": "server-profile", "name": prof["name"]})
+        # (b) compute (server profiles) -- processed in waves of up to
+        # profile_concurrency at once (default 1, see docstring above for why
+        # sequential is the researched-and-matched-to-HPE default).
+        async def _run_one_profile(prof: dict) -> tuple[str | None, dict[str, Any]]:
+            # Tag every event this profile's processing emits with its own
+            # name via "target", so a caller running multiple profiles
+            # concurrently can route "task-progress" ticks back to the right
+            # one (e.g. a multi-row progress display). The underlying OneView
+            # task body has no such correlation -- its own "name"/"resource"
+            # fields describe the task, not which profile requested it.
+            def _tagged_emit(evt_kind: str, payload: dict) -> None:
+                emit(evt_kind, {**payload, "target": prof["name"]})
+
+            _tagged_emit("applying", {"kind": "server-profile", "name": prof["name"]})
 
             async def _profile_request(force_flag: bool, bypass_validation: bool, prof=prof) -> dict[str, Any]:
                 # Server-profile firmware has no non-disruptive-validation guard
@@ -1345,12 +1380,39 @@ async def run_ssp_apply(
                 return await client.put(prof["uri"], body)
 
             status, task = await _apply_with_retry(
-                "server-profile", prof["name"], prof["uri"], _profile_request
+                "server-profile", prof["name"], prof["uri"], _profile_request,
+                emit=_tagged_emit,
             )
-            results.append({"kind": "server-profile", "name": prof["name"], **task})
-            emit("applied", results[-1])
-            if status is not None:
-                return {"status": status, "plan": plan, "results": results}
+            # kind/name always identify the *requested target*; merge task
+            # fields first so they can't be silently overwritten by whatever
+            # "name" the task body itself carries (see the LE loop above for
+            # the same fix).
+            entry = {**task, "kind": "server-profile", "name": prof["name"]}
+            _tagged_emit("applied", entry)
+            return status, entry
+
+        wave_size = max(1, int(profile_concurrency))
+        i = 0
+        while i < len(changing_profs):
+            wave = changing_profs[i:i + wave_size]
+            # asyncio.gather preserves result order matching *wave*'s order
+            # regardless of which profile's request actually finishes first,
+            # so `results` stays deterministic (profile order) even when
+            # multiple servers are updating concurrently.
+            wave_results = await asyncio.gather(*(_run_one_profile(p) for p in wave))
+            worst_status = None
+            for status, entry in wave_results:
+                results.append(entry)
+                if status is not None and worst_status is None:
+                    worst_status = status
+            # A failure/block/unverified anywhere in this wave stops further
+            # waves -- but (deliberately) doesn't cancel the other requests
+            # already launched in the same wave; they're real in-flight
+            # firmware operations on real hardware, not something to abandon
+            # mid-reboot-cycle just because a sibling in the same wave failed.
+            if worst_status is not None:
+                return {"status": worst_status, "plan": plan, "results": results}
+            i += wave_size
 
     return {"status": "applied", "plan": plan, "results": results}
 

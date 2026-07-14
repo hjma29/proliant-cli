@@ -3427,6 +3427,18 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
             console.print(f"[dim]Available: {names}[/dim]")
         return
 
+    # `or 1` would silently treat --concurrency 0 as the default (0 is falsy)
+    # instead of catching it as invalid -- use an explicit None check so 0
+    # and negative values both hit the validation below.
+    raw_concurrency = getattr(args, "concurrency", None)
+    concurrency = int(raw_concurrency) if raw_concurrency is not None else 1
+    if concurrency < 1:
+        if json_mode:
+            print_json({"status": "error", "reason": "--concurrency must be at least 1", "value": concurrency})
+        else:
+            console.print("[red]--concurrency must be at least 1.[/red]")
+        return
+
     les = [le]
     scope = getattr(args, "scope", None) or "shared-infra"
     profs = (
@@ -3443,12 +3455,23 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
 
     def _stop_bar() -> None:
         p = bars.pop("bar", None)
-        bars.pop("task", None)
+        bars.pop("rows", None)
         if p is not None:
             try:
                 p.stop()
             except Exception:  # noqa: BLE001
                 pass
+
+    def _row_key(payload: dict) -> str:
+        # With --concurrency 1 (the default) every event -- shared infra AND
+        # every profile in turn -- shares one reused row, exactly like before
+        # this feature existed. Only split into one row per in-flight target
+        # when concurrency>1 actually means multiple profiles can be running
+        # at once (payload["target"] is the tag _run_one_profile adds; plain
+        # LE events never carry it, so LE always stays on its own row too).
+        if concurrency > 1:
+            return payload.get("target") or "__single__"
+        return "__single__"
 
     def on_event(kind: str, payload: dict) -> None:
         if json_mode:
@@ -3457,20 +3480,12 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
             _render_ssp_plan(console, payload)
         elif kind == "applying":
             label = "Shared infra" if payload.get("kind") == "logical-enclosure" else "Compute"
-            bars["label"] = f"{label}: {payload.get('name')}"
-            desc = f"[bold]{bars['label']}[/bold]"
+            full_label = f"{label}: {payload.get('name')}"
+            desc = f"[bold]{full_label}[/bold]"
+            row_key = _row_key(payload)
+            rows = bars.setdefault("rows", {})
             p = bars.get("bar")
-            if p is not None:
-                # Reuse the same Progress/Live instance across targets and
-                # retries instead of stop()-ing and re-start()-ing a brand
-                # new one each time. Rich only allows one *active* Live per
-                # Console — repeatedly tearing one down and standing up a
-                # new one (especially right around a console.input() prompt
-                # for the validation-warning confirm) has caused garbled,
-                # overlapping terminal output in practice. reset() clears
-                # the percent/elapsed-time clock for the new target.
-                p.reset(bars["task"], total=100, completed=0, description=desc)
-            else:
+            if p is None:
                 from rich.progress import (
                     BarColumn, Progress, SpinnerColumn, TaskProgressColumn,
                     TextColumn, TimeElapsedColumn,
@@ -3481,16 +3496,31 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
                 )
                 p.start()
                 bars["bar"] = p
-                bars["task"] = p.add_task(desc, total=100)
+            row = rows.get(row_key)
+            if row is not None:
+                # Reuse the row's existing task instead of stop()-ing and
+                # re-start()-ing a brand new Progress/Live each time. Rich
+                # only allows one *active* Live per Console — repeatedly
+                # tearing one down and standing up a new one (especially
+                # right around a console.input() prompt for the
+                # validation-warning confirm) has caused garbled, overlapping
+                # terminal output in practice. reset() clears the
+                # percent/elapsed-time clock for the new target.
+                p.reset(row["task_id"], total=100, completed=0, description=desc)
+                row["label"] = full_label
+            else:
+                rows[row_key] = {"task_id": p.add_task(desc, total=100), "label": full_label}
         elif kind == "task-progress":
             p = bars.get("bar")
-            if p is None:
+            rows = bars.get("rows") or {}
+            row = rows.get(_row_key(payload))
+            if p is None or row is None:
                 return
             pct = payload.get("percent")
             state = payload.get("state") or payload.get("status") or "working…"
             stage = payload.get("stage") or ""
             res = payload.get("resource") or ""
-            label = bars.get("label", "")
+            label = row.get("label", "")
             segs = []
             if label:
                 segs.append(f"[bold]{label}[/bold]")
@@ -3508,14 +3538,16 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
                 segs.append(f"[dim]({res})[/dim]")
             desc = "  ".join(segs)
             if isinstance(pct, (int, float)):
-                p.update(bars["task"], completed=pct, description=desc)
+                p.update(row["task_id"], completed=pct, description=desc)
             else:
-                p.update(bars["task"], description=desc)
+                p.update(row["task_id"], description=desc)
         elif kind == "applied":
             # Print a permanent one-line result for this target (Rich lets you
-            # print "above" an active Progress/Live using the same console),
-            # then leave the bar running so the *next* target's "applying"
-            # event can reset() it in place rather than stop/start a new one.
+            # print "above" an active Progress/Live using the same console).
+            # With --concurrency 1 the single reused row is left running so
+            # the *next* target's "applying" event can reset() it in place;
+            # with concurrency>1 each target has its own row, so it's removed
+            # once done rather than left sitting at a stale 100% forever.
             name = payload.get("name", "?")
             state = (payload.get("state") or "").lower()
             if state == "completed":
@@ -3527,6 +3559,16 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
                     f"[red]✗[/red] {name} — {payload.get('state') or payload.get('status') or 'error'}.",
                     highlight=False,
                 )
+            row_key = _row_key(payload)
+            if row_key != "__single__":
+                p = bars.get("bar")
+                rows = bars.get("rows") or {}
+                row = rows.pop(row_key, None)
+                if p is not None and row is not None:
+                    try:
+                        p.remove_task(row["task_id"])
+                    except Exception:  # noqa: BLE001
+                        pass
 
     def confirm(plan: dict) -> bool:
         if getattr(args, "yes", False):
@@ -3558,6 +3600,13 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
                 f"[red]{compute_ct} compute module(s) will power-cycle — ensure hosts are ready "
                 "for their servers to reboot.[/red]"
             )
+            if concurrency > 1:
+                wave_ct = min(concurrency, compute_ct)
+                impact.append(
+                    f"[bold red]--concurrency {concurrency}: up to {wave_ct} of those compute "
+                    "module(s) will power-cycle AT THE SAME TIME (not one at a time) — ensure "
+                    "that many hosts can go down together.[/bold red]"
+                )
         else:
             impact.append(
                 "[green]No server profiles are in this plan — compute modules will NOT be "
@@ -3660,7 +3709,7 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
             execute=execute, confirm=confirm if execute else None,
             on_validation_blocked=on_validation_blocked if execute else None, on_event=on_event,
             poll_interval_s=_SSP_POLL_S, task_timeout_s=_SSP_TASK_TIMEOUT_S,
-            verify_timeout_s=_SSP_VERIFY_TIMEOUT_S,
+            verify_timeout_s=_SSP_VERIFY_TIMEOUT_S, profile_concurrency=concurrency,
             appliance_version=data.get("appliance_version", ""),
             baselines=data.get("baselines", []),
         )
@@ -4675,6 +4724,15 @@ examples:
              "OneView requires the affected compute modules to be powered off first.")
     p_upd_enc.add_argument("--force", action="store_true",
         help="Force reinstall even if already at the baseline / bypass non-disruptive validation.")
+    p_upd_enc_concurrency = p_upd_enc.add_argument("--concurrency", type=int, default=1, metavar="N",
+        help="How many server-profile firmware updates to run at once when --scope includes "
+             "profiles (default: 1, fully sequential). No official HPE tool -- GUI, PowerShell, "
+             "Python SDK, or Ansible -- updates server-profile firmware in bulk; they all submit "
+             "one profile at a time, same as this CLI's default. Raising this overlaps the "
+             "wall-clock wait across independent servers (each still installs at its own pace), "
+             "at the cost of N compute modules power-cycling simultaneously and no HPE-documented "
+             "concurrency ceiling to size it against -- start small for large fleets.")
+    p_upd_enc_concurrency.completer = suppress_file_completion()  # type: ignore[attr-defined]
     p_upd_enc.add_argument("--execute", action="store_true",
         help="Actually apply (reboots interconnects, and compute modules if --scope includes "
              "profiles). Default is plan only.")

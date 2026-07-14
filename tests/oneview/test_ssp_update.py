@@ -8,6 +8,7 @@ task handling, and the plan-vs-execute / ordering / failure branches.
 
 from __future__ import annotations
 
+import asyncio
 import re
 
 import pytest
@@ -511,6 +512,55 @@ class FakeClient:
         return {"uri": "/rest/tasks/sp-task", "taskState": "Running", "percentComplete": 0}
 
 
+class _ConcurrentProfileClient(FakeClient):
+    """FakeClient for ``profile_concurrency`` tests.
+
+    Each profile PUT blocks on a shared ``asyncio.Event`` before returning,
+    so a test can prove multiple profiles' PUTs are genuinely in flight at
+    once (submitted together as a wave) rather than one finishing before the
+    next is even requested -- a plain fast sequential loop would never show
+    more than one in flight no matter how quickly it iterates.
+
+    Each profile also resolves its own independent per-uri task (rather than
+    every PUT sharing one ``task_state``), so a wave can mix passing and
+    failing profiles to test the "stop launching further waves" behavior.
+    """
+
+    def __init__(self, *, release: asyncio.Event, failing_uris: frozenset = frozenset(), **kw):
+        super().__init__(**kw)
+        self._release = release
+        self._failing_uris = failing_uris
+        self.in_flight = 0
+        self.max_in_flight = 0
+
+    async def put(self, uri, body):
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        try:
+            await self._release.wait()
+        finally:
+            self.in_flight -= 1
+        self.calls.append(("put", uri))
+        self.put_bodies.append(body)
+        task_uri = f"/rest/tasks/task-for-{uri.rsplit('/', 1)[-1]}"
+        return {"uri": task_uri, "taskState": "Running", "percentComplete": 0}
+
+    async def get(self, uri, params=None):
+        if uri.startswith("/rest/tasks/task-for-"):
+            self.calls.append(("get", uri))
+            state = "Error" if uri in {
+                f"/rest/tasks/task-for-{u.rsplit('/', 1)[-1]}" for u in self._failing_uris
+            } else "Completed"
+            return {"uri": uri, "taskState": state, "taskStatus": state, "percentComplete": 100}
+        return await super().get(uri, params=params)
+
+
+def _profile_n(i: int) -> dict:
+    return normalize_profile(dict(
+        PROFILE_RAW, uri=f"/rest/server-profiles/sp-{i}", name=f"profile-{i}",
+    ))
+
+
 # One interconnect pair for uplink set "/rest/uplink-sets/pv": Bay 3 leg linked at
 # 10G, Bay 6 leg down — the exact "one leg down, not redundant" shape that blocks
 # an Orchestrated update.
@@ -897,6 +947,163 @@ async def test_run_execute_applies_le_then_profile_in_order():
     # profile PUT retargets the baseline
     assert fake.put_bodies[0]["firmware"]["firmwareBaselineUri"].endswith("SSP_2026_01")
     assert "plan" in events
+
+
+# ── profile_concurrency (wave-based concurrent server-profile updates) ──────────
+
+@pytest.mark.asyncio
+async def test_run_execute_default_concurrency_is_fully_sequential():
+    """profile_concurrency defaults to 1 -- never more than one profile PUT
+    in flight at once, matching today's plain sequential loop exactly."""
+    release = asyncio.Event()
+    release.set()  # no artificial blocking; only used for its in_flight counters
+    fake = _ConcurrentProfileClient(release=release)
+    profiles = [_profile_n(i) for i in range(3)]
+    res = await run_ssp_apply(
+        lambda: fake, baseline=_newest(),
+        le_targets=[], profile_targets=profiles,
+        execute=True, confirm=lambda plan: True,
+        on_event=lambda k, d: None, sleeper=_noop_sleep,
+    )
+    assert res["status"] == "applied"
+    assert fake.max_in_flight == 1
+    assert [r["name"] for r in res["results"]] == ["profile-0", "profile-1", "profile-2"]
+
+
+@pytest.mark.asyncio
+async def test_run_execute_profile_concurrency_submits_wave_together():
+    """profile_concurrency=3 submits all 3 profile PUTs before any of them
+    resolves -- proving the wave genuinely runs concurrently rather than
+    just iterating a fast sequential loop."""
+    release = asyncio.Event()
+    fake = _ConcurrentProfileClient(release=release)
+    profiles = [_profile_n(i) for i in range(3)]
+
+    task = asyncio.ensure_future(run_ssp_apply(
+        lambda: fake, baseline=_newest(),
+        le_targets=[], profile_targets=profiles,
+        execute=True, confirm=lambda plan: True,
+        on_event=lambda k, d: None, sleeper=_noop_sleep,
+        profile_concurrency=3,
+    ))
+    for _ in range(50):
+        await asyncio.sleep(0)
+        if fake.in_flight == 3:
+            break
+    assert fake.in_flight == 3, "expected all 3 profile PUTs in flight together"
+    release.set()
+    res = await task
+    assert res["status"] == "applied"
+    assert fake.max_in_flight == 3
+    assert sorted(r["name"] for r in res["results"]) == ["profile-0", "profile-1", "profile-2"]
+
+
+@pytest.mark.asyncio
+async def test_run_execute_profile_concurrency_caps_wave_size():
+    """profile_concurrency=2 across 4 profiles never has more than 2 profile
+    PUTs in flight at once (capped at the wave size), and all 4 still get
+    applied across the two waves this requires."""
+    release = asyncio.Event()
+    fake = _ConcurrentProfileClient(release=release)
+    profiles = [_profile_n(i) for i in range(4)]
+
+    task = asyncio.ensure_future(run_ssp_apply(
+        lambda: fake, baseline=_newest(),
+        le_targets=[], profile_targets=profiles,
+        execute=True, confirm=lambda plan: True,
+        on_event=lambda k, d: None, sleeper=_noop_sleep,
+        profile_concurrency=2,
+    ))
+    for _ in range(50):
+        await asyncio.sleep(0)
+        if fake.in_flight == 2:
+            break
+    assert fake.in_flight == 2  # first wave: exactly the cap, never 3+
+    release.set()
+    res = await task
+    assert res["status"] == "applied"
+    assert fake.max_in_flight == 2
+    assert sorted(r["name"] for r in res["results"]) == [
+        "profile-0", "profile-1", "profile-2", "profile-3",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_execute_profile_concurrency_stops_launching_after_bad_wave():
+    """A failure anywhere in a wave stops further waves from launching, but
+    doesn't cancel the sibling already in flight in that same wave."""
+    release = asyncio.Event()
+    release.set()
+    fake = _ConcurrentProfileClient(
+        release=release,
+        failing_uris=frozenset({"/rest/server-profiles/sp-1"}),
+    )
+    profiles = [_profile_n(i) for i in range(4)]
+    res = await run_ssp_apply(
+        lambda: fake, baseline=_newest(),
+        le_targets=[], profile_targets=profiles,
+        execute=True, confirm=lambda plan: True,
+        on_event=lambda k, d: None, sleeper=_noop_sleep,
+        profile_concurrency=2,
+    )
+    assert res["status"] == "failed"
+    # Wave 1 (profile-0, profile-1) both ran and are reported (one failed);
+    # wave 2 (profile-2, profile-3) never launched.
+    assert [r["name"] for r in res["results"]] == ["profile-0", "profile-1"]
+    put_uris = [u for m, u in fake.calls if m == "put"]
+    assert "/rest/server-profiles/sp-2" not in put_uris
+    assert "/rest/server-profiles/sp-3" not in put_uris
+
+
+@pytest.mark.asyncio
+async def test_run_execute_profile_concurrency_result_order_matches_wave_order():
+    """Results stay in profile-list order even if the last-submitted profile
+    in a wave is the first to actually finish."""
+    class _ReorderingClient(_ConcurrentProfileClient):
+        async def put(self, uri, body):
+            # profile-1 resolves immediately; profile-0 waits on the event --
+            # so completion order is reversed from submission/list order.
+            if uri.endswith("sp-1"):
+                self.calls.append(("put", uri))
+                self.put_bodies.append(body)
+                return {"uri": "/rest/tasks/task-for-sp-1", "taskState": "Running", "percentComplete": 0}
+            return await super().put(uri, body)
+
+    release = asyncio.Event()
+    fake = _ReorderingClient(release=release)
+    profiles = [_profile_n(0), _profile_n(1)]
+
+    task = asyncio.ensure_future(run_ssp_apply(
+        lambda: fake, baseline=_newest(),
+        le_targets=[], profile_targets=profiles,
+        execute=True, confirm=lambda plan: True,
+        on_event=lambda k, d: None, sleeper=_noop_sleep,
+        profile_concurrency=2,
+    ))
+    for _ in range(50):
+        await asyncio.sleep(0)
+        if fake.in_flight == 1:  # only profile-0's PUT is still blocked
+            break
+    release.set()
+    res = await task
+    assert res["status"] == "applied"
+    assert [r["name"] for r in res["results"]] == ["profile-0", "profile-1"]
+
+
+@pytest.mark.asyncio
+async def test_run_execute_rejects_le_concurrency_change_by_default():
+    """profile_concurrency only affects server profiles -- logical enclosure
+    (shared infra) rollout is always a single target and unaffected."""
+    fake = FakeClient()
+    res = await run_ssp_apply(
+        lambda: fake, baseline=_newest(),
+        le_targets=[normalize_le(LE_RAW)], profile_targets=[normalize_profile(PROFILE_RAW)],
+        execute=True, confirm=lambda plan: True,
+        on_event=lambda k, d: None, sleeper=_noop_sleep,
+        profile_concurrency=5,
+    )
+    assert res["status"] == "applied"
+    assert [r["kind"] for r in res["results"]] == ["logical-enclosure", "server-profile"]
 
 
 @pytest.mark.asyncio

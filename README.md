@@ -133,6 +133,10 @@ proliant oneview update enclosure <LE-name> --execute --activation-mode parallel
 #   --activation-mode orchestrated (default)  one redundant side at a time, non-disruptive -- requires real redundancy
 #   --activation-mode parallel                flashes every interconnect at once regardless of redundancy (disruptive;
 #                                              the only way to force firmware onto a genuinely non-redundant fabric)
+proliant oneview update enclosure <LE-name> --execute --scope shared-infra-and-profiles --concurrency 3
+#   --concurrency N (default 1)   run up to N server-profile firmware updates at once instead of one at a time;
+#                                  N compute modules power-cycle simultaneously -- no official HPE tool (GUI,
+#                                  PowerShell, Python SDK, Ansible) does this in bulk either, so default stays 1
 proliant oneview update appliance readiness              # pre-upgrade readiness report
 proliant oneview update appliance run --from-dir <dir>   # pick + stage an appliance software update
 proliant oneview update appliance run --image <file> --execute   # stage + install (reboots the appliance)

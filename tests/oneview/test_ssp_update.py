@@ -1004,10 +1004,11 @@ async def test_run_execute_warning_with_baseline_changed_still_applied():
 async def test_run_execute_completed_but_actually_unchanged_reports_unverified():
     """OneView reporting a plain 'Completed' task (not 'Warning') isn't
     unconditionally trustworthy either -- verified live, a
-    --activation-mode parallel apply reported 'Completed' after only ~12s,
-    fast enough to raise doubt. If the LI-actual cross-check disagrees even
-    after a brief grace re-check, this must surface as 'unverified' rather
-    than a blind 'SSP apply complete'."""
+    --activation-mode parallel apply reported 'Completed' after only ~7s
+    while the real interconnect stage+activate cycle underneath kept running
+    for several more minutes. If the LI-actual cross-check still disagrees
+    even after repolling for the full verify_timeout_s window, this must
+    surface as 'unverified' rather than a blind 'SSP apply complete'."""
     newest = _newest()
     fake = FakeClient(
         task_state="Completed",
@@ -1027,11 +1028,44 @@ async def test_run_execute_completed_but_actually_unchanged_reports_unverified()
         lambda: fake, baseline=newest,
         le_targets=[normalize_le(LE_RAW)], profile_targets=[],
         execute=True, confirm=lambda plan: True, sleeper=_tracking_sleep,
+        poll_interval_s=5, verify_timeout_s=15,
     )
     assert res["status"] == "unverified"
     assert "did not reflect it" in res["results"][-1]["unverified_reason"]
-    # gave OneView's own state one brief grace period before deciding
-    assert sleeps == [5]
+    # repolled every poll_interval_s up to verify_timeout_s before giving up
+    assert sleeps == [5, 5, 5]
+
+
+@pytest.mark.asyncio
+async def test_run_execute_completed_verified_after_a_few_repolls():
+    """The common real-world case this bug fix targets: OneView's LE task
+    reports 'Completed' immediately, but the LI's actual installed firmware
+    only catches up a couple of repolls later -- this must resolve to a
+    real 'applied' success, not 'unverified', once it does."""
+    newest = _newest()
+    calls = {"n": 0}
+
+    class _SlowToConvergeClient(FakeClient):
+        async def get(self, uri, params=None):  # noqa: D401 - test shim
+            if uri == "/rest/logical-interconnects/li-1/firmware":
+                calls["n"] += 1
+                # First two checks still see the old SPP; third sees the new one.
+                spp = "/rest/firmware-drivers/SSP_2023_05" if calls["n"] < 3 else newest["uri"]
+                return {"sppUri": spp}
+            return await super().get(uri, params=params)
+
+    fake = _SlowToConvergeClient(
+        task_state="Completed",
+        raw_lis=[{"uri": "/rest/logical-interconnects/li-1", "enclosureUris": ["/rest/enclosures/enc-1"]}],
+    )
+    res = await run_ssp_apply(
+        lambda: fake, baseline=newest,
+        le_targets=[normalize_le(LE_RAW)], profile_targets=[],
+        execute=True, confirm=lambda plan: True, sleeper=_noop_sleep,
+        poll_interval_s=5, verify_timeout_s=60,
+    )
+    assert res["status"] == "applied"
+    assert calls["n"] >= 3
 
 
 @pytest.mark.asyncio

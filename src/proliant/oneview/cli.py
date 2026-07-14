@@ -3083,6 +3083,13 @@ async def _cmd_compliance_describe(args: argparse.Namespace) -> None:
 
 _SSP_POLL_S = 5
 _SSP_TASK_TIMEOUT_S = 90 * 60
+# How long to keep repolling the *actual* installed firmware after OneView's
+# LE-level task reports "Completed" before giving up and calling it
+# "unverified". Verified live: a "Completed" report can land in ~7s while the
+# real interconnect stage+activate cycle underneath keeps running for several
+# more minutes -- 5 min gives that room to finish without hanging forever on
+# a genuinely stuck/no-op update.
+_SSP_VERIFY_TIMEOUT_S = 5 * 60
 
 
 def _is_affirmative(answer: str) -> bool:
@@ -3382,6 +3389,7 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
     from proliant.oneview.ssp_update import (
         INSTALL_TYPES,
         LE_SCOPE_SHARED,
+        LE_SCOPE_SHARED_AND_PROFILES,
         fetch_apply_targets,
         find_le_by_name,
         profiles_under_le,
@@ -3646,11 +3654,13 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
         result = await run_ssp_apply(
             factory,
             baseline=baseline, le_targets=les, profile_targets=profs,
-            scope=LE_SCOPE_SHARED, install_type=install_type, force=bool(getattr(args, "force", False)),
+            scope=LE_SCOPE_SHARED_AND_PROFILES if scope == "shared-infra-and-profiles" else LE_SCOPE_SHARED,
+            install_type=install_type, force=bool(getattr(args, "force", False)),
             interconnect_activation_mode=interconnect_activation_mode,
             execute=execute, confirm=confirm if execute else None,
             on_validation_blocked=on_validation_blocked if execute else None, on_event=on_event,
             poll_interval_s=_SSP_POLL_S, task_timeout_s=_SSP_TASK_TIMEOUT_S,
+            verify_timeout_s=_SSP_VERIFY_TIMEOUT_S,
             appliance_version=data.get("appliance_version", ""),
             baselines=data.get("baselines", []),
         )

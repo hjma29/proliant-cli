@@ -1003,6 +1003,7 @@ async def run_ssp_apply(
     sleeper: Callable[[float], Any] | None = None,
     poll_interval_s: float = 20.0,
     task_timeout_s: float = 90 * 60,
+    verify_timeout_s: float = 5 * 60,
     appliance_version: str = "",
     baselines: list[dict] | None = None,
 ) -> dict[str, Any]:
@@ -1136,15 +1137,17 @@ async def run_ssp_apply(
             pointer does reflect the real state).
 
             A plain "Completed" task (when *actual_checker* is given) also
-            gets one cross-check -- verified live, a ``--activation-mode
-            parallel`` apply reported "Completed" after only ~12s, fast
-            enough that it raised doubt about whether it was real. Unlike
-            "Warning", OneView gives no known validation reason to retry with
-            force here, so a disagreement isn't auto-retried -- it's surfaced
-            as an honest ``"unverified"`` result instead, after giving
-            OneView's own internal state one brief moment to catch up (the LI
-            ``/firmware`` sub-resource can lag the task's own terminal state
-            by a few seconds).
+            gets cross-checked -- verified live, a ``--activation-mode
+            parallel`` apply reported "Completed" after only ~7s while the
+            real interconnect stage+activate cycle underneath continued
+            running for several more minutes (confirmed by re-issuing the
+            same request by hand: it converged to a real, verified firmware
+            change after ~4 minutes). So a single-instant disagreement isn't
+            trusted -- ``actual_checker`` is repolled every *poll_interval_s*
+            for up to *verify_timeout_s* to give OneView's asynchronous
+            LI-firmware activation time to finish, and only reported as an
+            honest ``"unverified"`` result if it still disagrees once that
+            window elapses.
 
             Offers ``on_validation_blocked`` a chance to retry with the guard
             bypassed -- exactly once, since a second block means forcing
@@ -1250,20 +1253,29 @@ async def run_ssp_apply(
                         return "blocked", task
                 elif actual_checker is not None:
                     # Don't trust a plain "Completed" report unconditionally
-                    # either -- cross-check once, and if it disagrees, give
-                    # OneView's own internal state one brief chance to catch
-                    # up before treating it as a real discrepancy (unlike the
-                    # "Warning" branch above, force-retrying isn't offered
-                    # here: there's no known validation reason it would help,
-                    # and retrying an update OneView already called complete
-                    # risks a redundant disruptive re-flash).
+                    # either -- OneView's LE-level task returns as soon as it
+                    # hands the update off to the LI, well before the real
+                    # interconnect stage+activate cycle underneath finishes
+                    # (confirmed live: "Completed" after ~7s, but the actual
+                    # firmware change didn't land for ~4 more minutes). Keep
+                    # repolling the real installed state for up to
+                    # verify_timeout_s (unlike the "Warning" branch above,
+                    # this isn't a validation guard to force through -- it's
+                    # just OneView still finishing the work asynchronously).
                     emit("task-progress", {
                         **task, "stage": "Verifying the update actually applied…",
                     })
                     actual = await actual_checker()
                     changed = same_baseline(actual, baseline_uri) if actual is not None else None
-                    if changed is False:
-                        await sleeper(5)
+                    waited = 0.0
+                    while changed is False and waited < verify_timeout_s:
+                        await sleeper(poll_interval_s)
+                        waited += poll_interval_s
+                        emit("task-progress", {
+                            **task,
+                            "stage": "Verifying the update actually applied "
+                                     "(OneView is still activating)…",
+                        })
                         actual = await actual_checker()
                         changed = same_baseline(actual, baseline_uri) if actual is not None else None
                     if changed is False:

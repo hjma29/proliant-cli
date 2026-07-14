@@ -1030,6 +1030,183 @@ async def _cmd_profiles_reapply(args: argparse.Namespace) -> None:
         )
 
 
+# ── proliant oneview server-profiles update (single named profile) ────────────────
+
+async def _cmd_profiles_update(args: argparse.Namespace) -> None:
+    from proliant.oneview.ssp_update import (
+        INSTALL_TYPES,
+        fetch_apply_targets,
+        find_profile_by_name,
+        run_ssp_apply,
+        select_baseline,
+    )
+
+    json_mode = getattr(args, "json_output", False) or get_output_mode() == OutputMode.JSON
+    console = get_console()
+
+    async with _load_client() as client:
+        with console.status("[dim]Fetching SSP baselines and server profiles…[/dim]"):
+            data = await fetch_apply_targets(client)
+
+    profile = find_profile_by_name(data["server_profiles"], args.name)
+    if profile is None:
+        known = ", ".join(p["name"] for p in data["server_profiles"]) or "none found"
+        if json_mode:
+            print_json({"status": "error", "reason": "server profile not found", "query": args.name})
+        else:
+            console.print(f"[red]Server profile '{args.name}' not found.[/red]")
+            console.print(f"[dim]Known: {known}[/dim]")
+        return
+
+    baseline = select_baseline(data["baselines"], getattr(args, "baseline", None))
+    if baseline is None:
+        names = ", ".join(f"{b['name']} ({b['version']})" for b in data["baselines"][:8]) or "none registered"
+        if json_mode:
+            print_json({"status": "error", "reason": "baseline not found",
+                        "query": getattr(args, "baseline", None), "available": data["baselines"]})
+        else:
+            q = getattr(args, "baseline", None)
+            console.print(f"[red]No SSP baseline matches '{q}'.[/red]" if q
+                          else "[red]No SSP/SPP baselines are registered on this appliance.[/red]")
+            console.print(f"[dim]Available: {names}[/dim]")
+        return
+
+    install_type = INSTALL_TYPES.get(getattr(args, "install_type", None) or "")
+    execute = bool(getattr(args, "execute", False))
+
+    bars: dict = {}
+
+    def _stop_bar() -> None:
+        p = bars.pop("bar", None)
+        bars.pop("task", None)
+        if p is not None:
+            try:
+                p.stop()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def on_event(kind: str, payload: dict) -> None:
+        if json_mode:
+            return
+        if kind == "plan":
+            _render_ssp_plan(console, payload)
+        elif kind == "applying":
+            desc = f"[bold]Server profile: {payload.get('name')}[/bold]"
+            p = bars.get("bar")
+            if p is not None:
+                p.reset(bars["task"], total=100, completed=0, description=desc)
+                return
+            from rich.progress import (
+                BarColumn, Progress, SpinnerColumn, TaskProgressColumn,
+                TextColumn, TimeElapsedColumn,
+            )
+            p = Progress(
+                SpinnerColumn(), TextColumn("{task.description}"),
+                BarColumn(), TaskProgressColumn(), TimeElapsedColumn(), console=console,
+            )
+            p.start()
+            bars["bar"] = p
+            bars["task"] = p.add_task(desc, total=100)
+        elif kind == "task-progress":
+            p = bars.get("bar")
+            if p is None:
+                return
+            pct = payload.get("percent")
+            state = payload.get("state") or payload.get("status") or "working…"
+            stage = payload.get("stage") or ""
+            res = payload.get("resource") or ""
+            segs = ["[bold]Server profile[/bold]", f"[cyan]{state}[/cyan]"]
+            if stage:
+                segs.append(f"[dim]{stage}[/dim]")
+            if res:
+                segs.append(f"[dim]({res})[/dim]")
+            desc = "  ".join(segs)
+            if isinstance(pct, (int, float)):
+                p.update(bars["task"], completed=pct, description=desc)
+            else:
+                p.update(bars["task"], description=desc)
+
+    def confirm(plan: dict) -> bool:
+        if getattr(args, "yes", False):
+            return True
+        if json_mode:
+            return False  # never silently flash hardware in scripted mode
+        token = baseline.get("version") or baseline.get("name") or "apply"
+        compat = plan.get("compat") or {}
+        compat_warn = ""
+        if compat.get("status") == "unsupported":
+            compat_warn = (
+                f"\n[red]⚠ {compat.get('message', '')}[/red] "
+                "Verify the SSP release notes before proceeding."
+            )
+        console.print(Panel(
+            f"About to APPLY SSP [bold]{baseline.get('name')} ({baseline.get('version')})[/bold] to "
+            f"server profile [bold]{profile['name']}[/bold].\n"
+            "[red]The compute module will power-cycle — ensure the host is ready to reboot.[/red]"
+            + compat_warn,
+            title="Confirm SSP firmware apply", border_style="red"))
+        ans = console.input(
+            f'Type the baseline version "{token}" to proceed (or anything else to abort): ',
+            markup=False,
+        )
+        return ans.strip() == token
+
+    def on_validation_blocked(info: dict) -> str:
+        # Mirrors update enclosure's own callback -- see its docstring for the
+        # full A/B rationale. Server-profile firmware rarely hits this (the
+        # non-redundant-fabric guard is mainly a Logical-Interconnect concept),
+        # but the underlying engine offers the same retry hook for any target.
+        if getattr(args, "yes", False):
+            return "proceed"
+        if json_mode:
+            return "abort"
+        _stop_bar()
+        reason = info.get("reason") or (
+            "OneView flagged this update as potentially disruptive and refused "
+            "to apply it, but did not report a specific reason."
+        )
+        resolution = info.get("resolution") or ""
+        body = f"[yellow]{reason}[/yellow]"
+        if resolution:
+            body += f"\n\n[bold]Resolution:[/bold] {resolution}"
+        console.print(Panel(
+            body,
+            title=f"⚠ Validation warning — {info.get('name')}", border_style="yellow",
+            subtitle="Review the warnings. If the conditions are acceptable, then click OK to proceed.",
+            subtitle_align="left"))
+        console.print(
+            "[bold]Choose an action:[/bold]\n"
+            "  [cyan]A[/cyan]) Abort — investigate the warning above first (recommended)\n"
+            "  [cyan]B[/cyan]) Force the update through now — [red]disruptive[/red]"
+        )
+        ans = console.input("Your choice [A/b]: ", markup=False).strip().lower()
+        return "proceed" if ans in ("b", "f", "force") else "abort"
+
+    factory = _oneview_client_factory()
+    try:
+        result = await run_ssp_apply(
+            factory,
+            baseline=baseline, le_targets=[], profile_targets=[profile],
+            install_type=install_type, force=bool(getattr(args, "force", False)),
+            execute=execute, confirm=confirm if execute else None,
+            on_validation_blocked=on_validation_blocked if execute else None, on_event=on_event,
+            poll_interval_s=_SSP_POLL_S, task_timeout_s=_SSP_TASK_TIMEOUT_S,
+            verify_timeout_s=_SSP_VERIFY_TIMEOUT_S,
+            appliance_version=data.get("appliance_version", ""),
+            baselines=data.get("baselines", []),
+        )
+    finally:
+        _stop_bar()
+
+    if json_mode:
+        print_json(result)
+        return
+
+    _render_ssp_apply_result(
+        console, result, plan_message="Re-run with [bold]--execute[/bold] to apply.",
+    )
+
+
 # ── proliant oneview noun-verb detail commands ────────────────────────────────────
 
 async def _async_describe_uplinkset(name: str) -> None:
@@ -3846,11 +4023,27 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
         print_json(result)
         return
 
+    order = "compute only (shared infrastructure not included)" if scope == "profiles-only" \
+        else "shared infrastructure first, then compute"
+    _render_ssp_apply_result(
+        console, result,
+        plan_message=f"Re-run with [bold]--execute[/bold] to apply ({order}).",
+        interconnect_activation_mode=interconnect_activation_mode,
+    )
+
+
+def _render_ssp_apply_result(
+    console, result: dict, *, plan_message: str, interconnect_activation_mode: str = "Orchestrated",
+) -> None:
+    """Render ``run_ssp_apply()``'s human-readable result.
+
+    Shared by ``update enclosure`` and ``server-profiles update`` so the
+    plan/applied/failed/blocked/unverified wording (including the blocked-
+    uplink retry guidance) stays consistent across both entry points.
+    """
     status = result.get("status")
     if status == "planned":
-        order = "compute only (shared infrastructure not included)" if scope == "profiles-only" \
-            else "shared infrastructure first, then compute"
-        console.print(f"\n[green]Plan only.[/green] Re-run with [bold]--execute[/bold] to apply ({order}).")
+        console.print(f"\n[green]Plan only.[/green] {plan_message}")
     elif status == "nothing-to-do":
         console.print("\n[green]All selected targets already match this baseline.[/green] "
                       "Use [bold]--force[/bold] to reapply anyway.")
@@ -4620,7 +4813,7 @@ examples:
     p_ul_desc_name.completer = _oneview_uplinkset_name_completer
     p_ul_desc.set_defaults(func=_cmd_describe, resource="uplinkset")
 
-    p_profiles = sub.add_parser("server-profiles", help="List, describe, or reapply server profiles")
+    p_profiles = sub.add_parser("server-profiles", help="List, describe, reapply, or update server profiles")
     s_profiles = p_profiles.add_subparsers(dest="what", metavar="ACTION")
     s_profiles.required = True
     p_sp_list = s_profiles.add_parser("list", help="List all server profiles")
@@ -4644,6 +4837,32 @@ examples:
         help="Skip the type-to-confirm prompt. This reconfigures live hardware and can trigger "
              "a reboot -- use with care.")
     p_sp_reapply.set_defaults(func=_cmd_profiles_reapply)
+
+    p_sp_update = s_profiles.add_parser("update",
+        help="Update one server profile's SSP firmware baseline",
+        description="Roll out an SSP (Synergy Service Pack) firmware baseline to a single named "
+                    "server profile's compute module, without touching its logical enclosure's "
+                    "shared infrastructure or any other profile -- useful when you only need to "
+                    "bring one server current (e.g. after an eFuse/reapply) rather than every "
+                    "profile under the same enclosure. Default is a non-destructive plan; add "
+                    "--execute to apply. Equivalent to `update enclosure --scope profiles-only` "
+                    "narrowed to one profile.")
+    p_sp_update_name = p_sp_update.add_argument("name", metavar="NAME",
+        help="Name of the server profile")
+    p_sp_update_name.completer = _oneview_profile_name_completer
+    p_sp_update_baseline = p_sp_update.add_argument("--baseline", metavar="NAME|VERSION",
+        help="SSP bundle to apply (version / short name / uri id). Defaults to the newest "
+             "registered SSP -- pass a specific one to repeat the same rollout for testing.")
+    p_sp_update_baseline.completer = _oneview_ssp_baseline_completer  # type: ignore[attr-defined]
+    p_sp_update.add_argument("--install-type", choices=("firmware-only", "firmware-and-drivers", "firmware-offline"),
+        help="Compute install type override (default: keep the profile's existing setting).")
+    p_sp_update.add_argument("--force", action="store_true",
+        help="Force reinstall even if already at the baseline / bypass non-disruptive validation.")
+    p_sp_update.add_argument("--execute", action="store_true",
+        help="Actually apply (power-cycles the compute module). Default is plan only.")
+    p_sp_update.add_argument("--yes", action="store_true",
+        help="Skip the type-to-confirm prompt and any validation-warning prompt (with --execute).")
+    p_sp_update.set_defaults(func=_cmd_profiles_update)
 
     p_power = sub.add_parser(
         "power",

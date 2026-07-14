@@ -338,6 +338,15 @@ def find_le_by_name(les: list[dict], name: str) -> dict[str, Any] | None:
     return None
 
 
+def find_profile_by_name(profiles: list[dict], name: str) -> dict[str, Any] | None:
+    """Case-insensitive exact-name lookup among normalized server profiles."""
+    q = (name or "").strip().lower()
+    for p in profiles:
+        if (p.get("name", "") or "").lower() == q:
+            return p
+    return None
+
+
 def profiles_under_le(
     le: dict, profiles: list[dict], hw_enclosure_map: dict[str, str]
 ) -> list[dict[str, Any]]:

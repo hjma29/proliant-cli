@@ -131,6 +131,9 @@ proliant oneview update enclosure <LE-name>              # plan an SSP rollout t
 proliant oneview update enclosure <LE-name> --baseline <ssp> --scope shared-infra-and-profiles
 #   --scope shared-infra            updates frame link modules + interconnects only (default)
 #   --scope shared-infra-and-profiles   also updates every server profile in this enclosure's compute modules
+#   --scope profiles-only           updates just the server profiles' compute firmware, skips the LE/interconnect
+#                                    step entirely (no GUI equivalent) -- useful if shared infra is already current,
+#                                    or stuck/unverified and you don't want that blocking compute progress
 proliant oneview update enclosure <LE-name> --execute    # apply it (reboots interconnects, and compute if selected)
 #   The plan shows an OneView<->SSP compatibility note (per HPE's Synergy Software Releases matrix).
 proliant oneview update enclosure <LE-name> --execute --activation-mode parallel

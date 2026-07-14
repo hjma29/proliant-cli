@@ -116,3 +116,25 @@ async def test_scope_shared_infra_only_does_not_use_profiles_scope():
     kwargs = fake_run.await_args.kwargs
     assert kwargs["scope"] == ssp_update.LE_SCOPE_SHARED
     assert kwargs["profile_targets"] == []
+
+
+@pytest.mark.asyncio
+async def test_scope_profiles_only_skips_the_logical_enclosure_entirely():
+    """`--scope profiles-only` must not include the LE as a target at all --
+    it exists specifically so a stuck/unverified shared-infra step doesn't
+    block compute firmware from being applied. Server profile firmware is
+    its own independent OneView operation, so it never needs the LE."""
+    fake_run = AsyncMock(return_value={"status": "planned", "plan": {}})
+    with patch.object(cli, "_load_client", return_value=_FakeCM()), \
+         patch.object(cli, "get_console", return_value=_FakeConsole()), \
+         patch.object(ssp_update, "fetch_apply_targets", AsyncMock(return_value=_DATA)), \
+         patch.object(ssp_update, "run_ssp_apply", fake_run):
+        await cli._async_update_enclosure(_make_args(scope="profiles-only"))
+
+    kwargs = fake_run.await_args.kwargs
+    assert kwargs["le_targets"] == []
+    assert [p["uri"] for p in kwargs["profile_targets"]] == [_PROFILE["uri"]]
+    # No interconnects touched, so the LE-cascade scope value is irrelevant --
+    # but keep it set to the "and-profiles" flavor for future-proofing rather
+    # than leaving it meaningless-but-wrong.
+    assert kwargs["scope"] == ssp_update.LE_SCOPE_SHARED_AND_PROFILES

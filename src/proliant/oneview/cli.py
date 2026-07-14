@@ -3387,6 +3387,12 @@ async def _wizard_update_enclosure(args: argparse.Namespace) -> None:
         if step == "install_type":
             i += direction
             continue
+        # activation mode only matters when interconnects are actually part of
+        # this rollout — "profiles-only" never touches them, so asking would
+        # just be a confusing no-op question.
+        if step == "activation" and state["scope"] == "profiles-only":
+            i += direction
+            continue
         try:
             if step == "le":
                 options = [
@@ -3416,6 +3422,10 @@ async def _wizard_update_enclosure(args: argparse.Namespace) -> None:
                     ("shared-infra-and-profiles",
                      "Shared infrastructure + every server profile in this enclosure "
                      "[yellow](compute modules will power-cycle)[/yellow]"),
+                    ("profiles-only",
+                     "Server profiles only, skip shared infra "
+                     "[yellow](compute modules will power-cycle)[/yellow] -- no GUI equivalent, "
+                     "useful if shared infra is already current or stuck"),
                 ]
                 default_index = _wizard_default_index(options, state["scope"], 0)
                 state["scope"] = _wizard_choice(
@@ -3462,12 +3472,11 @@ async def _wizard_update_enclosure(args: argparse.Namespace) -> None:
                     f"Baseline:          [bold]{baseline.get('name')} ({baseline.get('version')})[/bold]\n"
                     f"Scope:             {state['scope']}\n"
                 )
-                if state["scope"] == "shared-infra-and-profiles":
+                if state["scope"] in ("shared-infra-and-profiles", "profiles-only"):
                     summary += f"Install type:      {state['install_type'] or 'keep existing'}\n"
-                summary += (
-                    f"Activation mode:   {state['activation_mode']}\n"
-                    f"Force:             {state['force']}"
-                )
+                if state["scope"] != "profiles-only":
+                    summary += f"Activation mode:   {state['activation_mode']}\n"
+                summary += f"Force:             {state['force']}"
                 console.print(Panel(summary, title="Review your selections", border_style="cyan"))
                 options = [
                     (False, "No — just show the plan, don't change anything"),
@@ -3551,11 +3560,16 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
             console.print("[red]--concurrency must be at least 1.[/red]")
         return
 
-    les = [le]
     scope = getattr(args, "scope", None) or "shared-infra"
+    # "profiles-only" skips the logical-enclosure/interconnect step entirely --
+    # useful when shared infra is already current, mid-investigation, or (as
+    # seen live) stuck/unverified, since compute firmware is applied via its
+    # own independent PUT /rest/server-profiles/{id} call and was never
+    # HPE-documented as depending on the LE's own rollout completing first.
+    les = [] if scope == "profiles-only" else [le]
     profs = (
         profiles_under_le(le, data["server_profiles"], data["hardware_enclosure_map"])
-        if scope == "shared-infra-and-profiles" else []
+        if scope in ("shared-infra-and-profiles", "profiles-only") else []
     )
 
     install_type = INSTALL_TYPES.get(getattr(args, "install_type", None) or "")
@@ -3815,7 +3829,7 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
         result = await run_ssp_apply(
             factory,
             baseline=baseline, le_targets=les, profile_targets=profs,
-            scope=LE_SCOPE_SHARED_AND_PROFILES if scope == "shared-infra-and-profiles" else LE_SCOPE_SHARED,
+            scope=LE_SCOPE_SHARED_AND_PROFILES if scope in ("shared-infra-and-profiles", "profiles-only") else LE_SCOPE_SHARED,
             install_type=install_type, force=bool(getattr(args, "force", False)),
             interconnect_activation_mode=interconnect_activation_mode,
             execute=execute, confirm=confirm if execute else None,
@@ -3834,8 +3848,9 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
 
     status = result.get("status")
     if status == "planned":
-        console.print("\n[green]Plan only.[/green] Re-run with [bold]--execute[/bold] to apply "
-                      "(shared infrastructure first, then compute).")
+        order = "compute only (shared infrastructure not included)" if scope == "profiles-only" \
+            else "shared infrastructure first, then compute"
+        console.print(f"\n[green]Plan only.[/green] Re-run with [bold]--execute[/bold] to apply ({order}).")
     elif status == "nothing-to-do":
         console.print("\n[green]All selected targets already match this baseline.[/green] "
                       "Use [bold]--force[/bold] to reapply anyway.")
@@ -4501,6 +4516,8 @@ examples:
   proliant oneview update enclosure LE01 --execute        Apply it (reboots interconnects/compute)
   proliant oneview update enclosure LE01 --execute --activation-mode parallel
                                                           Force through a non-redundant fabric (disruptive)
+  proliant oneview update enclosure LE01 --scope profiles-only --execute
+                                                          Update just server-profile firmware, skip shared infra
   proliant oneview update appliance readiness             Pre-upgrade readiness report
   proliant oneview update appliance cleanup                Preview unused firmware baselines
   proliant oneview update appliance cleanup --yes           Delete unused baselines (free disk)
@@ -4831,12 +4848,18 @@ examples:
         help="SSP bundle to apply (version / short name / uri id). Defaults to the newest "
              "registered SSP -- pass a specific one to repeat the same rollout for testing.")
     upd_enc_baseline.completer = _oneview_ssp_baseline_completer  # type: ignore[attr-defined]
-    p_upd_enc.add_argument("--scope", choices=("shared-infra", "shared-infra-and-profiles"),
+    p_upd_enc.add_argument("--scope",
+        choices=("shared-infra", "shared-infra-and-profiles", "profiles-only"),
         default="shared-infra",
         help="'shared-infra' updates only the frame link modules + interconnects. "
              "'shared-infra-and-profiles' also updates every server profile in this "
              "enclosure's compute modules (matches the GUI's 'Shared infrastructure and "
-             "profiles' option). Default: shared-infra.")
+             "profiles' option). 'profiles-only' (no GUI equivalent -- this CLI only) "
+             "updates just the server profiles' compute firmware and skips the logical "
+             "enclosure/interconnect step entirely -- useful when shared infra is already "
+             "current, or is stuck/unverified and you don't want that blocking compute "
+             "progress; a server profile firmware PUT is its own independent OneView "
+             "operation, not dependent on the LE rollout finishing. Default: shared-infra.")
     p_upd_enc.add_argument("--install-type", choices=("firmware-only", "firmware-and-drivers", "firmware-offline"),
         help="Compute install type override when --scope includes profiles (default: keep "
              "each profile's existing setting).")

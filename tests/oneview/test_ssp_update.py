@@ -1087,9 +1087,12 @@ async def test_run_execute_profile_concurrency_caps_wave_size():
 
 
 @pytest.mark.asyncio
-async def test_run_execute_profile_concurrency_stops_launching_after_bad_wave():
-    """A failure anywhere in a wave stops further waves from launching, but
-    doesn't cancel the sibling already in flight in that same wave."""
+async def test_run_execute_profile_concurrency_continues_after_bad_wave():
+    """A failure in one wave does NOT stop later waves from launching --
+    each profile targets an independent physical server, so one server's
+    firmware trouble has no bearing on whether unrelated servers in later
+    waves can still update safely. Every profile is attempted and reported;
+    the overall status reflects the first issue seen."""
     release = asyncio.Event()
     release.set()
     fake = _ConcurrentProfileClient(
@@ -1105,12 +1108,43 @@ async def test_run_execute_profile_concurrency_stops_launching_after_bad_wave():
         profile_concurrency=2,
     )
     assert res["status"] == "failed"
-    # Wave 1 (profile-0, profile-1) both ran and are reported (one failed);
-    # wave 2 (profile-2, profile-3) never launched.
-    assert [r["name"] for r in res["results"]] == ["profile-0", "profile-1"]
+    # Wave 1 (profile-0, profile-1) ran (one failed); wave 2 (profile-2,
+    # profile-3) still launches and is fully reported too.
+    assert [r["name"] for r in res["results"]] == [
+        "profile-0", "profile-1", "profile-2", "profile-3",
+    ]
     put_uris = [u for m, u in fake.calls if m == "put"]
-    assert "/rest/server-profiles/sp-2" not in put_uris
-    assert "/rest/server-profiles/sp-3" not in put_uris
+    assert "/rest/server-profiles/sp-2" in put_uris
+    assert "/rest/server-profiles/sp-3" in put_uris
+
+
+@pytest.mark.asyncio
+async def test_run_execute_profile_default_concurrency_continues_past_failed_profile():
+    """Reproduces the exact live incident this behavior change was made for:
+    with the default profile_concurrency=1 (each wave is a single profile),
+    the first profile's firmware update failed (a hung drive flash) and the
+    remaining, entirely unrelated server profiles in the same batch were
+    never attempted at all. Every profile must now be attempted regardless
+    of an earlier one's outcome."""
+    release = asyncio.Event()
+    release.set()
+    fake = _ConcurrentProfileClient(
+        release=release,
+        failing_uris=frozenset({"/rest/server-profiles/sp-0"}),
+    )
+    profiles = [_profile_n(i) for i in range(3)]
+    res = await run_ssp_apply(
+        lambda: fake, baseline=_newest(),
+        le_targets=[], profile_targets=profiles,
+        execute=True, confirm=lambda plan: True,
+        on_event=lambda k, d: None, sleeper=_noop_sleep,
+        # profile_concurrency defaults to 1 -- not passed here on purpose.
+    )
+    assert res["status"] == "failed"
+    assert [r["name"] for r in res["results"]] == ["profile-0", "profile-1", "profile-2"]
+    put_uris = [u for m, u in fake.calls if m == "put"]
+    assert "/rest/server-profiles/sp-1" in put_uris
+    assert "/rest/server-profiles/sp-2" in put_uris
 
 
 @pytest.mark.asyncio

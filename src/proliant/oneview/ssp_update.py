@@ -1059,16 +1059,23 @@ async def run_ssp_apply(
       ``nothing-to-do``  execute=True but every target already matches
       ``aborted``        execute=True but the confirm callback returned False
       ``applied``        all targeted updates finished successfully
-      ``failed``         a task reported failure (``results`` shows how far it got)
+      ``failed``         a task reported failure. For shared infrastructure
+                          this stops further logical enclosures (they share
+                          fabric); for server profiles every targeted
+                          profile is still attempted regardless (see
+                          ``profile_concurrency`` below) -- ``results``
+                          carries one entry per profile either way, so check
+                          each entry for the full picture rather than
+                          assuming the batch stopped here.
       ``blocked``        OneView validated the update and refused to apply it
                           (e.g. a non-redundant-fabric guard), and the operator
-                          declined to proceed anyway -- the last ``results``
+                          declined to proceed anyway -- the relevant ``results``
                           entry carries ``blocked_reason``/``blocked_resolution``
                           and a ``blocked_uplinks`` diagnostic naming exactly
                           which uplink set / leg lost redundancy.
       ``unverified``     OneView reported the task as plain "Completed", but
                           re-checking what's actually installed didn't confirm
-                          it landed -- the last ``results`` entry carries
+                          it landed -- the relevant ``results`` entry carries
                           ``unverified_reason``. Unlike ``blocked``, this is
                           not auto-retried with force (no known reason force
                           would help); treat it as "verify manually" rather
@@ -1125,6 +1132,18 @@ async def run_ssp_apply(
     before the next wave starts (so a failure surfaces after its wave
     finishes, not mid-wave -- the remaining *already-launched* servers in
     that wave are not abandoned partway through a reboot cycle).
+
+    Unlike the shared-infrastructure loop above (which stops at the first
+    logical enclosure that fails/blocks, since they share fabric), a
+    failed/blocked/unverified *profile* does NOT stop the remaining waves --
+    confirmed live: one server's drive firmware hanging and failing has no
+    bearing on whether an unrelated server profile in the same batch can
+    still update safely, so every targeted profile is always attempted and
+    ``results`` carries an entry for each one. The returned ``status`` still
+    reflects whichever issue was seen *first* (so a straightforward `applied`
+    vs "something needs attention" check at the call site keeps working),
+    but check every entry in ``results`` for the full per-profile picture --
+    a non-``applied`` status here does not mean the whole batch stopped.
     """
     import asyncio
 
@@ -1376,8 +1395,15 @@ async def run_ssp_apply(
             # kind/name always identify the *requested target*, not whatever
             # (possibly empty, in tests) "name" the task body itself carries --
             # merge task fields first so kind/name can't be silently
-            # overwritten by them.
-            results.append({**task, "kind": "logical-enclosure", "name": le["name"]})
+            # overwritten by them. "outcome" records this target's own
+            # per-entry result ("applied"/"failed"/"blocked"/"unverified") so
+            # callers can tell exactly which entries had trouble without
+            # guessing from the overall (batch-wide) status or assuming the
+            # last entry in ``results`` is the relevant one.
+            results.append({
+                **task, "kind": "logical-enclosure", "name": le["name"],
+                "outcome": status or "applied",
+            })
             emit("applied", results[-1])
             if status is not None:
                 return {"status": status, "plan": plan, "results": results}
@@ -1414,12 +1440,18 @@ async def run_ssp_apply(
             # kind/name always identify the *requested target*; merge task
             # fields first so they can't be silently overwritten by whatever
             # "name" the task body itself carries (see the LE loop above for
-            # the same fix).
-            entry = {**task, "kind": "server-profile", "name": prof["name"]}
+            # the same fix). "outcome" records this profile's own per-entry
+            # result -- important now that a failed/blocked/unverified profile
+            # no longer stops later profiles from being attempted (see the
+            # wave loop below), so ``results`` can hold a mix of outcomes and
+            # callers must inspect each entry rather than assume the last one
+            # (or the batch-wide ``status``) describes every entry.
+            entry = {**task, "kind": "server-profile", "name": prof["name"], "outcome": status or "applied"}
             _tagged_emit("applied", entry)
             return status, entry
 
         wave_size = max(1, int(profile_concurrency))
+        overall_status: str | None = None
         i = 0
         while i < len(changing_profs):
             wave = changing_profs[i:i + wave_size]
@@ -1428,20 +1460,23 @@ async def run_ssp_apply(
             # so `results` stays deterministic (profile order) even when
             # multiple servers are updating concurrently.
             wave_results = await asyncio.gather(*(_run_one_profile(p) for p in wave))
-            worst_status = None
             for status, entry in wave_results:
                 results.append(entry)
-                if status is not None and worst_status is None:
-                    worst_status = status
-            # A failure/block/unverified anywhere in this wave stops further
-            # waves -- but (deliberately) doesn't cancel the other requests
-            # already launched in the same wave; they're real in-flight
-            # firmware operations on real hardware, not something to abandon
-            # mid-reboot-cycle just because a sibling in the same wave failed.
-            if worst_status is not None:
-                return {"status": worst_status, "plan": plan, "results": results}
+                if status is not None and overall_status is None:
+                    overall_status = status
+            # A failure/block/unverified profile does NOT stop the remaining
+            # waves -- each profile targets an independent physical server,
+            # so one server's firmware trouble has no bearing on whether an
+            # unrelated one can still update safely (confirmed live: a
+            # server-profile update batch stopped dead after the first
+            # profile's drive firmware failed, silently never attempting the
+            # other 5 unrelated servers in the same run). Every targeted
+            # profile is always attempted; the loop only remembers the first
+            # non-``applied`` status it saw, to return once all waves finish.
             i += wave_size
 
+    if overall_status is not None:
+        return {"status": overall_status, "plan": plan, "results": results}
     return {"status": "applied", "plan": plan, "results": results}
 
 

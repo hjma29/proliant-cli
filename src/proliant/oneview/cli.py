@@ -4080,34 +4080,61 @@ def _render_ssp_apply_result(
     elif status == "applied":
         console.print(f"\n[green]SSP apply complete.[/green] Updated "
                       f"[bold]{len(result.get('results', []))}[/bold] target(s).")
-    elif status == "failed":
+    elif status in ("failed", "blocked", "unverified"):
         done = result.get("results", [])
-        last = done[-1] if done else {}
-        reason = last.get("failed_reason") or ""
-        resolution = last.get("failed_resolution") or ""
+        # Find every entry that actually carries *this* outcome via its own
+        # "outcome" marker -- important now that a failed/blocked/unverified
+        # server profile no longer stops the rest of the batch (see
+        # run_ssp_apply's profile wave loop), so `done` can hold a mix of
+        # outcomes and the *last* entry is no longer reliably "the" problem.
+        # Falls back to the last entry for callers/results that predate the
+        # "outcome" field (e.g. a single-target result with no marker set).
+        matching = [r for r in done if r.get("outcome") == status]
+        if not matching:
+            matching = [done[-1]] if done else [{}]
+        if len(done) > 1 and len(matching) < len(done):
+            ok_count = len(done) - len(matching)
+            console.print(
+                f"\n[bold]{ok_count}[/bold] of [bold]{len(done)}[/bold] target(s) applied "
+                f"normally; [bold]{len(matching)}[/bold] did not — see below for each:"
+            )
+        for entry in matching:
+            _render_ssp_apply_entry_problem(console, status, entry, interconnect_activation_mode)
+
+
+def _render_ssp_apply_entry_problem(
+    console, status: str, entry: dict, interconnect_activation_mode: str,
+) -> None:
+    """Render the failed/blocked/unverified detail for one ``results`` entry.
+
+    Split out of ``_render_ssp_apply_result`` so it can be called once per
+    problem entry -- a batch update no longer stops at the first
+    failed/blocked/unverified server profile, so there can be more than one.
+    """
+    if status == "failed":
+        reason = entry.get("failed_reason") or ""
+        resolution = entry.get("failed_resolution") or ""
         console.print(
-            f"\n[red]SSP apply failed[/red] on [bold]{last.get('name', '?')}[/bold] "
-            f"({last.get('status') or last.get('state') or 'error'}).\n"
+            f"\n[red]SSP apply failed[/red] on [bold]{entry.get('name', '?')}[/bold] "
+            f"({entry.get('status') or entry.get('state') or 'error'}).\n"
             + (f"[dim]{reason}[/dim]\n" if reason else "")
             + (f"[dim]Resolution: {resolution}[/dim]\n" if resolution else "")
             + "See [bold]proliant oneview activity[/bold] (or the OneView UI Activity page) "
             "for the full task detail."
         )
     elif status == "blocked":
-        done = result.get("results", [])
-        last = done[-1] if done else {}
-        reason = last.get("blocked_reason") or (
+        reason = entry.get("blocked_reason") or (
             "OneView validated the update and refused to apply it, but did not "
             "report a specific reason — check the OneView UI Activity log."
         )
-        resolution = last.get("blocked_resolution") or ""
+        resolution = entry.get("blocked_resolution") or ""
         console.print(
-            f"\n[yellow]SSP apply not applied[/yellow] on [bold]{last.get('name', '?')}[/bold] — "
+            f"\n[yellow]SSP apply not applied[/yellow] on [bold]{entry.get('name', '?')}[/bold] — "
             "nothing was changed.\n"
             f"[dim]{reason}[/dim]\n"
             + (f"[dim]Resolution: {resolution}[/dim]\n" if resolution else "")
         )
-        for u in last.get("blocked_uplinks") or []:
+        for u in entry.get("blocked_uplinks") or []:
             note = u.get("note") or ""
             console.print(
                 f"[dim] • {u.get('name', '?')}"
@@ -4115,14 +4142,14 @@ def _render_ssp_apply_result(
                 + (f": {note}" if note else "")
                 + "[/dim]"
             )
-        if last.get("blocked_forced"):
+        if entry.get("blocked_forced"):
             # The operator already forced it (chose B or passed --force) and
             # OneView STILL refused. Two distinct root causes:
             #   1. Uplink not redundant — one live leg, Orchestrated can't sequence it
             #   2. Downlink not redundant — server profiles have single-homed NICs;
             #      Orchestrated can't flash the IC they're on without dropping them
             # Distinguish by whether uplink details are present.
-            has_uplink_detail = bool(last.get("blocked_uplinks"))
+            has_uplink_detail = bool(entry.get("blocked_uplinks"))
             if interconnect_activation_mode == "Parallel":
                 console.print(
                     "You already forced this in [bold]Parallel[/bold] mode and OneView still "
@@ -4169,15 +4196,13 @@ def _render_ssp_apply_result(
         # known validation reason to retry with force, so this isn't treated
         # as a failure, just an honest "we couldn't confirm it" instead of a
         # blind "SSP apply complete".
-        done = result.get("results", [])
-        last = done[-1] if done else {}
-        reason = last.get("unverified_reason") or (
+        reason = entry.get("unverified_reason") or (
             "OneView reported this update as completed, but re-checking the actual "
             "installed baseline did not confirm it."
         )
         console.print(
             f"\n[yellow]SSP apply reported complete but could not be verified[/yellow] on "
-            f"[bold]{last.get('name', '?')}[/bold].\n"
+            f"[bold]{entry.get('name', '?')}[/bold].\n"
             f"[dim]{reason}[/dim]\n"
             "This can happen if OneView's internal state takes a moment to catch up after "
             "a task finishes. Check [bold]proliant oneview interconnects describe[/bold] or "

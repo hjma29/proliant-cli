@@ -264,3 +264,85 @@ def test_step_segment_blank_when_no_total_steps():
     assert cli._step_segment({}) == ""
     assert cli._step_segment({"total_steps": 0, "completed_steps": 0}) == ""
     assert cli._step_segment({"total_steps": None}) == ""
+
+
+def test_render_batch_result_reports_every_failed_profile_not_just_last():
+    """Reproduces the live incident this fix addresses: a batch of profiles
+    where the FIRST one failed but later ones still succeeded (continuing
+    past a failed/blocked/unverified profile no longer stops the batch --
+    see run_ssp_apply's profile wave loop). The renderer must not assume
+    ``results[-1]`` is the problem -- it must find and report the actual
+    failed entry even though it's first in the list, not last."""
+    console = _FakeConsole()
+    result = {
+        "status": "failed",
+        "results": [
+            {
+                "kind": "server-profile", "name": "ocp-single-node", "state": "Error",
+                "status": "Error", "failed_reason": "Firmware update failed.",
+                "failed_resolution": "Cold boot the server and retry.",
+                "outcome": "failed",
+            },
+            {
+                "kind": "server-profile", "name": "aci-vc-tunnel-host1",
+                "state": "Completed", "outcome": "applied",
+            },
+            {
+                "kind": "server-profile", "name": "aci-vc-tunnel-host2",
+                "state": "Completed", "outcome": "applied",
+            },
+        ],
+    }
+    cli._render_ssp_apply_result(console, result, plan_message="")
+    text = "\n".join(console.printed)
+    assert "ocp-single-node" in text
+    assert "Firmware update failed." in text
+    assert "Cold boot the server and retry." in text
+    # The two profiles that succeeded must NOT be reported as the failure,
+    # and the summary must make clear the batch kept going past the failure.
+    assert "2" in text and "3" in text  # "2 of 3 target(s) applied normally"
+
+
+def test_render_batch_result_reports_multiple_failed_profiles():
+    """When more than one profile in the same batch fails, each one gets its
+    own failure detail -- not just the first or last."""
+    console = _FakeConsole()
+    result = {
+        "status": "failed",
+        "results": [
+            {
+                "kind": "server-profile", "name": "profile-a", "state": "Error",
+                "failed_reason": "reason A", "outcome": "failed",
+            },
+            {
+                "kind": "server-profile", "name": "profile-b",
+                "state": "Completed", "outcome": "applied",
+            },
+            {
+                "kind": "server-profile", "name": "profile-c", "state": "Error",
+                "failed_reason": "reason C", "outcome": "failed",
+            },
+        ],
+    }
+    cli._render_ssp_apply_result(console, result, plan_message="")
+    text = "\n".join(console.printed)
+    assert "profile-a" in text and "reason A" in text
+    assert "profile-c" in text and "reason C" in text
+
+
+def test_render_single_target_result_unchanged_when_no_outcome_key():
+    """Backward-compat: a result whose entries predate the "outcome" field
+    (e.g. built by a caller/test that doesn't set it) still falls back to
+    describing the last entry, same as before this fix."""
+    console = _FakeConsole()
+    result = {
+        "status": "failed",
+        "results": [{
+            "kind": "server-profile", "name": "aci-vc-LAG-host1", "state": "Error",
+            "status": "Error", "failed_reason": "boom", "failed_resolution": "fix it",
+        }],
+    }
+    cli._render_ssp_apply_result(console, result, plan_message="")
+    text = "\n".join(console.printed)
+    assert "aci-vc-LAG-host1" in text
+    assert "boom" in text

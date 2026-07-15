@@ -97,8 +97,56 @@ def _value_actions_without_completion() -> list[str]:
     return missing
 
 
+def _actions_using_argcomplete_suppress_completer() -> list[str]:
+    """Flags whose completer is argcomplete's own SuppressCompleter.
+
+    argcomplete treats a SuppressCompleter as "hide this flag from '--<TAB>'
+    completion entirely" (see ArgcompleteFinder._get_option_completions),
+    not just "don't complete a value for it". `suppress_file_completion()`
+    in proliant.common.completers must never be implemented with it, or
+    every flag using that helper becomes invisible to tab completion.
+    """
+    from argcomplete.completers import SuppressCompleter
+
+    modules = {
+        "ilo": "proliant.ilo.cli",
+        "com": "proliant.com.cli",
+        "oneview": "proliant.oneview.cli",
+        "spp": "proliant.spp.cli",
+        "setting": "proliant.setting.cli",
+    }
+    offenders: list[str] = []
+
+    def walk(parser: argparse.ArgumentParser, path: list[str]) -> None:
+        for action in parser._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                seen: set[int] = set()
+                for name, subparser in action.choices.items():
+                    parser_id = id(subparser)
+                    if parser_id in seen:
+                        continue
+                    seen.add(parser_id)
+                    walk(subparser, path + [name])
+                continue
+
+            completer = getattr(action, "completer", None)
+            if isinstance(completer, SuppressCompleter):
+                names = action.option_strings or [action.dest]
+                offenders.append(f"{' '.join(path)} :: {'/'.join(names)}")
+
+    for namespace, module_name in modules.items():
+        module = import_module(module_name)
+        walk(module._build_parser(), [namespace])
+
+    return offenders
+
+
 def test_every_value_argument_declares_completion_behavior():
     assert _value_actions_without_completion() == []
+
+
+def test_no_flag_uses_argcomplete_suppress_completer():
+    assert _actions_using_argcomplete_suppress_completer() == []
 
 
 def test_top_level_completion_lists_namespaces():
@@ -138,6 +186,23 @@ def test_freeform_values_do_not_fall_back_to_workspace_files():
     ]
     for line in freeform_lines:
         assert _complete(line) == []
+
+
+def test_freeform_value_flags_still_appear_in_flag_name_completion():
+    # Regression test: a completer that suppresses file-path fallback for a
+    # flag's *value* must not also hide the flag's *name* from `--<TAB>`
+    # completion. Covers the live incident where `--concurrency` never
+    # appeared in tab completion because suppress_file_completion() used
+    # argcomplete's SuppressCompleter, which argcomplete treats as "hide this
+    # option outright".
+    completions = set(_complete("proliant oneview update enclosure LE01 --"))
+    assert "--concurrency" in completions
+
+    completions = set(_complete("proliant oneview mac list --"))
+    assert "--address" in completions
+
+    completions = set(_complete("proliant ilo network set static srv1 --"))
+    assert "--ip" in completions
 
 
 def test_powershell_bridge_quotes_completions_with_commas_and_spaces():

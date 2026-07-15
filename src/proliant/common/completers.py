@@ -10,7 +10,7 @@ import json
 import time
 from typing import Callable
 
-from argcomplete.completers import FilesCompleter, SuppressCompleter
+from argcomplete.completers import FilesCompleter
 
 from proliant.common import cache_dir
 
@@ -23,8 +23,19 @@ def file_completion():
 
 
 def suppress_file_completion():
-    """Argcomplete completer for free-form values that should not list files."""
-    return SuppressCompleter()
+    """Argcomplete completer for free-form values that should not list files.
+
+    Deliberately does NOT use argcomplete's own SuppressCompleter: argcomplete
+    treats a SuppressCompleter as "hide this option from '--<TAB>' flag-name
+    completion entirely", not just "don't complete its value" (see
+    argcomplete.finders.ArgcompleteFinder._get_option_completions, which skips
+    any action whose completer is a SuppressCompleter that suppresses). That
+    made every flag using this helper invisible to tab completion outright
+    (e.g. `--concurrency` never appeared even in `--<TAB>` listings). A plain
+    completer that just returns no candidates achieves the intended effect --
+    no file-path fallback for the value -- without hiding the flag itself.
+    """
+    return lambda **kwargs: []
 
 
 def cached_names(cache_key: str, fetch_fn: Callable[[], list[str]],

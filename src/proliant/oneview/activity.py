@@ -150,6 +150,25 @@ def _latest_progress(t: dict) -> str:
     return ""
 
 
+def _progress_log(t: dict) -> list[str]:
+    """All non-blank ``progressUpdates[].statusUpdate`` entries, oldest first.
+
+    The GUI's expanded Activity view shows this full scrolling log under a
+    task like "Apply profile" (e.g. every "Stage component N/6" / "Install
+    component N/6" line as it happens) -- not just the newest entry. Only
+    the parent-most task in a rollout tends to carry more than a couple of
+    these (child subtasks like "Power on"/"Power off" typically have none
+    at all, just their own single ``taskStatus``), so this is empty far
+    more often than not.
+    """
+    lines = []
+    for u in t.get("progressUpdates") or []:
+        text = ((u or {}).get("statusUpdate") or "").strip()
+        if text:
+            lines.append(clean_refs(text))
+    return lines
+
+
 def normalize_task(t: dict) -> dict[str, Any]:
     """Normalize a ``/rest/tasks`` member into the common activity shape."""
     created = t.get("created") or ""
@@ -177,6 +196,7 @@ def normalize_task(t: dict) -> dict[str, Any]:
         "severity": "",
         "status": status,
         "progress": _latest_progress(t),
+        "progress_log": _progress_log(t),
         "percent": percent,
         "completed_steps": completed_steps if has_steps and isinstance(completed_steps, int) else None,
         "total_steps": total_steps if has_steps else None,

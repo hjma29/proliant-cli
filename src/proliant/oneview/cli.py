@@ -928,12 +928,22 @@ def _step_segment(payload: dict) -> str:
     already accounts for this (see ``normalize_task()``), but showing the
     raw step count alongside it makes the same "still working, here's how
     far" detail the GUI's own subtask log conveys instead of a lone number.
+
+    ``completed_steps`` can exceed ``total_steps`` -- confirmed live: OneView
+    appears to increment ``completedSteps`` for every progress-log entry
+    (including retried power-cycle attempts and the final failure entry
+    itself), without revising ``totalSteps`` upward from its original plan.
+    A plain "26/24" fraction reads as a bug, so once completed overtakes the
+    original plan this shows the plan separately instead of a bogus >100%
+    ratio.
     """
     total = payload.get("total_steps")
     if not isinstance(total, int) or total <= 0:
         return ""
     completed = payload.get("completed_steps")
     completed = completed if isinstance(completed, int) else 0
+    if completed > total:
+        return f"step {completed} (plan: {total})"
     return f"step {completed}/{total}"
 
 
@@ -2814,6 +2824,18 @@ def _build_activity_tree_table(node: dict, target: dict):
     if dur:
         subtitle += f"  ({dur})"
 
+    def _phase_lines(row: dict) -> list[str]:
+        # The full progress log (e.g. every "Stage component N/6" / "Install
+        # component N/6" line as it happened) when the task carries one --
+        # matches the GUI's scrolling log under a task like "Apply profile".
+        # Most subtasks (e.g. "Power on"/"Power off") never accumulate more
+        # than their own single status line, so this falls back to that.
+        log = row.get("progress_log") or []
+        if log:
+            return log
+        single = phase_text(row)
+        return [single] if single else []
+
     table = make_table(
         title,
         ("Name / phase", {"no_wrap": False, "overflow": "fold", "min_width": 30}),
@@ -2826,11 +2848,10 @@ def _build_activity_tree_table(node: dict, target: dict):
         marker = "└ " if depth else ""
         pct = row.get("percent")
         pct_txt = f"{int(pct)}%" if isinstance(pct, (int, float)) else "—"
-        phase = phase_text(row)
         step = _step_segment(row)
         name_cell = f"{indent}{marker}{row.get('name') or '—'}"
-        if phase:
-            name_cell += f"\n{indent}   [dim]{phase}[/dim]"
+        for line in _phase_lines(row):
+            name_cell += f"\n{indent}   [dim]{line}[/dim]"
         if step:
             name_cell += f"\n{indent}   [dim]{step}[/dim]"
         table.add_row(

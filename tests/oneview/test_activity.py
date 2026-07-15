@@ -215,6 +215,31 @@ def test_normalize_task_captures_parent_and_latest_progress():
     assert act.phase_text(row) == "Stage firmware 80% completed"
 
 
+def test_normalize_task_captures_full_progress_log_oldest_first():
+    # Live incident: the GUI's expanded Activity view shows every "Stage
+    # component N/6" / "Install component N/6" line under an "Apply
+    # profile" task as it happened, not just the newest -- `--tree` needs
+    # the full ordered log to reproduce that, not just `progress`.
+    raw = {
+        "created": "2026-07-11T06:00:00Z",
+        "progressUpdates": [
+            {"id": 0, "statusUpdate": "Stage component 1/6 - a.fwpkg"},
+            {"id": 1, "statusUpdate": "  "},
+            {"id": 2, "statusUpdate": "Stage component 2/6 - b.fwpkg"},
+        ],
+    }
+    row = act.normalize_task(raw)
+    assert row["progress_log"] == [
+        "Stage component 1/6 - a.fwpkg",
+        "Stage component 2/6 - b.fwpkg",
+    ]
+
+
+def test_normalize_task_progress_log_empty_without_updates():
+    row = act.normalize_task({"created": "2026-07-11T06:00:00Z"})
+    assert row["progress_log"] == []
+
+
 def test_phase_text_falls_back_to_status_without_progress():
     row = act.normalize_task({"taskStatus": "Update logical interconnect.",
                               "created": "2026-07-11T06:00:00Z"})

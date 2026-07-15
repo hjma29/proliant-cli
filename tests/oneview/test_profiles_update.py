@@ -266,6 +266,44 @@ def test_step_segment_blank_when_no_total_steps():
     assert cli._step_segment({"total_steps": None}) == ""
 
 
+def test_step_segment_shows_plan_separately_when_completed_exceeds_total():
+    # Live incident: OneView incremented `completedSteps` past `totalSteps`
+    # (26 vs. a planned 24) -- apparently counting every progress-log entry,
+    # including retried power-cycle attempts and the final failure entry,
+    # without revising the original plan upward. A plain "26/24" fraction
+    # reads like a CLI bug, so once completed overtakes the plan this shows
+    # the stale plan separately instead of a bogus >100% ratio.
+    assert cli._step_segment({"completed_steps": 26, "total_steps": 24}) == "step 26 (plan: 24)"
+    assert cli._step_segment({"completed_steps": 24, "total_steps": 24}) == "step 24/24"
+
+
+def test_build_activity_tree_table_shows_full_progress_history():
+    # GUI parity: the Activity page's expanded view for an "Apply profile"
+    # task lists every "Stage component N/6" / "Install component N/6" line
+    # as it happened, not just the latest one -- --tree must reproduce that
+    # full ordered log instead of collapsing it to a single phase line.
+    node = {
+        "task": {
+            "name": "Apply profile : test-host", "resource": "Enc-01 bay 2",
+            "state": "Running", "percent": 99, "status": "", "progress": "",
+            "progress_log": [
+                "Stage component 1/6 - a.fwpkg",
+                "Stage component 2/6 - b.fwpkg",
+            ],
+            "completed_steps": 26, "total_steps": 24,
+            "created": "2026-07-11T06:00:00Z", "duration": "1h",
+        },
+        "children": [],
+    }
+    table, _subtitle = cli._build_activity_tree_table(node, {"name": "test"})
+    name_cell = table.columns[0]._cells[0]
+    assert "Stage component 1/6 - a.fwpkg" in name_cell
+    assert "Stage component 2/6 - b.fwpkg" in name_cell
+    # The step segment (with the completed>total plan note) is appended
+    # after the full log, not instead of it.
+    assert "step 26 (plan: 24)" in name_cell
+
+
 def test_render_batch_result_reports_every_failed_profile_not_just_last():
     """Reproduces the live incident this fix addresses: a batch of profiles
     where the FIRST one failed but later ones still succeeded (continuing

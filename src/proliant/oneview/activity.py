@@ -155,6 +155,18 @@ def normalize_task(t: dict) -> dict[str, Any]:
     created = t.get("created") or ""
     modified = t.get("modified") or ""
     status = clean_refs((t.get("taskStatus") or "").strip())
+    # Some task types (e.g. a server-profile firmware "Apply profile" task)
+    # leave their own plain `percentComplete` frozen at 0 for the entire run
+    # while quietly completing steps underneath -- `computedPercentComplete`
+    # is the same step-weighted value the GUI's own bar reads, so prefer it
+    # (same fix already applied to the live progress bar in ssp_update.py's
+    # own normalize_task -- this port covers `activity`/`activity --tree`).
+    percent = t.get("computedPercentComplete")
+    if not isinstance(percent, (int, float)):
+        percent = t.get("percentComplete")
+    total_steps = t.get("totalSteps")
+    completed_steps = t.get("completedSteps")
+    has_steps = isinstance(total_steps, int) and total_steps > 0
     return {
         "kind": "task",
         "name": (t.get("name") or "").strip(),
@@ -165,7 +177,9 @@ def normalize_task(t: dict) -> dict[str, Any]:
         "severity": "",
         "status": status,
         "progress": _latest_progress(t),
-        "percent": t.get("percentComplete"),
+        "percent": percent,
+        "completed_steps": completed_steps if has_steps and isinstance(completed_steps, int) else None,
+        "total_steps": total_steps if has_steps else None,
         "owner": (t.get("owner") or "").strip(),
         "duration": format_duration(created, modified),
         "parent": (t.get("parentTaskUri") or "").strip(),

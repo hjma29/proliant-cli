@@ -2827,9 +2827,12 @@ def _build_activity_tree_table(node: dict, target: dict):
         pct = row.get("percent")
         pct_txt = f"{int(pct)}%" if isinstance(pct, (int, float)) else "—"
         phase = phase_text(row)
+        step = _step_segment(row)
         name_cell = f"{indent}{marker}{row.get('name') or '—'}"
         if phase:
             name_cell += f"\n{indent}   [dim]{phase}[/dim]"
+        if step:
+            name_cell += f"\n{indent}   [dim]{step}[/dim]"
         table.add_row(
             name_cell,
             _short_server_name(row.get("resource") or "") or "—",

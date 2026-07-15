@@ -228,6 +228,45 @@ def test_latest_progress_ignores_blank_updates():
     assert act.normalize_task(raw)["progress"] == "real"
 
 
+def test_normalize_task_prefers_computed_percent_over_frozen_plain_percent():
+    # Live incident: a server-profile firmware "Apply profile" task's own
+    # `percentComplete` stayed flat at 0 for the whole run while
+    # `computedPercentComplete` (the GUI's own step-weighted value) climbed
+    # normally -- `activity`/`activity --tree` must report the same 0% the
+    # live progress bar already stopped trusting (see ssp_update.py).
+    raw = {
+        "name": "Apply profile : aci-vc-tunnel-host2",
+        "taskState": "Running",
+        "percentComplete": 0,
+        "computedPercentComplete": 44,
+        "completedSteps": 23,
+        "totalSteps": 24,
+        "created": "2026-07-11T06:00:00Z",
+    }
+    row = act.normalize_task(raw)
+    assert row["percent"] == 44
+    assert row["completed_steps"] == 23
+    assert row["total_steps"] == 24
+
+
+def test_normalize_task_falls_back_to_plain_percent_without_computed_field():
+    raw = {"taskState": "Completed", "percentComplete": 100,
+           "created": "2026-07-11T06:00:00Z"}
+    row = act.normalize_task(raw)
+    assert row["percent"] == 100
+    assert row["completed_steps"] is None
+    assert row["total_steps"] is None
+
+
+def test_normalize_task_ignores_zero_total_steps():
+    raw = {"taskState": "Running", "percentComplete": 5,
+           "completedSteps": 0, "totalSteps": 0,
+           "created": "2026-07-11T06:00:00Z"}
+    row = act.normalize_task(raw)
+    assert row["total_steps"] is None
+    assert row["completed_steps"] is None
+
+
 # ── top-level filtering (GUI feed parity) ───────────────────────────────────
 
 def _subtask(name, created, parent, resource="LE01"):

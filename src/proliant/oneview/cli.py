@@ -947,6 +947,36 @@ def _step_segment(payload: dict) -> str:
     return f"step {completed}/{total}"
 
 
+def _print_new_progress_log_lines(
+    console, bars: dict, key: str, payload: dict, *, label: str = "",
+) -> None:
+    """Print any progress-log lines not yet shown for *key*, above the live bar.
+
+    ``progress_log`` (see ``ssp_update.normalize_task``) is the full,
+    append-only history of an in-flight task's progress updates -- e.g.
+    every "Stage component N/6 - name.fwpkg" / "Install component N/6" line
+    the GUI's own expanded Activity view shows as it happens, not just the
+    single latest one the compact live bar's description line has room for.
+    Rich lets a Progress's own ``console.print()`` interleave permanent lines
+    above an active bar without corrupting it, so each newly-seen line is
+    printed once (tracked by position, not text, since the same line -- e.g.
+    a retried "Power off server." -- can legitimately repeat) the moment it
+    shows up, giving the terminal the same scrolling detail as the GUI while
+    the bar itself keeps showing just the current phase + percent.
+
+    *label* (e.g. a target's name) prefixes each printed line -- needed when
+    several targets run concurrently (``update enclosure --concurrency``) so
+    their interleaved logs on screen stay attributable to the right target.
+    """
+    log = payload.get("progress_log") or []
+    printed = bars.get(key, 0)
+    if len(log) > printed:
+        prefix = f"[dim]{label}:[/dim] " if label else ""
+        for line in log[printed:]:
+            console.print(f"  {prefix}[dim]{line}[/dim]", highlight=False)
+        bars[key] = len(log)
+
+
 # ── proliant oneview server-profiles reapply ──────────────────────────────────────
 
 async def _cmd_profiles_reapply(args: argparse.Namespace) -> None:
@@ -971,6 +1001,7 @@ async def _cmd_profiles_reapply(args: argparse.Namespace) -> None:
             return
         if kind == "applying":
             desc = f"[bold]Server profile: {payload.get('name')}[/bold]"
+            bars["log"] = 0
             p = bars.get("bar")
             if p is not None:
                 p.reset(bars["task"], total=100, completed=0, description=desc)
@@ -990,6 +1021,7 @@ async def _cmd_profiles_reapply(args: argparse.Namespace) -> None:
             p = bars.get("bar")
             if p is None:
                 return
+            _print_new_progress_log_lines(console, bars, "log", payload)
             pct = payload.get("percent")
             state = payload.get("state") or payload.get("status") or "working…"
             stage = payload.get("stage") or ""
@@ -1124,6 +1156,7 @@ async def _cmd_profiles_update(args: argparse.Namespace) -> None:
             _render_ssp_plan(console, payload)
         elif kind == "applying":
             desc = f"[bold]Server profile: {payload.get('name')}[/bold]"
+            bars["log"] = 0
             p = bars.get("bar")
             if p is not None:
                 p.reset(bars["task"], total=100, completed=0, description=desc)
@@ -1143,6 +1176,7 @@ async def _cmd_profiles_update(args: argparse.Namespace) -> None:
             p = bars.get("bar")
             if p is None:
                 return
+            _print_new_progress_log_lines(console, bars, "log", payload)
             pct = payload.get("percent")
             state = payload.get("state") or payload.get("status") or "working…"
             stage = payload.get("stage") or ""
@@ -3860,14 +3894,16 @@ async def _async_update_enclosure(args: argparse.Namespace) -> None:
                 # percent/elapsed-time clock for the new target.
                 p.reset(row["task_id"], total=100, completed=0, description=desc)
                 row["label"] = full_label
+                row["log_len"] = 0
             else:
-                rows[row_key] = {"task_id": p.add_task(desc, total=100), "label": full_label}
+                rows[row_key] = {"task_id": p.add_task(desc, total=100), "label": full_label, "log_len": 0}
         elif kind == "task-progress":
             p = bars.get("bar")
             rows = bars.get("rows") or {}
             row = rows.get(_row_key(payload))
             if p is None or row is None:
                 return
+            _print_new_progress_log_lines(console, row, "log_len", payload, label=row.get("label", ""))
             pct = payload.get("percent")
             state = payload.get("state") or payload.get("status") or "working…"
             stage = payload.get("stage") or ""

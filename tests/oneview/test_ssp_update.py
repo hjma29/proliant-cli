@@ -408,6 +408,31 @@ def test_normalize_task_omits_steps_when_total_steps_is_zero_or_absent():
     assert normalize_task({"uri": "/rest/tasks/1"})["total_steps"] is None
 
 
+def test_normalize_task_captures_full_progress_log_oldest_first():
+    # GUI parity: the Activity page's expanded view for an "Apply profile"
+    # task lists every "Stage component N/6"/"Install component N/6" line as
+    # it happened, not just the newest -- the live single-line progress bar
+    # (this module's normalize_task, separate from activity.py's own copy)
+    # needs the same full ordered log to show that detail too.
+    t = normalize_task({
+        "uri": "/rest/tasks/1", "taskState": "Running",
+        "progressUpdates": [
+            {"id": 0, "statusUpdate": "Stage component 1/6 - a.fwpkg"},
+            {"id": 1, "statusUpdate": "  "},
+            {"id": 2, "statusUpdate": "Stage component 2/6 - b.fwpkg"},
+        ],
+    })
+    assert t["progress_log"] == [
+        "Stage component 1/6 - a.fwpkg",
+        "Stage component 2/6 - b.fwpkg",
+    ]
+    assert t["stage"] == "Stage component 2/6 - b.fwpkg"  # unchanged: latest line
+
+
+def test_normalize_task_progress_log_empty_without_updates():
+    assert normalize_task({"taskState": "Running"})["progress_log"] == []
+
+
 @pytest.mark.asyncio
 async def test_await_task_treats_non_task_uri_as_synchronous_final():
     from proliant.oneview.ssp_update import _await_task
@@ -848,6 +873,31 @@ async def test_enrich_with_active_descendant_carries_step_count():
     assert enriched["percent"] == 18.0
     assert enriched["completed_steps"] == 15
     assert enriched["total_steps"] == 24
+
+
+@pytest.mark.asyncio
+async def test_enrich_with_active_descendant_carries_progress_log():
+    """The deepest active descendant (e.g. "Apply profile") is the task that
+    accumulates the rich multi-line progressUpdates log -- must be carried
+    onto the display so the live bar can print the full GUI-equivalent
+    scrolling history, not just the single latest 'stage' line."""
+    root = {"uri": "/rest/tasks/root", "taskState": "Running", "percentComplete": 0}
+    grandchild = {
+        "uri": "/rest/tasks/grandchild", "taskState": "Running", "percentComplete": 0,
+        "progressUpdates": [
+            {"statusUpdate": "Stage component 1/6 - a.fwpkg"},
+            {"statusUpdate": "Stage component 2/6 - b.fwpkg"},
+        ],
+    }
+    client = _ChildTaskClient(root, {
+        "/rest/tasks/root": [{"uri": "/rest/tasks/child", "taskState": "Running", "percentComplete": 0}],
+        "/rest/tasks/child": [grandchild],
+    })
+    enriched = await ssp_update._enrich_with_active_descendant(client, normalize_task(root))
+    assert enriched["progress_log"] == [
+        "Stage component 1/6 - a.fwpkg",
+        "Stage component 2/6 - b.fwpkg",
+    ]
 
 
 @pytest.mark.asyncio

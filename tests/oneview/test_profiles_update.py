@@ -277,6 +277,70 @@ def test_step_segment_shows_plan_separately_when_completed_exceeds_total():
     assert cli._step_segment({"completed_steps": 24, "total_steps": 24}) == "step 24/24"
 
 
+class _RecordingConsole:
+    def __init__(self):
+        self.lines: list[str] = []
+
+    def print(self, text, **kwargs):
+        self.lines.append(text)
+
+
+def test_print_new_progress_log_lines_prints_only_unseen_lines():
+    # GUI parity: each newly-appeared progress_log entry should print once,
+    # above the live bar, the moment it shows up.
+    console = _RecordingConsole()
+    bars: dict = {}
+    cli._print_new_progress_log_lines(
+        console, bars, "log", {"progress_log": ["Stage component 1/6 - a.fwpkg"]}
+    )
+    assert console.lines == ["  [dim]Stage component 1/6 - a.fwpkg[/dim]"]
+
+    # Next tick adds one more line -- only the new one should print again.
+    cli._print_new_progress_log_lines(
+        console, bars, "log",
+        {"progress_log": ["Stage component 1/6 - a.fwpkg", "Stage component 2/6 - b.fwpkg"]},
+    )
+    assert console.lines == [
+        "  [dim]Stage component 1/6 - a.fwpkg[/dim]",
+        "  [dim]Stage component 2/6 - b.fwpkg[/dim]",
+    ]
+
+
+def test_print_new_progress_log_lines_does_not_dedupe_repeated_text():
+    # Live incident: a retried "Power off server." legitimately appears twice
+    # in progressUpdates. Dedup must be by position (how many lines already
+    # printed), not by text, or the CLI would silently swallow the retry.
+    console = _RecordingConsole()
+    bars: dict = {}
+    cli._print_new_progress_log_lines(console, bars, "log", {"progress_log": ["Power off server."]})
+    cli._print_new_progress_log_lines(
+        console, bars, "log", {"progress_log": ["Power off server.", "Power off server."]}
+    )
+    assert console.lines == ["  [dim]Power off server.[/dim]"] * 2
+
+
+def test_print_new_progress_log_lines_prefixes_with_label_when_given():
+    # update enclosure --concurrency runs several targets' bars at once --
+    # their interleaved log lines need the target name so they stay
+    # attributable once printed above the shared multi-row bar.
+    console = _RecordingConsole()
+    bars: dict = {}
+    cli._print_new_progress_log_lines(
+        console, bars, "log", {"progress_log": ["Install firmware."]}, label="aci-vc-tunnel-host2"
+    )
+    assert console.lines == ["  [dim]aci-vc-tunnel-host2:[/dim] [dim]Install firmware.[/dim]"]
+
+
+def test_print_new_progress_log_lines_noop_when_no_new_lines():
+    console = _RecordingConsole()
+    bars = {"log": 2}
+    cli._print_new_progress_log_lines(
+        console, bars, "log", {"progress_log": ["a", "b"]}
+    )
+    assert console.lines == []
+    assert bars["log"] == 2
+
+
 def test_build_activity_tree_table_shows_full_progress_history():
     # GUI parity: the Activity page's expanded view for an "Apply profile"
     # task lists every "Stage component N/6" / "Install component N/6" line

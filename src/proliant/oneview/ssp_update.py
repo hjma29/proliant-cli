@@ -494,16 +494,29 @@ def _percent(value: Any) -> float | None:
         return None
 
 
+def _progress_log(data: dict) -> list[str]:
+    """Every non-blank ``progressUpdates`` entry, oldest first, refs cleaned.
+
+    Mirrors ``activity.py``'s ``_progress_log`` -- this module keeps its own
+    copy of ``normalize_task`` (it predates ``activity.py`` and drives the
+    live single-line progress bar during ``--execute``, not the ``activity``
+    feed), so the same "GUI shows the full scrolling log, we only kept the
+    latest line" gap needed the same fix here independently.
+    """
+    updates = data.get("progressUpdates") or []
+    out = []
+    for u in updates:
+        text = (u or {}).get("statusUpdate", "") or ""
+        if text.strip():
+            out.append(_clean_embedded_refs(text.strip()))
+    return out
+
+
 def normalize_task(data: dict | None) -> dict[str, Any]:
     """Compact an OneView task resource (or an async op's task body)."""
     d = data or {}
-    updates = d.get("progressUpdates") or []
-    stage = ""
-    for u in reversed(updates):
-        text = (u or {}).get("statusUpdate", "") or ""
-        if text.strip():
-            stage = _clean_embedded_refs(text.strip())
-            break
+    log = _progress_log(d)
+    stage = log[-1] if log else ""
     # OneView's plain `percentComplete` stays a flat 0 for the entire
     # duration of some task types -- confirmed live on a server-profile
     # firmware "Apply profile" task: `percentComplete` sat at 0 the whole
@@ -526,6 +539,7 @@ def normalize_task(data: dict | None) -> dict[str, Any]:
         "percent": percent,
         "resource": (d.get("associatedResource") or {}).get("resourceName", "") or "",
         "stage": stage,
+        "progress_log": log,
         "completed_steps": completed_steps if has_steps and isinstance(completed_steps, int) else None,
         "total_steps": total_steps if has_steps else None,
     }
@@ -931,6 +945,13 @@ async def _enrich_with_active_descendant(client: "OneViewClient", task: dict) ->
     if deepest.get("total_steps") is not None:
         merged["completed_steps"] = deepest.get("completed_steps")
         merged["total_steps"] = deepest.get("total_steps")
+    # The descendant actually doing the work (e.g. "Apply profile") is the
+    # one that accumulates a rich progressUpdates log -- e.g. every "Stage
+    # component N/6"/"Install component N/6" line, matching the GUI's own
+    # expanded Activity view. Propagate its full log (not just "stage",
+    # the latest line) so the live bar can print the same scrolling detail.
+    if deepest.get("progress_log"):
+        merged["progress_log"] = deepest["progress_log"]
     return merged
 
 

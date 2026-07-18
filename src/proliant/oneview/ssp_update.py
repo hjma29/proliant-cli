@@ -599,6 +599,59 @@ async def _actual_le_baseline_uri(
     return next(iter(spp_uris))
 
 
+_FW_INSTALL_STATE_DONE = "activated"
+
+
+async def _actual_profile_baseline_uri(
+    client: "OneViewClient", profile: dict,
+) -> str | None:
+    """The server profile's compute module's *actually installed* SSP baseline.
+
+    ``profile["current_baseline_uri"]`` (``firmware.firmwareBaselineUri``) is
+    usually trustworthy for server profiles -- unlike the Logical Enclosure
+    case above, OneView normally only flips it once the flash really lands.
+    But that assumption breaks for the ``FirmwareAndOSDrivers`` install type:
+    verified live, a profile using it on a server that stayed powered off had
+    its apply task report "Completed" -- OneView could still do the one thing
+    possible out-of-band (write the target baseline onto the iLO) -- while
+    the actual BIOS/iLO on the hardware never changed, because that install
+    type also needs an OS boot (with HPE Smart Update Tools running
+    in-guest) to finish installing, which never happened. So the profile's
+    own pointer alone can't be trusted as "already applied" either.
+
+    The server-hardware's own ``.../firmware`` sub-resource carries the same
+    real state the GUI reads to show "Activated" vs "Pending" (etc.) --
+    ``serverSettings.firmwareAndDriversInstallState.installState`` -- so that,
+    cross-checked against ``serverFirmwareSettings.firmwareSettings.baselineUri``
+    on the same response, is authoritative for "is this already applied".
+
+    Returns the actually-installed baseline uri (for a normal
+    ``same_baseline`` compare against the target) if the state confirms
+    ``Activated``, ``""`` if a real install is confirmed NOT finished yet (so
+    the compare fails and the caller knows to keep verifying / flag it), or
+    ``None`` if it can't be determined (no hardware uri, lookup failure, or
+    the field isn't populated) -- callers should fall back to the
+    target-only comparison in that case.
+    """
+    hw_uri = profile.get("server_hardware_uri", "")
+    if not hw_uri:
+        return None
+    try:
+        fw = await client.get(f"{hw_uri}/firmware") or {}
+    except Exception:  # noqa: BLE001 - best-effort; caller falls back
+        return None
+    install_state = (
+        (fw.get("serverSettings") or {}).get("firmwareAndDriversInstallState") or {}
+    ).get("installState", "") or ""
+    install_state = install_state.strip().lower()
+    if not install_state:
+        return None
+    if install_state != _FW_INSTALL_STATE_DONE:
+        return ""  # staged/pending -- not actually installed regardless of target uri
+    settings = (fw.get("serverFirmwareSettings") or {}).get("firmwareSettings") or {}
+    return settings.get("baselineUri", "") or ""
+
+
 _EMBEDDED_REF_RE = re.compile(r'\{[^{}]*"name"\s*:\s*"[^"]*"[^{}]*\}')
 
 
@@ -1193,6 +1246,19 @@ async def run_ssp_apply(
             if actual is not None and not same_baseline(actual, baseline_uri):
                 le_plan["will_change"] = True
                 le_plan["detail"] = "target baseline set but not yet installed"
+
+        # A server profile's own target pointer can say "up to date" too, even
+        # when the real flash never finished (e.g. a FirmwareAndOSDrivers
+        # install type that needs an OS boot on a server that stayed powered
+        # off -- see _actual_profile_baseline_uri) -- cross-check the same way.
+        for prof_plan, p in zip(plan["server_profiles"], profile_targets):
+            if prof_plan["will_change"]:
+                continue
+            actual = await _actual_profile_baseline_uri(client, p)
+            if actual is not None and not same_baseline(actual, baseline_uri):
+                prof_plan["will_change"] = True
+                prof_plan["detail"] = "target baseline set but not yet installed"
+
         plan["changes"] = sum(
             1 for x in plan["logical_enclosures"] + plan["server_profiles"] if x["will_change"]
         )
@@ -1234,8 +1300,7 @@ async def run_ssp_apply(
             a logical enclosure the naive pointer comparison always reports
             "changed" right after the request, masking a real block. Falls
             back to the plain pointer comparison if no checker is given or it
-            can't determine an answer (e.g. server profiles, whose firmware
-            pointer does reflect the real state).
+            can't determine an answer.
 
             A plain "Completed" task (when *actual_checker* is given) also
             gets cross-checked -- verified live, a ``--activation-mode
@@ -1454,9 +1519,12 @@ async def run_ssp_apply(
                 )
                 return await client.put(prof["uri"], body)
 
+            async def _profile_actual_checker(prof=prof) -> str | None:
+                return await _actual_profile_baseline_uri(client, prof)
+
             status, task = await _apply_with_retry(
                 "server-profile", prof["name"], prof["uri"], _profile_request,
-                emit=_tagged_emit,
+                actual_checker=_profile_actual_checker, emit=_tagged_emit,
             )
             # kind/name always identify the *requested target*; merge task
             # fields first so they can't be silently overwritten by whatever

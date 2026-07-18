@@ -483,6 +483,7 @@ class FakeClient:
         le_get_response=None, children_tasks=None, blocked_until_forced=False,
         always_blocked=False,
         own_task_errors=None, raw_lis=None, li_firmware=None, task_children=None,
+        hw_firmware=None,
     ):
         self.task_state = task_state
         self._profile = profile or PROFILE_RAW
@@ -491,6 +492,10 @@ class FakeClient:
         self._own_task_errors = own_task_errors
         self._raw_lis = raw_lis or []
         self._li_firmware = li_firmware or {}
+        # server-hardware uri -> {"serverSettings": {...}, "serverFirmwareSettings": {...}}
+        # fake response for the profile-level actual-installed cross-check
+        # (mirrors _li_firmware above, but keyed by server-hardware "/firmware").
+        self._hw_firmware = hw_firmware or {}
         # Optional parentTaskUri -> [child task dict] map, so a test can build a
         # multi-level task tree and prove _task_block_reason descends past the
         # direct children to a grandchild's taskErrors. When None, every
@@ -529,6 +534,8 @@ class FakeClient:
         self.calls.append(("get", uri))
         if uri.endswith("/firmware") and uri in self._li_firmware:
             return self._li_firmware[uri]
+        if uri.endswith("/firmware") and uri in self._hw_firmware:
+            return self._hw_firmware[uri]
         if uri == "/rest/tasks":
             if self._task_children is not None and params:
                 m = re.search(r"parentTaskUri='([^']*)'", params.get("filter", ""))
@@ -1036,7 +1043,129 @@ async def test_plan_falls_back_to_target_only_when_no_lis_resolved():
 
 
 @pytest.mark.asyncio
-async def test_run_execute_applies_le_then_profile_in_order():
+async def test_plan_flags_profile_as_not_up_to_date_when_actually_not_installed():
+    """Reproduces the live bug: a server profile's own target pointer
+    (``firmware.firmwareBaselineUri``) already says the new baseline (OneView
+    sets it as soon as an apply is requested), but the compute module's
+    ``FirmwareAndOSDrivers`` install type needs an OS boot to actually finish
+    -- on a server that stays powered off, only the baseline gets staged on
+    the iLO (``firmwareAndDriversInstallState.installState`` stays
+    "Pending") and the real BIOS/iLO never changes. The plan must not claim
+    "up to date" in that case."""
+    newest = _newest()
+    profile_already_targeted = dict(
+        PROFILE_RAW,
+        firmware={
+            **PROFILE_RAW["firmware"],
+            "firmwareBaselineUri": newest["uri"],
+            "firmwareInstallType": "FirmwareAndOSDrivers",
+        },
+    )
+    fake = FakeClient(
+        hw_firmware={
+            "/rest/server-hardware/uuid-1/firmware": {
+                "serverSettings": {
+                    "firmwareAndDriversInstallState": {"installState": "Pending"},
+                },
+                "serverFirmwareSettings": {
+                    "firmwareSettings": {"baselineUri": newest["uri"]},
+                },
+            },
+        },
+    )
+    res = await run_ssp_apply(
+        lambda: fake, baseline=newest,
+        le_targets=[], profile_targets=[normalize_profile(profile_already_targeted)],
+        execute=False,
+    )
+    prof_plan = res["plan"]["server_profiles"][0]
+    assert prof_plan["will_change"] is True
+    assert prof_plan["detail"] == "target baseline set but not yet installed"
+    assert res["plan"]["changes"] == 1
+
+
+@pytest.mark.asyncio
+async def test_plan_trusts_profile_when_actual_installed_matches_target():
+    newest = _newest()
+    profile_already_targeted = dict(
+        PROFILE_RAW, firmware={**PROFILE_RAW["firmware"], "firmwareBaselineUri": newest["uri"]},
+    )
+    fake = FakeClient(
+        hw_firmware={
+            "/rest/server-hardware/uuid-1/firmware": {
+                "serverSettings": {
+                    "firmwareAndDriversInstallState": {"installState": "Activated"},
+                },
+                "serverFirmwareSettings": {
+                    "firmwareSettings": {"baselineUri": newest["uri"]},
+                },
+            },
+        },
+    )
+    res = await run_ssp_apply(
+        lambda: fake, baseline=newest,
+        le_targets=[], profile_targets=[normalize_profile(profile_already_targeted)],
+        execute=False,
+    )
+    prof_plan = res["plan"]["server_profiles"][0]
+    assert prof_plan["will_change"] is False
+    assert prof_plan["detail"] == "up to date"
+
+
+@pytest.mark.asyncio
+async def test_plan_falls_back_to_target_only_when_profile_hw_firmware_missing():
+    """No install-state could be resolved from the server-hardware firmware
+    sub-resource (e.g. lookup failed or the field just isn't populated) --
+    must not regress; falls back to the plain target-vs-target comparison
+    exactly as before."""
+    newest = _newest()
+    profile_already_targeted = dict(
+        PROFILE_RAW, firmware={**PROFILE_RAW["firmware"], "firmwareBaselineUri": newest["uri"]},
+    )
+    fake = FakeClient()  # no hw_firmware configured
+    res = await run_ssp_apply(
+        lambda: fake, baseline=newest,
+        le_targets=[], profile_targets=[normalize_profile(profile_already_targeted)],
+        execute=False,
+    )
+    prof_plan = res["plan"]["server_profiles"][0]
+    assert prof_plan["will_change"] is False
+    assert prof_plan["detail"] == "up to date"
+
+
+@pytest.mark.asyncio
+async def test_run_execute_profile_reports_unverified_when_completed_but_not_actually_installed():
+    """Mirrors the LE "Completed but not really done yet" verification path
+    -- a server-profile apply task reporting "Completed" must still be
+    cross-checked against the actual hardware install state, not trusted
+    blindly, so this exact bug can't silently reproduce during a real
+    --execute run either."""
+    newest = _newest()
+    fake = FakeClient(
+        task_state="Completed",
+        hw_firmware={
+            "/rest/server-hardware/uuid-1/firmware": {
+                "serverSettings": {
+                    "firmwareAndDriversInstallState": {"installState": "Pending"},
+                },
+                "serverFirmwareSettings": {
+                    "firmwareSettings": {"baselineUri": "/rest/firmware-drivers/SSP_2023_05"},
+                },
+            },
+        },
+    )
+    res = await run_ssp_apply(
+        lambda: fake, baseline=newest,
+        le_targets=[], profile_targets=[normalize_profile(PROFILE_RAW)],
+        execute=True, confirm=lambda plan: True,
+        sleeper=_noop_sleep, verify_timeout_s=0,
+    )
+    assert res["status"] == "unverified"
+    assert res["results"][0]["outcome"] == "unverified"
+    assert "did not reflect it" in res["results"][0]["unverified_reason"]
+
+
+
     fake = FakeClient()
     events: list[str] = []
     res = await run_ssp_apply(

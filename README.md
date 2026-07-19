@@ -110,6 +110,9 @@ proliant oneview server-profiles update <name> --execute       # apply it (power
 proliant oneview power shutdown profile <name>              # graceful shutdown via assigned server hardware
 proliant oneview power off server "Enclosure-01, bay 6"     # force power off server hardware
 proliant oneview power on server --enclosure Enclosure-01 --bay 6
+proliant oneview power on server --all --yes                                  # every server in the appliance
+proliant oneview power on server --all --enclosure Enclosure-01 --yes         # every server in one enclosure
+#   --all is a bulk operation (on/off/shutdown); always requires --yes unless --dry-run.
 proliant oneview efuse server "Enclosure-01, bay 6" --yes   # hard eFuse power-cycle a Synergy bay
 proliant oneview efuse profile <name> --yes                 # eFuse the server assigned to a profile
 proliant oneview efuse interconnect "Enclosure-01, interconnect 6" --yes

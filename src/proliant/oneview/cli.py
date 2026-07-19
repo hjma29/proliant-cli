@@ -389,6 +389,7 @@ def _add_power_target_parsers(
     *,
     targets: tuple[str, ...] = ("server", "profile", "interconnect", "flm"),
     include_yes: bool = False,
+    allow_all: bool = False,
 ) -> None:
     """Attach TARGET subparsers to a parser.
 
@@ -397,6 +398,10 @@ def _add_power_target_parsers(
     ``--yes`` confirmation) and the top-level ``proliant oneview efuse``
     command (a hard power-cycle, available for all four target types and
     always requiring ``--yes`` unless ``--dry-run`` is used).
+
+    ``allow_all`` adds a ``--all`` bulk flag to the ``server`` target
+    (optionally scoped to one ``--enclosure``), currently only wired up for
+    ``proliant oneview power``.
     """
     targets_parser = parent_parser.add_subparsers(dest="power_target", metavar="TARGET")
     targets_parser.required = True
@@ -408,15 +413,23 @@ def _add_power_target_parsers(
             help="Target server hardware by name or enclosure bay",
         )
         p_server.set_defaults(func=func, power_target_type="server")
-        server_name_arg = p_server.add_argument("name", metavar="NAME", nargs="?",
-            help="Server hardware name (omit when using --enclosure/--bay)")
+        name_help = "Server hardware name (omit when using --enclosure/--bay"
+        name_help += " or --all)" if allow_all else ")"
+        server_name_arg = p_server.add_argument("name", metavar="NAME", nargs="?", help=name_help)
         server_name_arg.completer = _oneview_server_name_completer
         server_enclosure_arg = p_server.add_argument("--enclosure", metavar="NAME",
-            help="Target server hardware by enclosure name")
+            help="Target server hardware by enclosure name (or scope --all to one enclosure)")
         server_enclosure_arg.completer = _oneview_enclosure_name_completer
         server_bay_arg = p_server.add_argument("--bay", metavar="N", type=int,
             help="Target server hardware by bay number with --enclosure")
         server_bay_arg.completer = suppress_file_completion()
+        if allow_all:
+            p_server.add_argument("--all", action="store_true",
+                help="Target every server hardware in the appliance, or every server in "
+                     "--enclosure if given (bulk operation; requires --yes unless --dry-run)")
+            if not include_yes:
+                p_server.add_argument("--yes", action="store_true",
+                    help="Confirm the bulk --all operation (required unless --dry-run)")
         _add_power_common_flags(p_server, include_yes=include_yes)
 
     if "profile" in targets:
@@ -456,7 +469,9 @@ def _add_power_target_parsers(
 
 def _add_power_action_parser(subparsers, action_name: str, help_text: str) -> None:
     action_parser = subparsers.add_parser(action_name, help=help_text)
-    _add_power_target_parsers(action_parser, _cmd_power, targets=("server", "profile"), include_yes=False)
+    _add_power_target_parsers(
+        action_parser, _cmd_power, targets=("server", "profile"), include_yes=False, allow_all=True
+    )
 
 
 def _power_style(state: str) -> str:
@@ -1851,8 +1866,81 @@ def _render_power_result(result: dict) -> None:
         console.print(f"[dim]Task:[/dim] {escape(str(task_uri))}")
 
 
+async def _cmd_power_all(args: argparse.Namespace) -> None:
+    """Bulk power on/off/shutdown every server (or every server in one --enclosure)."""
+    from rich.markup import escape
+
+    from proliant.oneview.power import set_server_power_state
+    from proliant.oneview.targets import get_enclosure, server_enclosure_uri
+
+    if getattr(args, "name", None) or getattr(args, "bay", None):
+        raise ValueError("--all cannot be combined with NAME or --bay (use --enclosure to scope it)")
+
+    dry_run = args.dry_run
+    if not dry_run and not getattr(args, "yes", False):
+        raise ValueError(
+            "--all is a bulk operation affecting every targeted server; rerun with --yes or use --dry-run"
+        )
+
+    action = args.power_action
+    enclosure_name = getattr(args, "enclosure", None)
+    console = get_console()
+    json_mode = getattr(args, "json_output", False) or get_output_mode() == OutputMode.JSON
+
+    async with _load_client() as client:
+        with console.status("[dim]Fetching server hardware inventory…[/dim]"):
+            servers = await client.get_all("/rest/server-hardware")
+            if enclosure_name:
+                enclosure = await get_enclosure(client, enclosure_name)
+                enclosure_uri = str(enclosure.get("uri", ""))
+                servers = [s for s in servers if server_enclosure_uri(s) == enclosure_uri]
+                if not servers:
+                    raise ValueError(f"No server hardware found in enclosure '{enclosure_name}'")
+
+        if not servers:
+            console.print("[yellow]No server hardware found.[/yellow]")
+            return
+
+        results = []
+        for server in sorted(servers, key=lambda s: str(s.get("name", ""))):
+            try:
+                result = await set_server_power_state(
+                    client, server, action=action, target_type="server", dry_run=dry_run,
+                )
+                results.append(result)
+                if not json_mode:
+                    _render_power_result(result)
+            except Exception as exc:  # noqa: BLE001 - report and continue with remaining servers
+                results.append({
+                    "status": "error",
+                    "target": server.get("name", ""),
+                    "target_type": "server",
+                    "action": action,
+                    "error": str(exc),
+                })
+                if not json_mode:
+                    console.print(f"[red]✗[/red] {escape(str(server.get('name', '?')))}: {escape(str(exc))}")
+
+    if json_mode:
+        print_json(results)
+        return
+
+    succeeded = sum(1 for r in results if r.get("status") in ("accepted", "dry-run"))
+    failed = len(results) - succeeded
+    summary_verb = "Would issue" if dry_run else "Issued"
+    scope = f" in enclosure '{enclosure_name}'" if enclosure_name else ""
+    fail_note = f", [red]{failed} failed[/red]" if failed else ""
+    console.print(
+        f"\n[bold]{summary_verb} power {action} for {succeeded}/{len(results)} server(s){scope}{fail_note}.[/bold]"
+    )
+
+
 async def _cmd_power(args: argparse.Namespace) -> None:
     from proliant.oneview.power import run_power_action
+
+    if getattr(args, "power_target_type", None) == "server" and getattr(args, "all", False):
+        await _cmd_power_all(args)
+        return
 
     async with _load_client() as client:
         desc = _power_request_description(args)
@@ -5094,10 +5182,14 @@ examples:
             "Examples:\n"
             "  proliant oneview power shutdown profile ocp-host-1\n"
             "  proliant oneview power off server \"Enclosure-01, bay 6\"\n"
-            "  proliant oneview power on server --enclosure Enclosure-01 --bay 6\n\n"
+            "  proliant oneview power on server --enclosure Enclosure-01 --bay 6\n"
+            "  proliant oneview power on server --all --yes                    # every server\n"
+            "  proliant oneview power on server --all --enclosure Enclosure-01 --yes\n\n"
             "Note: on/off/shutdown use OneView server-hardware powerState and are\n"
             "      supported for server/profile targets only. For a hard\n"
-            "      power-cycle (Synergy bay eFuse), use 'proliant oneview efuse'."
+            "      power-cycle (Synergy bay eFuse), use 'proliant oneview efuse'.\n"
+            "      --all is a bulk operation across every targeted server; it\n"
+            "      always requires --yes unless --dry-run is used."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

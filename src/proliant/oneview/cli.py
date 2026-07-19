@@ -4443,6 +4443,77 @@ def _print_pending_panel(console, pending: dict) -> None:
     console.print(Panel("\n".join(lines), title="Staged Appliance Update", border_style="cyan"))
 
 
+def _format_ampm(dt) -> str:
+    """'2:05 pm' style local time, matching the OneView GUI's own wording."""
+    return dt.strftime("%I:%M %p").lstrip("0").replace("AM", "am").replace("PM", "pm")
+
+
+def _format_local_time(iso_ts: str) -> str:
+    """Convert an appliance UTC timestamp ('...Z') to a friendly local time.
+
+    The update-status CGI reports step timestamps in UTC (e.g.
+    ``'2026-07-19T03:14:39.002Z'``); the GUI's "Updating..." screen renders
+    these in the browser's local timezone, so we do the same here using the
+    CLI host's local timezone.
+    """
+    if not iso_ts:
+        return ""
+    from datetime import datetime
+
+    try:
+        dt = datetime.fromisoformat(iso_ts.replace("Z", "+00:00")).astimezone()
+    except ValueError:
+        return ""
+    return _format_ampm(dt)
+
+
+def _build_appliance_update_display(
+    *, from_version: str, to_version: str, started_at: str, prog: dict, note: str = "",
+) -> Panel:
+    """Render the live install phase to match OneView's own GUI "Updating" screen.
+
+    Mirrors ``https://<appliance>/#/status/update``: title, "from -> to"
+    version line, overall start time, a percent bar, and the *current* step
+    with its own start time and expected duration (e.g. "2:25 pm  Swap
+    active/standby nodes" / "(takes about 15 minutes)").
+    """
+    from rich.console import Group
+
+    pct = prog.get("percent")
+    pct_val = pct if isinstance(pct, (int, float)) else 0.0
+    width = 32
+    filled = max(0, min(width, int(width * pct_val / 100)))
+    bar = f"[bold cyan]{'█' * filled}[/bold cyan][dim]{'░' * (width - filled)}[/dim]"
+    pct_label = f"{pct_val:.0f}% completed" if isinstance(pct, (int, float)) else "starting…"
+
+    lines: list[Text] = [
+        Text.from_markup("[bold]Updating[/bold]"),
+        Text(f"OneView from {from_version} to {to_version}"),
+    ]
+    if started_at:
+        lines.append(Text(f"Started at {started_at}"))
+    lines.append(Text(""))
+    lines.append(Text.from_markup(f"{bar}  {pct_label}"))
+    lines.append(Text(""))
+
+    step = prog.get("step") or prog.get("status") or ""
+    step_time = _format_local_time(prog.get("step_start_time") or "")
+    if step:
+        lines.append(Text(f"{step_time}  {step}" if step_time else step))
+
+    expectation = prog.get("step_expectation") or ""
+    if not expectation and prog.get("step_expected_mins"):
+        expectation = f"(takes about {int(prog['step_expected_mins'])} minutes)"
+    if expectation:
+        lines.append(Text(expectation, style="dim"))
+
+    if note:
+        lines.append(Text(""))
+        lines.append(Text(note, style="yellow"))
+
+    return Panel(Group(*lines), title="Appliance Update", border_style="cyan")
+
+
 async def _async_upgrade_pending() -> None:
     from proliant.oneview.appliance_update import read_pending
 
@@ -4617,23 +4688,23 @@ async def _async_upgrade_run(args: argparse.Namespace) -> None:
     factory = _oneview_client_factory()
     execute = bool(getattr(args, "execute", False))
 
-    # Live progress bars: a byte bar for the multi-GB upload and a phase/percent
-    # bar for the install. Rich only allows one live display at a time, but the
-    # upload bar is always stopped (on 'staged') before the install bar starts
-    # and before any confirm prompt, so they never overlap.
+    # Live progress displays: a byte bar for the multi-GB upload, then a
+    # GUI-style "Updating" panel for the install phase (mirrors OneView's own
+    # https://<appliance>/#/status/update screen — see _build_appliance_update_display).
+    # Rich only allows one live display at a time, but the upload bar is always
+    # stopped (on 'staged') before the install display starts, so they never overlap.
+    from rich.live import Live
     from rich.progress import (
         BarColumn,
         DownloadColumn,
         Progress,
-        SpinnerColumn,
-        TaskProgressColumn,
         TextColumn,
-        TimeElapsedColumn,
         TimeRemainingColumn,
         TransferSpeedColumn,
     )
 
     bars: dict = {}
+    live_state: dict = {"live": None, "started_at": "", "last_prog": {}, "to_version": ""}
 
     def _stop_bar(key: str) -> None:
         p = bars.pop(key, None)
@@ -4644,6 +4715,29 @@ async def _async_upgrade_run(args: argparse.Namespace) -> None:
             except Exception:  # noqa: BLE001 — never let display teardown mask the result
                 pass
 
+    def _stop_live() -> None:
+        live = live_state.pop("live", None)
+        if live is not None:
+            try:
+                live.stop()
+            except Exception:  # noqa: BLE001 — never let display teardown mask the result
+                pass
+
+    def _refresh_live(prog: dict, note: str = "") -> None:
+        live = live_state.get("live")
+        if live is None:
+            return
+        live.update(
+            _build_appliance_update_display(
+                from_version=app.get("software_version") or "—",
+                to_version=live_state.get("to_version") or img.version or img.filename,
+                started_at=live_state.get("started_at") or "",
+                prog=prog,
+                note=note,
+            ),
+            refresh=True,
+        )
+
     def on_event(kind: str, data: dict) -> None:
         if json_mode:
             return
@@ -4651,6 +4745,7 @@ async def _async_upgrade_run(args: argparse.Namespace) -> None:
             console.print("[dim]Clearing previously staged update…[/dim]")
         elif kind == "already-staged":
             console.print("[dim]Requested image is already staged — skipping upload.[/dim]")
+            live_state["to_version"] = data.get("version") or img.version
         elif kind == "uploading":
             total = data.get("size_bytes") or 0
             p = Progress(
@@ -4676,39 +4771,27 @@ async def _async_upgrade_run(args: argparse.Namespace) -> None:
                 )
         elif kind == "staged":
             _stop_bar("upload")
+            live_state["to_version"] = data.get("version") or img.version
             _print_pending_panel(console, data)
         elif kind == "installing":
             console.print("[yellow]Starting appliance install — do NOT power-cycle the "
                           "appliance until it completes.[/yellow]")
-            p = Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                TaskProgressColumn(),
-                TimeElapsedColumn(),
-                console=console,
-            )
-            p.start()
-            bars["install"] = p
-            bars["install_task"] = p.add_task("Starting install…", total=100)
+            from datetime import datetime
+            live_state["started_at"] = _format_ampm(datetime.now().astimezone())
+            live_state["last_prog"] = {}
+            live = Live(console=console, refresh_per_second=4)
+            live_state["live"] = live
+            live.start()
+            _refresh_live({})
         elif kind == "progress":
-            p = bars.get("install")
-            if p is None:
-                return
-            pct = data.get("percent")
-            step = data.get("step") or data.get("status") or "working…"
-            status = data.get("status") or ""
-            desc = step if (not status or status.lower() in step.lower()) \
-                else f"{step}  [dim]({status})[/dim]"
-            if isinstance(pct, (int, float)):
-                p.update(bars["install_task"], completed=pct, description=desc)
-            else:
-                p.update(bars["install_task"], description=desc)
+            live_state["last_prog"] = data
+            _refresh_live(data)
         elif kind == "rebooting":
-            p = bars.get("install")
-            if p is not None:
-                p.update(bars["install_task"],
-                         description="[dim]appliance rebooting — waiting for it to come back…[/dim]")
+            _refresh_live(
+                live_state.get("last_prog") or {},
+                note="Appliance is rebooting / temporarily unreachable — this is the "
+                     "normal active/standby node-swap outage, not a failure.",
+            )
 
     def confirm(staged: dict) -> bool:
         if getattr(args, "yes", False):
@@ -4737,7 +4820,7 @@ async def _async_upgrade_run(args: argparse.Namespace) -> None:
         )
     finally:
         _stop_bar("upload")
-        _stop_bar("install")
+        _stop_live()
 
     if json_mode:
         print_json(result)

@@ -236,7 +236,18 @@ def _parse_percent(value: Any) -> float | None:
 
 
 def normalize_progress(data: dict[str, Any] | None) -> dict[str, Any]:
-    """Normalize the live install-status payload (cgi or /rest/appliance/progress)."""
+    """Normalize the live install-status payload (cgi or /rest/appliance/progress).
+
+    The unauthenticated update-status CGI (``PROGRESS_CGI``) is reachable even
+    during the mgmt-plane outage of the active/standby node swap and is the
+    same source the appliance's own GUI ("Updating..." screen) uses — it
+    additionally reports *when* the current step started and how long it's
+    expected to take, e.g.::
+
+        {"percentageCompletion": "60%", "step": "Swap active/standby nodes",
+         "stepStartTime": "2026-07-19T03:14:39.002Z", "stepExpectedMins": "15",
+         "stepExpectation": "(takes about 15 minutes)", ...}
+    """
     data = data or {}
     percent = _parse_percent(
         data.get("percentageCompletion")
@@ -247,14 +258,28 @@ def normalize_progress(data: dict[str, Any] | None) -> dict[str, Any]:
         "percent": percent,
         "task_step": data.get("taskStep") or "",
         "status": data.get("status") or "",
-        "step": data.get("step") or data.get("stepExpectation") or "",
+        "step": data.get("step") or "",
+        "step_start_time": data.get("stepStartTime") or "",
+        "step_expected_mins": _parse_percent(data.get("stepExpectedMins")),
+        "step_expectation": data.get("stepExpectation") or "",
     }
 
 
+_FAILURE_RE = re.compile(r"FAIL(?!OVER)|ERROR")
+
+
 def is_progress_failed(progress: dict[str, Any]) -> bool:
+    """True when the appliance's own status genuinely reports a failure.
+
+    A plain ``"FAIL" in status`` substring check misfires on ``TS_PRE_FAILOVER``
+    / ``TS_FAILOVER`` — the normal, expected task steps during the
+    active/standby node swap (see module docstring). Those are excluded so a
+    real install is never mistaken for "failed" mid-swap; genuine failures
+    (``TS_FAILED``, status ``"Error"``, etc.) still match.
+    """
     ts = (progress.get("task_step") or "").upper()
     status = (progress.get("status") or "").upper()
-    return "FAIL" in ts or "FAIL" in status or "ERROR" in status
+    return bool(_FAILURE_RE.search(ts) or _FAILURE_RE.search(status))
 
 
 def is_progress_complete(progress: dict[str, Any]) -> bool:

@@ -143,6 +143,25 @@ def test_normalize_progress_rest_shape_and_complete():
     assert is_progress_complete(prog)
 
 
+def test_normalize_progress_captures_step_timing_fields():
+    # Fields from the appliance's own (unauthenticated) update-status CGI —
+    # the same source its GUI "Updating..." screen uses — that let the CLI
+    # show a per-step start time and duration estimate like the GUI does.
+    prog = normalize_progress({
+        "percentageCompletion": "60%",
+        "step": "Swap active/standby nodes",
+        "taskStep": "TS_FAILOVER",
+        "status": "UpdateReboot",
+        "stepStartTime": "2026-07-19T03:14:39.002Z",
+        "stepExpectedMins": "15",
+        "stepExpectation": "(takes about 15 minutes)",
+    })
+    assert prog["step"] == "Swap active/standby nodes"
+    assert prog["step_start_time"] == "2026-07-19T03:14:39.002Z"
+    assert prog["step_expected_mins"] == 15.0
+    assert prog["step_expectation"] == "(takes about 15 minutes)"
+
+
 @pytest.mark.parametrize("payload", [
     {"taskStep": "TS_COMPLETED", "status": "Completed"},
     {"status": "success"},
@@ -158,6 +177,17 @@ def test_is_progress_complete_true(payload):
 ])
 def test_is_progress_failed_true(payload):
     assert is_progress_failed(normalize_progress(payload))
+
+
+@pytest.mark.parametrize("payload", [
+    {"taskStep": "TS_PRE_FAILOVER", "status": "UpdateReboot"},
+    {"taskStep": "TS_FAILOVER", "status": "UpdateReboot"},
+])
+def test_is_progress_failed_false_for_failover_phase(payload):
+    # Regression: bare "FAIL" substring matching used to misfire on the
+    # normal "Prepare for active/standby node swap" step (TS_PRE_FAILOVER),
+    # aborting the monitor mid-install even though the appliance was fine.
+    assert not is_progress_failed(normalize_progress(payload))
 
 
 def test_is_reboot_phase():

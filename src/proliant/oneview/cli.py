@@ -1899,6 +1899,28 @@ async def _cmd_efuse(args: argparse.Namespace) -> None:
     _render_power_result(result)
 
 
+async def _cmd_refresh(args: argparse.Namespace) -> None:
+    from proliant.oneview.refresh import run_refresh_action
+
+    async with _load_client() as client:
+        desc = _power_request_description(args)
+        with get_console().status(f"[dim]Issuing OneView hardware refresh ({desc})…[/dim]"):
+            result = await run_refresh_action(
+                client,
+                args.power_target_type,
+                name=getattr(args, "name", None),
+                enclosure=getattr(args, "enclosure", None),
+                bay=getattr(args, "bay", None),
+                dry_run=args.dry_run,
+            )
+
+    if getattr(args, "json_output", False) or get_output_mode() == OutputMode.JSON:
+        print_json(result)
+        return
+
+    _render_power_result(result)
+
+
 # ── proliant oneview mac list ─────────────────────────────────────────────────
 
 def _short_ic_name(name: str) -> str:
@@ -5115,6 +5137,31 @@ examples:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_power_target_parsers(p_efuse, _cmd_efuse, include_yes=True)
+
+    p_refresh = sub.add_parser(
+        "refresh",
+        help="Non-disruptive hardware refresh (re-poll iLO inventory)",
+        description=(
+            "Refresh OneView-managed server hardware: PUT "
+            "/rest/server-hardware/{id}/refreshState, the same request "
+            "issued by the 'Refresh' action in the OneView GUI. This "
+            "re-polls the blade's iLO for current hardware/adapter "
+            "inventory and re-evaluates profile consistency. It does not "
+            "power-cycle the server or change its profile assignment -- "
+            "use this to clear stale alerts (e.g. after a transient "
+            "management-plane interruption during an appliance update) "
+            "without any disruption to the running server."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  proliant oneview refresh server \"Enclosure-01, bay 3\"\n"
+            "  proliant oneview refresh server --enclosure Enclosure-01 --bay 3\n"
+            "  proliant oneview refresh profile aci-FM-host1\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_refresh.set_defaults(power_action="refresh")
+    _add_power_target_parsers(p_refresh, _cmd_refresh, targets=("server", "profile"), include_yes=False)
 
     # ── logical interconnects ─────────────────────────────────────────────
     p_li = sub.add_parser("li", help="List logical interconnects")

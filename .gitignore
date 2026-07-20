@@ -13,6 +13,10 @@ htmlcov/
 hosts-ilo.ini
 # SPP catalog/package download cache (not source code)
 /spp/
+
+# OneView/Synergy appliance update images staged locally for testing
+# (multi-GB .bin files pulled from the lab SMB share, not source code)
+/appliance-images/
 .envrc
 ilorest_logs/
 

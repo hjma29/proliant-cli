@@ -1379,7 +1379,6 @@ async def _cmd_profiles_update(args: argparse.Namespace) -> None:
         return
 
     install_type = INSTALL_TYPES.get(getattr(args, "install_type", None) or "")
-    execute = bool(getattr(args, "execute", False))
 
     bars: dict = {}
 
@@ -1500,8 +1499,8 @@ async def _cmd_profiles_update(args: argparse.Namespace) -> None:
             factory,
             baseline=baseline, le_targets=[], profile_targets=[profile],
             install_type=install_type, force=bool(getattr(args, "force", False)),
-            execute=execute, confirm=confirm if execute else None,
-            on_validation_blocked=on_validation_blocked if execute else None, on_event=on_event,
+            execute=True, confirm=confirm,
+            on_validation_blocked=on_validation_blocked, on_event=on_event,
             poll_interval_s=_SSP_POLL_S, task_timeout_s=_SSP_TASK_TIMEOUT_S,
             verify_timeout_s=_SSP_VERIFY_TIMEOUT_S,
             appliance_version=data.get("appliance_version", ""),
@@ -1514,9 +1513,7 @@ async def _cmd_profiles_update(args: argparse.Namespace) -> None:
         print_json(result)
         return
 
-    _render_ssp_apply_result(
-        console, result, plan_message="Re-run with [bold]--execute[/bold] to apply.",
-    )
+    _render_ssp_apply_result(console, result, plan_message="")
 
 
 # ── proliant oneview noun-verb detail commands ────────────────────────────────────
@@ -5410,9 +5407,10 @@ examples:
                     "server profile's compute module, without touching its logical enclosure's "
                     "shared infrastructure or any other profile -- useful when you only need to "
                     "bring one server current (e.g. after an eFuse/reapply) rather than every "
-                    "profile under the same enclosure. Default is a non-destructive plan; add "
-                    "--execute to apply. Equivalent to `update enclosure --scope profiles-only` "
-                    "narrowed to one profile.")
+                    "profile under the same enclosure. Shows the plan and prompts to type the "
+                    "baseline version to confirm before applying (power-cycles the compute "
+                    "module) -- skip the prompt with --yes. Equivalent to `update enclosure "
+                    "--scope profiles-only` narrowed to one profile.")
     p_sp_update_name = p_sp_update.add_argument("name", metavar="NAME",
         help="Name of the server profile")
     p_sp_update_name.completer = _oneview_profile_name_completer
@@ -5424,10 +5422,9 @@ examples:
         help="Compute install type override (default: keep the profile's existing setting).")
     p_sp_update.add_argument("--force", action="store_true",
         help="Force reinstall even if already at the baseline / bypass non-disruptive validation.")
-    p_sp_update.add_argument("--execute", action="store_true",
-        help="Actually apply (power-cycles the compute module). Default is plan only.")
     p_sp_update.add_argument("--yes", action="store_true",
-        help="Skip the type-to-confirm prompt and any validation-warning prompt (with --execute).")
+        help="Skip the type-to-confirm prompt and any validation-warning prompt. This "
+             "power-cycles the compute module -- use with care.")
     p_sp_update.set_defaults(func=_cmd_profiles_update)
 
     p_power = sub.add_parser(

@@ -78,19 +78,22 @@ _DATA = {
 def _make_args(**overrides) -> argparse.Namespace:
     base = dict(
         name="aci-vc-LAG-host1", baseline=None, install_type=None,
-        force=False, execute=False, yes=False, json_output=False,
+        force=False, yes=False, json_output=False,
     )
     base.update(overrides)
     return argparse.Namespace(**base)
 
 
 @pytest.mark.asyncio
-async def test_plan_only_targets_just_the_named_profile_no_le():
-    """The engine call must never include a logical enclosure -- this command
-    is scoped to exactly one profile, unlike `update enclosure`."""
-    fake_run = AsyncMock(return_value={"status": "planned", "plan": {}})
+async def test_always_executes_targeting_just_the_named_profile_no_le():
+    """There is no --execute flag -- the command always applies (gated by the
+    type-to-confirm prompt below), and the engine call must never include a
+    logical enclosure since this command is scoped to exactly one profile,
+    unlike `update enclosure`."""
+    fake_run = AsyncMock(return_value={"status": "aborted"})
     with patch.object(cli, "_load_client", return_value=_FakeCM()), \
          patch.object(cli, "get_console", return_value=_FakeConsole()), \
+         patch.object(cli, "_oneview_client_factory", return_value=lambda: object()), \
          patch.object(ssp_update, "fetch_apply_targets", AsyncMock(return_value=_DATA)), \
          patch.object(ssp_update, "run_ssp_apply", fake_run):
         await cli._cmd_profiles_update(_make_args())
@@ -99,8 +102,8 @@ async def test_plan_only_targets_just_the_named_profile_no_le():
     kwargs = fake_run.await_args.kwargs
     assert kwargs["le_targets"] == []
     assert [p["uri"] for p in kwargs["profile_targets"]] == [_PROFILE["uri"]]
-    assert kwargs["execute"] is False
-    assert kwargs["confirm"] is None
+    assert kwargs["execute"] is True
+    assert kwargs["confirm"] is not None
 
 
 @pytest.mark.asyncio
@@ -139,7 +142,7 @@ async def test_yes_flag_skips_confirm_prompt_and_applies():
          patch.object(cli, "_oneview_client_factory", return_value=lambda: object()), \
          patch.object(ssp_update, "fetch_apply_targets", AsyncMock(return_value=_DATA)), \
          patch.object(ssp_update, "run_ssp_apply", fake_run):
-        await cli._cmd_profiles_update(_make_args(execute=True, yes=True))
+        await cli._cmd_profiles_update(_make_args(yes=True))
 
     assert console.input_prompts == []  # never prompted
     kwargs = fake_run.await_args.kwargs
@@ -163,7 +166,7 @@ async def test_without_yes_confirm_matches_typed_baseline_version():
          patch.object(cli, "_oneview_client_factory", return_value=lambda: object()), \
          patch.object(ssp_update, "fetch_apply_targets", AsyncMock(return_value=_DATA)), \
          patch.object(ssp_update, "run_ssp_apply", side_effect=_capture):
-        await cli._cmd_profiles_update(_make_args(execute=True, yes=False))
+        await cli._cmd_profiles_update(_make_args(yes=False))
 
     assert seen["result"] is True
     assert len(console.input_prompts) == 1
@@ -184,7 +187,7 @@ async def test_confirm_rejects_mismatched_typed_version():
          patch.object(cli, "_oneview_client_factory", return_value=lambda: object()), \
          patch.object(ssp_update, "fetch_apply_targets", AsyncMock(return_value=_DATA)), \
          patch.object(ssp_update, "run_ssp_apply", side_effect=_capture):
-        await cli._cmd_profiles_update(_make_args(execute=True, yes=False))
+        await cli._cmd_profiles_update(_make_args(yes=False))
 
     assert seen["result"] is False
 
@@ -204,7 +207,7 @@ async def test_failed_status_prints_reason_and_activity_hint():
          patch.object(cli, "_oneview_client_factory", return_value=lambda: object()), \
          patch.object(ssp_update, "fetch_apply_targets", AsyncMock(return_value=_DATA)), \
          patch.object(ssp_update, "run_ssp_apply", fake_run):
-        await cli._cmd_profiles_update(_make_args(execute=True, yes=True))
+        await cli._cmd_profiles_update(_make_args(yes=True))
 
     assert any("SSP apply failed" in line for line in console.printed)
     assert any("boom" in line for line in console.printed)
@@ -226,7 +229,7 @@ async def test_unverified_status_message():
          patch.object(cli, "_oneview_client_factory", return_value=lambda: object()), \
          patch.object(ssp_update, "fetch_apply_targets", AsyncMock(return_value=_DATA)), \
          patch.object(ssp_update, "run_ssp_apply", fake_run):
-        await cli._cmd_profiles_update(_make_args(execute=True, yes=True))
+        await cli._cmd_profiles_update(_make_args(yes=True))
 
     assert any("could not be verified" in line for line in console.printed)
 
@@ -242,7 +245,7 @@ async def test_json_mode_never_prompts_and_prints_raw_result():
          patch.object(ssp_update, "fetch_apply_targets", AsyncMock(return_value=_DATA)), \
          patch.object(ssp_update, "run_ssp_apply", fake_run), \
          patch.object(cli, "print_json", lambda data: printed.setdefault("data", data)):
-        await cli._cmd_profiles_update(_make_args(execute=True, yes=False, json_output=True))
+        await cli._cmd_profiles_update(_make_args(yes=False, json_output=True))
 
     assert console.input_prompts == []
     assert printed["data"]["status"] == "applied"

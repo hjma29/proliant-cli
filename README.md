@@ -102,11 +102,13 @@ proliant oneview server-profiles reapply <name>              # push the profile'
 proliant oneview server-profiles reapply <name> --yes        # skip the type-to-confirm prompt
 #   Same effect as the GUI's 'Reapply configuration' action -- clears alerts like "Reapply the
 #   server profile" (e.g. after a hardware re-insertion or eFuse) without changing any setting.
-proliant oneview server-profiles update <name>                # plan an SSP firmware rollout to one profile's compute module
-proliant oneview server-profiles update <name> --execute       # apply it (power-cycles that one server)
-#   Same engine as `update enclosure --scope profiles-only`, narrowed to a single named profile --
-#   use this to bring one server current (e.g. after an eFuse/reapply) without touching its
-#   enclosure's shared infrastructure or any other profile under the same LE.
+proliant oneview server-profiles update <name>                # roll out an SSP firmware baseline to one profile's compute module
+proliant oneview server-profiles update <name> --yes          # skip the type-to-confirm prompt
+#   Shows the plan, then prompts to type the baseline version to confirm before applying
+#   (power-cycles that one server). Same engine as `update enclosure --scope profiles-only`,
+#   narrowed to a single named profile -- use this to bring one server current (e.g. after an
+#   eFuse/reapply) without touching its enclosure's shared infrastructure or any other profile
+#   under the same LE.
 proliant oneview power shutdown profile <name>              # graceful shutdown via assigned server hardware
 proliant oneview power off server "Enclosure-01, bay 6"     # force power off server hardware
 proliant oneview power on server --enclosure Enclosure-01 --bay 6

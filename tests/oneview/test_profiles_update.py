@@ -153,14 +153,14 @@ async def test_yes_flag_skips_confirm_prompt_and_applies():
 
 
 @pytest.mark.asyncio
-async def test_without_yes_confirm_matches_typed_baseline_version():
+async def test_without_yes_confirm_accepts_y():
     seen = {}
 
     async def _capture(_factory, *, confirm, **_kw):
         seen["result"] = confirm({"compat": {}})
         return {"status": "aborted"}
 
-    console = _FakeConsole(input_answer="SY-2025.10.01")
+    console = _FakeConsole(input_answer="y")
     with patch.object(cli, "_load_client", return_value=_FakeCM()), \
          patch.object(cli, "get_console", return_value=console), \
          patch.object(cli, "_oneview_client_factory", return_value=lambda: object()), \
@@ -170,11 +170,11 @@ async def test_without_yes_confirm_matches_typed_baseline_version():
 
     assert seen["result"] is True
     assert len(console.input_prompts) == 1
-    assert "SY-2025.10.01" in console.input_prompts[0]
+    assert "y/N" in console.input_prompts[0]
 
 
 @pytest.mark.asyncio
-async def test_confirm_rejects_mismatched_typed_version():
+async def test_confirm_rejects_anything_but_y():
     seen = {}
 
     async def _capture(_factory, *, confirm, **_kw):

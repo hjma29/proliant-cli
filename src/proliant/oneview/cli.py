@@ -1442,7 +1442,6 @@ async def _cmd_profiles_update(args: argparse.Namespace) -> None:
             return True
         if json_mode:
             return False  # never silently flash hardware in scripted mode
-        token = baseline.get("version") or baseline.get("name") or "apply"
         compat = plan.get("compat") or {}
         compat_warn = ""
         if compat.get("status") == "unsupported":
@@ -1456,11 +1455,8 @@ async def _cmd_profiles_update(args: argparse.Namespace) -> None:
             "[red]The compute module will power-cycle — ensure the host is ready to reboot.[/red]"
             + compat_warn,
             title="Confirm SSP firmware apply", border_style="red"))
-        ans = console.input(
-            f'Type the baseline version "{token}" to proceed (or anything else to abort): ',
-            markup=False,
-        )
-        return ans.strip() == token
+        ans = console.input("Proceed? [y/N]: ", markup=False).strip().lower()
+        return ans in ("y", "yes")
 
     def on_validation_blocked(info: dict) -> str:
         # Mirrors update enclosure's own callback -- see its docstring for the
@@ -5407,10 +5403,10 @@ examples:
                     "server profile's compute module, without touching its logical enclosure's "
                     "shared infrastructure or any other profile -- useful when you only need to "
                     "bring one server current (e.g. after an eFuse/reapply) rather than every "
-                    "profile under the same enclosure. Shows the plan and prompts to type the "
-                    "baseline version to confirm before applying (power-cycles the compute "
-                    "module) -- skip the prompt with --yes. Equivalent to `update enclosure "
-                    "--scope profiles-only` narrowed to one profile.")
+                    "profile under the same enclosure. Shows the plan and prompts with a plain "
+                    "yes/no confirmation before applying (power-cycles the compute module) -- "
+                    "skip the prompt with --yes. Equivalent to `update enclosure --scope "
+                    "profiles-only` narrowed to one profile.")
     p_sp_update_name = p_sp_update.add_argument("name", metavar="NAME",
         help="Name of the server profile")
     p_sp_update_name.completer = _oneview_profile_name_completer
@@ -5423,8 +5419,8 @@ examples:
     p_sp_update.add_argument("--force", action="store_true",
         help="Force reinstall even if already at the baseline / bypass non-disruptive validation.")
     p_sp_update.add_argument("--yes", action="store_true",
-        help="Skip the type-to-confirm prompt and any validation-warning prompt. This "
-             "power-cycles the compute module -- use with care.")
+        help="Skip the confirm prompt and any validation-warning prompt. This power-cycles "
+             "the compute module -- use with care.")
     p_sp_update.set_defaults(func=_cmd_profiles_update)
 
     p_power = sub.add_parser(

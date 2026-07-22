@@ -3107,6 +3107,14 @@ _STATUS_STYLE = {"PASS": "[green]PASS[/green]", "WARN": "[yellow]WARN[/yellow]",
                  "FAIL": "[red]FAIL[/red]", "INFO": "[cyan]INFO[/cyan]"}
 
 
+def _colorize_alert_tags(detail: str) -> str:
+    """Colour the itemized ``[CRITICAL]``/``[WARNING]`` tags in a readiness
+    check's detail text (e.g. the "Active alerts" check) for display -- the
+    underlying report keeps plain text so --json output stays clean."""
+    return (detail.replace("[CRITICAL]", "[bold red][CRITICAL][/bold red]")
+                  .replace("[WARNING]", "[bold yellow][WARNING][/bold yellow]"))
+
+
 async def _async_upgrade_readiness() -> None:
     from proliant.oneview.upgrade import gather_readiness
 
@@ -3145,7 +3153,8 @@ async def _async_upgrade_readiness() -> None:
         ("Detail", {"min_width": 40}),
     )
     for c in report["checks"]:
-        table.add_row(c["name"], _STATUS_STYLE.get(c["status"], c["status"]), c["detail"])
+        table.add_row(c["name"], _STATUS_STYLE.get(c["status"], c["status"]),
+                     _colorize_alert_tags(c["detail"]))
     console.print(table)
 
     stale = report.get("stale_baselines", {})

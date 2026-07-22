@@ -5,6 +5,8 @@ Usage:
     proliant oneview servers list [--fields ...]
     proliant oneview servers describe <name>
     proliant oneview servers firmware list [--server NAME]
+    proliant oneview server-hardware-types list
+    proliant oneview server-hardware-types describe <name>
     proliant oneview firmware bundles
     proliant oneview firmware repository
     proliant oneview compliance list
@@ -298,6 +300,15 @@ def _oneview_server_name_completer(prefix: str, **kwargs) -> list[str]:
     """Tab-complete server names by querying OneView server hardware."""
     try:
         names = _oneview_cached_object_names("servers", "/rest/server-hardware")
+        return [n for n in names if n.lower().startswith(prefix.lower())]
+    except Exception:
+        return []
+
+
+def _oneview_hardware_type_name_completer(prefix: str, **kwargs) -> list[str]:
+    """Tab-complete server hardware type names."""
+    try:
+        names = _oneview_cached_object_names("hardware-types", "/rest/server-hardware-types")
         return [n for n in names if n.lower().startswith(prefix.lower())]
     except Exception:
         return []
@@ -785,6 +796,118 @@ def _render_server_describe(info: dict) -> None:
         if util.get("temperature_f") is not None:
             util_grid.add_row("Temperature", f"{util['temperature_f']} °F")
         console.print(Panel(util_grid, title="Utilization", title_align="left", border_style="cyan"))
+
+
+# ── proliant oneview server-hardware-types list/describe ──────────────────────────
+
+async def _cmd_hardware_types_list(args: argparse.Namespace) -> None:
+    """List Server Hardware Types -- the GUI's tile list (name, model, adapters
+    per slot) enhanced with how many servers/profiles use each type."""
+    from proliant.oneview.hardware_types import fetch_hardware_types
+
+    async with _load_client() as client:
+        with get_console().status("[dim]Fetching server hardware types…[/dim]"):
+            types = await fetch_hardware_types(client)
+
+    if getattr(args, "json_output", False) or get_output_mode() == OutputMode.JSON:
+        print_json(types)
+        return
+
+    if not types:
+        get_console().print("[yellow]No server hardware types found.[/yellow]")
+        return
+
+    table = make_table(
+        f"Server Hardware Types ({len(types)} total)",
+        ("Name", {"style": "bold cyan", "no_wrap": True}),
+        ("Model", {"min_width": 16}),
+        ("Adapters", {"min_width": 28}),
+        ("Server HW", {"justify": "right", "no_wrap": True}),
+        ("Profiles", {"justify": "right", "no_wrap": True}),
+        box_style=box.ROUNDED,
+    )
+    for t in types:
+        adapters = "\n".join(f"{a['location']}: {a['model']}" for a in t["adapters"]) or "—"
+        table.add_row(t["name"], t["model"] or "—", adapters, str(t["server_count"]), str(t["profile_count"]))
+    get_console().print(table)
+
+
+async def _cmd_hardware_types_describe(args: argparse.Namespace) -> None:
+    """Show one Server Hardware Type's adapters plus every server hardware,
+    server profile, and template actually using it -- the cross-reference
+    the GUI's own (broken, on this appliance) detail page doesn't show."""
+    from proliant.oneview.hardware_types import fetch_hardware_type_detail
+
+    name = args.name
+    async with _load_client() as client:
+        with get_console().status(f"[dim]Fetching server hardware type '{name}'…[/dim]"):
+            info = await fetch_hardware_type_detail(client, name)
+
+    if getattr(args, "json_output", False) or get_output_mode() == OutputMode.JSON:
+        print_json(info)
+        return
+
+    _render_hardware_type_describe(info)
+
+
+def _render_hardware_type_describe(info: dict) -> None:
+    console = get_console()
+    console.print(f"[bold]{info.get('name') or '—'}[/bold]  [dim]{info.get('model') or ''}[/dim]")
+
+    general = Table.grid(padding=(0, 3))
+    general.add_column(style="dim", no_wrap=True)
+    general.add_column()
+    general.add_row("Model", info.get("model") or "—")
+    general.add_row("Form factor", info.get("form_factor") or "—")
+    general.add_row("UEFI class", info.get("uefi_class") or "—")
+    console.print(Panel(general, title="General", title_align="left", border_style="cyan"))
+
+    adapters = info.get("adapters") or []
+    if adapters:
+        adapter_table = make_table(
+            "Adapters",
+            ("Location", {"style": "dim", "no_wrap": True}),
+            ("Model", {"min_width": 24}),
+            ("Type", {"no_wrap": True}),
+            box_style=box.SIMPLE_HEAD,
+        )
+        for a in adapters:
+            adapter_table.add_row(a["location"], a["model"], a["device_type"])
+        console.print(adapter_table)
+
+    servers = info.get("servers") or []
+    sv_table = make_table(
+        f"Server Hardware ({len(servers)})",
+        ("Name", {"style": "bold cyan", "no_wrap": True}),
+        ("Status", {"justify": "center", "no_wrap": True}),
+        ("State", {"justify": "center"}),
+        ("Power", {"justify": "center", "no_wrap": True}),
+        ("Profile", {"min_width": 16}),
+        box_style=box.SIMPLE_HEAD,
+    )
+    for s in servers:
+        sv_table.add_row(
+            s["name"], _status_style(s["status"]), _state_style(s["state"]),
+            _power_style(s["power"]), s["profile"] or "[dim italic]no profile assigned[/dim italic]",
+        )
+    console.print(sv_table if servers else "[dim]Server Hardware: none of this type.[/dim]")
+
+    profiles = info.get("profiles") or []
+    pf_table = make_table(
+        f"Server Profiles ({len(profiles)})",
+        ("Name", {"style": "bold cyan", "no_wrap": True}),
+        ("Status", {"justify": "center", "no_wrap": True}),
+        ("State", {"justify": "center"}),
+        ("Server Hardware", {"min_width": 16}),
+        box_style=box.SIMPLE_HEAD,
+    )
+    for p in profiles:
+        pf_table.add_row(p["name"], _status_style(p["status"]), _state_style(p["state"]), p["server"] or "—")
+    console.print(pf_table if profiles else "[dim]Server Profiles: none of this type.[/dim]")
+
+    templates = info.get("templates") or []
+    if templates:
+        console.print(f"[dim]Server Profile Templates ({len(templates)}):[/dim] " + ", ".join(templates))
 
 
 # ── proliant oneview servers firmware list ────────────────────────────────────────
@@ -5087,6 +5210,9 @@ examples:
   proliant oneview servers describe "Enclosure-01, bay 3" Server Hardware overview (not Server Profile)
   proliant oneview servers firmware list                 Fleet firmware (all servers)
   proliant oneview servers firmware list --server "Enc1, bay 1"
+  proliant oneview server-hardware-types list             Hardware types + server/profile usage counts
+  proliant oneview server-hardware-types describe "SY 480 Gen10 1"
+                                                          Which server hardware/profiles use this type
   proliant oneview firmware bundles                      Registered SPP/SSP bundles
   proliant oneview firmware repository                   Internal + external repositories
   proliant oneview compliance list                       Firmware compliance vs latest or selected baseline
@@ -5176,6 +5302,18 @@ examples:
         help='Server name (e.g. "Enc1, bay 1"). Omit for all servers.')
     server_arg.completer = _oneview_server_name_completer
     p_srv_fw_list.set_defaults(func=_cmd_firmware_list)
+
+    p_hwtypes = sub.add_parser("server-hardware-types", help="List or describe server hardware types")
+    s_hwtypes = p_hwtypes.add_subparsers(dest="what", metavar="ACTION")
+    s_hwtypes.required = True
+    p_hwt_list = s_hwtypes.add_parser("list", help="List all server hardware types")
+    p_hwt_list.set_defaults(func=_cmd_hardware_types_list)
+    p_hwt_desc = s_hwtypes.add_parser("describe",
+        help="Show a hardware type's adapters + which server hardware/profiles use it")
+    p_hwt_desc_name = p_hwt_desc.add_argument("name", metavar="NAME",
+        help='Name of the server hardware type (e.g. "SY 480 Gen10 1")')
+    p_hwt_desc_name.completer = _oneview_hardware_type_name_completer
+    p_hwt_desc.set_defaults(func=_cmd_hardware_types_describe)
 
     p_firmware = sub.add_parser("firmware", help="Appliance firmware bundles and repositories")
     s_firmware = p_firmware.add_subparsers(dest="what", metavar="ACTION")

@@ -200,6 +200,29 @@ def summarize_alerts(members: list[dict]) -> dict[str, int]:
     }
 
 
+def normalize_alert_items(members: list[dict]) -> list[dict[str, str]]:
+    """Per-alert detail (resource, severity, description) for every active
+    Critical/Warning alert -- lets ``assess_readiness`` enumerate exactly
+    which alerts are gating an upgrade instead of only reporting a count.
+    Critical alerts sort first, then by resource name.
+    """
+    from proliant.oneview.activity import clean_refs
+
+    items: list[dict[str, str]] = []
+    for a in members or []:
+        sev = str(a.get("severity", "")).lower()
+        if sev not in ("critical", "warning"):
+            continue
+        resource = (a.get("associatedResource") or {}).get("resourceName") or "—"
+        items.append({
+            "resource": resource,
+            "severity": sev,
+            "description": clean_refs(a.get("description", "")),
+        })
+    items.sort(key=lambda it: (it["severity"] != "critical", it["resource"]))
+    return items
+
+
 # ── firmware baselines / usage ───────────────────────────────────────────────
 
 def normalize_baselines(members: list[dict]) -> list[dict[str, Any]]:
@@ -480,11 +503,16 @@ def assess_readiness(data: dict[str, Any], *, now: datetime | None = None) -> di
     # Active alerts
     al = data.get("alerts", {})
     crit, warn = al.get("critical", 0), al.get("warning", 0)
+    item_lines = "\n".join(
+        f"  [{it['severity'].upper()}] {it['resource']}: {it['description']}"
+        for it in al.get("items") or []
+    )
     if crit:
-        add("Active alerts", "FAIL",
-            f"{crit} critical, {warn} warning active alert(s) — resolve criticals before updating.")
+        detail = f"{crit} critical, {warn} warning active alert(s) — resolve criticals before updating."
+        add("Active alerts", "FAIL", f"{detail}\n{item_lines}" if item_lines else detail)
     elif warn:
-        add("Active alerts", "WARN", f"{warn} warning active alert(s) — review before updating.")
+        detail = f"{warn} warning active alert(s) — review before updating."
+        add("Active alerts", "WARN", f"{detail}\n{item_lines}" if item_lines else detail)
     else:
         add("Active alerts", "PASS", "No active critical/warning alerts.")
 
@@ -577,12 +605,14 @@ async def fetch_health(client: "OneViewClient") -> dict[str, dict[str, Any]]:
     return parse_health(data.get("members", []))
 
 
-async def fetch_active_alerts(client: "OneViewClient") -> dict[str, int]:
+async def fetch_active_alerts(client: "OneViewClient") -> dict[str, Any]:
     try:
         members = await client.get_all("/rest/alerts", filter="alertState='Active'")
     except Exception:  # noqa: BLE001 — alerts are advisory; never fail readiness on this
         members = []
-    return summarize_alerts(members)
+    summary = summarize_alerts(members)
+    summary["items"] = normalize_alert_items(members)
+    return summary
 
 
 async def fetch_last_backup(client: "OneViewClient") -> dict[str, Any]:

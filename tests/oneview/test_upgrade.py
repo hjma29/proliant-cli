@@ -11,6 +11,7 @@ from proliant.oneview.upgrade import (
     assess_readiness,
     classify_baselines,
     compute_upgrade_path,
+    normalize_alert_items,
     normalize_baselines,
     normalize_repositories,
     parse_health,
@@ -102,6 +103,25 @@ def test_summarize_alerts():
     )
     s = summarize_alerts(members)
     assert s == {"critical": 6, "warning": 9, "other": 2, "total": 17}
+
+
+def test_normalize_alert_items_filters_and_sorts_critical_first():
+    members = [
+        {"severity": "Warning", "associatedResource": {"resourceName": "Enc-01, bay 2"},
+         "description": "POST/UEFI errors occurred during server restart."},
+        {"severity": "OK", "associatedResource": {"resourceName": "SPP"}, "description": "up to date"},
+        {"severity": "Critical", "associatedResource": {"resourceName": "Enc-01, bay 7"},
+         "description": "Unable to associate a server hardware type with this server."},
+    ]
+    items = normalize_alert_items(members)
+    assert [it["resource"] for it in items] == ["Enc-01, bay 7", "Enc-01, bay 2"]
+    assert items[0]["severity"] == "critical"
+    assert items[0]["description"] == "Unable to associate a server hardware type with this server."
+
+
+def test_normalize_alert_items_missing_resource_name():
+    items = normalize_alert_items([{"severity": "Critical", "description": "x"}])
+    assert items[0]["resource"] == "—"
 
 
 # ── baseline classification ──────────────────────────────────────────────────
@@ -349,6 +369,20 @@ def test_readiness_fails_on_critical_alerts():
     assert r["verdict"] == "FAIL"
     alert_check = next(c for c in r["checks"] if c["name"] == "Active alerts")
     assert alert_check["status"] == "FAIL"
+
+
+def test_readiness_active_alerts_detail_lists_each_item():
+    items = [
+        {"resource": "Enc-01, bay 7", "severity": "critical", "description": "no port info"},
+        {"resource": "aci-Mapped-host1", "severity": "warning", "description": "firmware inconsistent"},
+    ]
+    r = assess_readiness(
+        _base_data(alerts={"critical": 1, "warning": 1, "other": 0, "total": 2, "items": items}),
+        now=_NOW,
+    )
+    alert_check = next(c for c in r["checks"] if c["name"] == "Active alerts")
+    assert "[CRITICAL] Enc-01, bay 7: no port info" in alert_check["detail"]
+    assert "[WARNING] aci-Mapped-host1: firmware inconsistent" in alert_check["detail"]
 
 
 def test_readiness_fails_on_low_disk():

@@ -198,7 +198,11 @@ async def _resolve_profile_detail(
         "server_bay":      hw.get("position", ""),
         "eg_name":         eg_map.get(raw.get("enclosureGroupUri", ""), "—"),
         "server_hardware_type": sht_map.get(raw.get("serverHardwareTypeUri", ""), raw.get("serverHardwareTypeUri", "").rsplit("/", 1)[-1]),
-        "template_name":    template_map.get(raw.get("serverProfileTemplateUri", ""), raw.get("serverProfileTemplateUri", "").rsplit("/", 1)[-1]),
+        "template_name":    (
+            template_map.get(template_uri, template_uri.rsplit("/", 1)[-1])
+            if (template_uri := raw.get("serverProfileTemplateUri") or "")
+            else ""
+        ),
         "fw_baseline":     fw_baseline,
         "fw_version":      fw_version,
         "manage_fw":       (raw.get("firmware") or {}).get("manageFirmware", False),

@@ -127,6 +127,59 @@ async def test_describe_profile_resolves_gui_detail_fields():
     ]
 
 
+@pytest.mark.asyncio
+async def test_describe_profile_handles_null_template_uri():
+    """A profile created directly (not from a template) has
+    ``serverProfileTemplateUri: null`` in the OneView API response --
+    describe_profile must show "no template" rather than crash trying to
+    ``.rsplit()`` a ``None``."""
+    result = await describe_profile(
+        FakeClient(
+            {
+                "/rest/server-profiles": [
+                    {
+                        "uri": PROFILE_URI,
+                        "name": "bay7-6820-cna",
+                        "status": "OK",
+                        "state": "Normal",
+                        "description": "",
+                        "serverHardwareUri": SERVER_URI,
+                        "serverProfileTemplateUri": None,
+                        "serverHardwareTypeUri": SHT_URI,
+                        "enclosureGroupUri": EG_URI,
+                        "affinity": "Bay",
+                        "firmware": {},
+                        "boot": {},
+                        "bios": {},
+                        "connectionSettings": {"connections": []},
+                    }
+                ],
+                "/rest/server-hardware": [
+                    {
+                        "uri": SERVER_URI,
+                        "name": "Enclosure-01, bay 7",
+                        "model": "SY 480 Gen10",
+                        "serialNumber": "CN77090XYZ",
+                        "powerState": "Off",
+                        "status": "OK",
+                        "state": "ProfileApplied",
+                        "position": 7,
+                    }
+                ],
+                "/rest/enclosure-groups": [{"uri": EG_URI, "name": "EG-01"}],
+                "/rest/server-hardware-types": [{"uri": SHT_URI, "name": "SY 480 Gen10 2"}],
+                "/rest/server-profile-templates": [],
+                "/rest/ethernet-networks": [],
+                "/rest/network-sets": [],
+            },
+            {},
+        ),
+        "bay7-6820-cna",
+    )
+
+    assert result["template_name"] == ""
+
+
 def _serial_lookup_collections(hw_extra: dict | None = None):
     """Shared fixture data for describe_profile_by_serial tests: one profile
     assigned to server hardware with serial 'MXQ1240F2M'."""

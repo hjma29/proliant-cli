@@ -3,6 +3,7 @@ proliant.oneview.cli — OneView subcommands.
 
 Usage:
     proliant oneview servers list [--fields ...]
+    proliant oneview servers describe <name>
     proliant oneview servers firmware list [--server NAME]
     proliant oneview firmware bundles
     proliant oneview firmware repository
@@ -680,6 +681,110 @@ async def _async_servers_list(fields: list[str] | None) -> None:
 async def _cmd_servers_list(args: argparse.Namespace) -> None:
     fields = [f.strip() for f in args.fields.split(",")] if args.fields else None
     await _async_servers_list(fields)
+
+
+# ── proliant oneview servers describe ─────────────────────────────────────────────
+
+async def _cmd_servers_describe(args: argparse.Namespace) -> None:
+    """Show a single server's Hardware / Management Processor / Device
+    Inventory / Utilization -- the GUI's Server Hardware "Overview" page."""
+    from proliant.oneview.server_detail import fetch_server_detail
+
+    name = args.name
+    async with _load_client() as client:
+        with get_console().status(f"[dim]Fetching server hardware '{name}'…[/dim]"):
+            info = await fetch_server_detail(client, name)
+
+    if getattr(args, "json_output", False) or get_output_mode() == OutputMode.JSON:
+        print_json(info)
+        return
+
+    _render_server_describe(info)
+
+
+def _render_server_describe(info: dict) -> None:
+    console = get_console()
+
+    dot = "[green]●[/green]"
+    status = (info.get("status") or "").lower()
+    if status == "warning":
+        dot = "[yellow]●[/yellow]"
+    elif status == "critical":
+        dot = "[red]●[/red]"
+    console.print(f"{dot} [bold]{info.get('name') or '—'}[/bold]")
+
+    # ── Hardware | Management Processor (side by side, like the GUI) ─────
+    hw = Table.grid(padding=(0, 3))
+    hw.add_column(style="dim", no_wrap=True)
+    hw.add_column()
+    hw.add_row("Server name", info.get("server_name") or "—")
+    hw.add_row("State", info.get("state_display") or "—")
+    hw.add_row("Server profile", info.get("profile") or "[dim italic]no profile assigned[/dim italic]")
+    hw.add_row("Server power", _power_style(info.get("power") or ""))
+    hw.add_row("Model", info.get("model") or "—")
+    hw.add_row("Operating system", info.get("operating_system") or "[dim italic]unknown[/dim italic]")
+    hw.add_row("CPU", info.get("cpu") or "—")
+    hw.add_row("Memory", info.get("memory") or "—")
+    hw.add_row("Serial number", info.get("serial_number") or "—")
+    hw.add_row("Location", info.get("location") or "—")
+    hw.add_row("System ROM", info.get("system_rom") or "—")
+    hw.add_row("Server hardware type", info.get("hardware_type") or "[dim italic]not associated[/dim italic]")
+
+    mp = Table.grid(padding=(0, 3))
+    mp.add_column(style="dim", no_wrap=True)
+    mp.add_column()
+    mp_version = info.get("mp_firmware_version") or "—"
+    mp.add_row("iLO version", f"{mp_version} [dim]({info.get('mp_model')})[/dim]" if info.get("mp_model") else mp_version)
+    mp.add_row("Host name", info.get("mp_host_name") or "—")
+    ips = info.get("mp_ip_addresses") or []
+    mp.add_row("IP address", "\n".join(ips) if ips else "—")
+
+    hw_panel = Panel(hw, title="Hardware", title_align="left", border_style="cyan")
+    mp_panel = Panel(mp, title="Management Processor", title_align="left", border_style="cyan")
+    if console.width >= 100:
+        # Side by side, like the GUI's two-column Overview layout.
+        columns = Table.grid(expand=True, padding=(0, 4))
+        columns.add_column(ratio=3)
+        columns.add_column(ratio=2)
+        columns.add_row(hw_panel, mp_panel)
+        console.print(columns)
+    else:
+        # Narrow terminal: stack so long Hardware values aren't crushed.
+        console.print(hw_panel)
+        console.print(mp_panel)
+
+    # ── Device Inventory ────────────────────────────────────────────────
+    devices = info.get("device_inventory") or []
+    if devices:
+        dev_table = make_table(
+            "Device Inventory",
+            ("Location", {"style": "dim", "no_wrap": True}),
+            ("Product Name", {"min_width": 24}),
+            ("Firmware Version", {"justify": "right", "no_wrap": True}),
+            box_style=box.SIMPLE_HEAD,
+        )
+        for d in devices:
+            dev_table.add_row(d["location"], d["name"], d["version"])
+        console.print(dev_table)
+    else:
+        console.print("[dim]Device Inventory: no data (server may never have completed POST).[/dim]")
+
+    # ── Utilization ────────────────────────────────────────────────────
+    util = info.get("utilization") or {}
+    if any(util.get(k) is not None for k in ("cpu_percent", "power_w", "temperature_f")):
+        util_grid = Table.grid(padding=(0, 3))
+        util_grid.add_column(style="dim", no_wrap=True)
+        util_grid.add_column()
+        cpu_pct = util.get("cpu_percent")
+        cores_total = util.get("cpu_cores_total")
+        if cpu_pct is not None:
+            cores_text = f" of {cores_total} cores" if cores_total else ""
+            util_grid.add_row("CPU", f"{cpu_pct}%{cores_text}")
+        if util.get("power_w") is not None:
+            util_grid.add_row("Power", f"{util['power_w']} W")
+        if util.get("temperature_f") is not None:
+            util_grid.add_row("Temperature", f"{util['temperature_f']} °F")
+        console.print(Panel(util_grid, title="Utilization", title_align="left", border_style="cyan"))
 
 
 # ── proliant oneview servers firmware list ────────────────────────────────────────
@@ -4979,6 +5084,7 @@ def _build_parser() -> argparse.ArgumentParser:
         epilog="""
 examples:
   proliant oneview servers list                          List all managed servers
+  proliant oneview servers describe "Enclosure-01, bay 3" Server Hardware overview (not Server Profile)
   proliant oneview servers firmware list                 Fleet firmware (all servers)
   proliant oneview servers firmware list --server "Enc1, bay 1"
   proliant oneview firmware bundles                      Registered SPP/SSP bundles
@@ -5054,6 +5160,13 @@ examples:
         help="Comma-separated columns: name,model,serial,ilo,ilo_ip,power,state,profile")
     server_fields_arg.completer = comma_sep_completer(_SERVER_FIELDS)
     p_srv.set_defaults(func=_cmd_servers_list)
+
+    p_srv_desc = s_servers.add_parser("describe",
+        help="Show one server's Hardware / Management Processor / Device Inventory / Utilization")
+    p_srv_desc_name = p_srv_desc.add_argument("name", metavar="NAME",
+        help='Server name (e.g. "Enclosure-01, bay 3")')
+    p_srv_desc_name.completer = _oneview_server_name_completer
+    p_srv_desc.set_defaults(func=_cmd_servers_describe)
 
     p_srv_fw = s_servers.add_parser("firmware", help="Show per-server firmware inventory")
     s_srv_fw = p_srv_fw.add_subparsers(dest="action", metavar="ACTION")

@@ -116,23 +116,54 @@ __python_argcomplete_run_inner() {
 }
 _python_argcomplete_proliant() {
     local IFS=$'\013'
-    local completions
-    completions=($(IFS="$IFS" \
+    local raw
+    raw=($(IFS="$IFS" \
         COMP_LINE="$BUFFER" \
         COMP_POINT="$CURSOR" \
         _ARGCOMPLETE=1 \
-        _ARGCOMPLETE_SHELL="zsh" \
+        _ARGCOMPLETE_SHELL="tcsh" \
         _ARGCOMPLETE_SUPPRESS_SPACE=1 \
         __python_argcomplete_run proliant))
-    local nosort=()
-    local nospace=()
-    if is-at-least 5.8; then nosort=(-o nosort); fi
-    if [[ "${completions-}" =~ ([^\\]): && "${match[1]}" =~ [=/:] ]]; then
-        nospace=(-S '')
+    local -a quoted nospace
+    local word trimmed suffix
+    if [[ ${#raw[@]} -eq 1 ]]; then
+        word="${raw[1]}"
+        trimmed="$word"
+        suffix=""
+        if [[ "$word" == *" " ]]; then
+            trimmed="${word% }"
+            suffix=" "
+        fi
+        if [[ "$trimmed" =~ [=/:]$ ]]; then
+            # Continuable value (directory path, --flag=): keep native
+            # backslash-escaping so the shell can keep extending the token
+            # without having to track an unmatched open quote, and tell
+            # compadd not to append a trailing space.
+            nospace=(-S '')
+            quoted+=("${(q)trimmed}${suffix}")
+        elif [[ "$trimmed" =~ ^[A-Za-z0-9._/:@%+=,-]*$ ]]; then
+            quoted+=("${trimmed}${suffix}")
+        else
+            # Sole, fully-resolved match (e.g. "SY 480 Gen10 2"): safe to
+            # wrap in single quotes since no further completion of this
+            # token is expected.
+            quoted+=("'${trimmed//\'/\'\\\'\'}'${suffix}")
+        fi
+    else
+        # Ambiguous common-prefix candidates: fall back to native
+        # backslash-escaping so the shared prefix zsh computes across
+        # entries stays a single valid token (no unmatched open-quote state
+        # to manage while the user keeps typing).
+        for word in "${raw[@]}"; do
+            if [[ "$word" == *" " ]]; then
+                quoted+=("${(q)${word% }} ")
+            else
+                quoted+=("${(q)word}")
+            fi
+        done
     fi
-    _describe "proliant" completions "${nosort[@]}" "${nospace[@]}"
+    compadd -Q -U -V '-proliant' "${nospace[@]}" -a quoted
 }
-autoload is-at-least
 if [[ $zsh_eval_context == *func ]]; then
     _python_argcomplete_proliant "$@"
 else
@@ -162,7 +193,17 @@ $FPATH_LINE
 else
   # bash
   RC_FILE="$HOME/.bashrc"
-  if grep -q '_proliant_completion' "$RC_FILE" 2>/dev/null; then
+  if [ -f "$RC_FILE" ] && grep -q '_proliant_completion' "$RC_FILE" 2>/dev/null; then
+    # An older version of the completion block may already be installed.
+    # Strip it out so the block below always reflects the current version
+    # (re-running this script upgrades an existing installation in place).
+    awk '
+      $0 == "# proliant tab completion" { skip=1; next }
+      skip && $0 == "complete -o nospace -o default -o bashdefault -F _proliant_completion proliant" { skip=0; next }
+      !skip { print }
+    ' "$RC_FILE" > "$RC_FILE.tmp" && mv "$RC_FILE.tmp" "$RC_FILE"
+  fi
+  if [ -f "$RC_FILE" ] && grep -q '_proliant_completion' "$RC_FILE" 2>/dev/null; then
     echo "✓ Tab completion already enabled in $RC_FILE"
   else
     cat >> "$RC_FILE" << 'EOF'
@@ -187,19 +228,59 @@ _proliant_completion() {
     local IFS=$'\013'
     local SUPPRESS_SPACE=0
     if compopt +o nospace 2>/dev/null; then SUPPRESS_SPACE=1; fi
-    COMPREPLY=($(IFS="$IFS" \
+    local raw
+    raw=($(IFS="$IFS" \
         COMP_LINE="$COMP_LINE" \
         COMP_POINT="$COMP_POINT" \
         COMP_TYPE="$COMP_TYPE" \
         _ARGCOMPLETE_COMP_WORDBREAKS="$COMP_WORDBREAKS" \
         _ARGCOMPLETE=1 \
-        _ARGCOMPLETE_SHELL="bash" \
+        _ARGCOMPLETE_SHELL="tcsh" \
         _ARGCOMPLETE_SUPPRESS_SPACE=$SUPPRESS_SPACE \
         __python_argcomplete_run proliant))
     if [[ $? != 0 ]]; then
         unset COMPREPLY
-    elif [[ $SUPPRESS_SPACE == 1 ]] && [[ "${COMPREPLY-}" =~ [=/:]$ ]]; then
-        compopt -o nospace
+        return
+    fi
+    COMPREPLY=()
+    local word trimmed suffix
+    if [[ ${#raw[@]} -eq 1 ]]; then
+        word="${raw[0]}"
+        trimmed="$word"
+        suffix=""
+        if [[ "$word" == *" " ]]; then
+            trimmed="${word% }"
+            suffix=" "
+        fi
+        if [[ $SUPPRESS_SPACE == 1 ]] && [[ "$trimmed" =~ [=/:]$ ]]; then
+            # Continuable value (directory path, --flag=): keep native
+            # backslash-escaping so the shell can keep extending the token
+            # without having to track an unmatched open quote, and let bash
+            # know not to auto-append a trailing space.
+            compopt -o nospace 2>/dev/null
+            COMPREPLY+=("$(printf '%q' "$trimmed")${suffix}")
+        elif [[ "$trimmed" =~ ^[A-Za-z0-9._/:@%+=,-]*$ ]]; then
+            COMPREPLY+=("${trimmed}${suffix}")
+        else
+            # Sole, fully-resolved match (e.g. "SY 480 Gen10 2"): safe to
+            # wrap in single quotes since no further completion of this
+            # token is expected.
+            COMPREPLY+=("'${trimmed//\'/\'\\\'\'}'${suffix}")
+        fi
+    else
+        # Ambiguous common-prefix candidates: fall back to native
+        # backslash-escaping so the shared prefix bash computes across
+        # entries stays a single valid token (no unmatched open-quote state
+        # to manage while the user keeps typing).
+        for word in "${raw[@]}"; do
+            trimmed="$word"
+            suffix=""
+            if [[ "$word" == *" " ]]; then
+                trimmed="${word% }"
+                suffix=" "
+            fi
+            COMPREPLY+=("$(printf '%q' "$trimmed")${suffix}")
+        done
     fi
 }
 complete -o nospace -o default -o bashdefault -F _proliant_completion proliant

@@ -1172,19 +1172,34 @@ def _step_segment(payload: dict) -> str:
     raw step count alongside it makes the same "still working, here's how
     far" detail the GUI's own subtask log conveys instead of a lone number.
 
-    ``completed_steps`` can exceed ``total_steps`` -- confirmed live: OneView
-    appears to increment ``completedSteps`` for every progress-log entry
-    (including retried power-cycle attempts and the final failure entry
-    itself), without revising ``totalSteps`` upward from its original plan.
-    A plain "26/24" fraction reads as a bug, so once completed overtakes the
-    original plan this shows the plan separately instead of a bogus >100%
-    ratio.
+    The "completed" half of the fraction prefers ``len(progress_log)`` (the
+    same list ``_print_new_progress_log_lines`` echoes to the terminal) over
+    OneView's raw ``completed_steps`` field -- confirmed live: OneView bumps
+    ``completedSteps`` for *every* ``progressUpdates`` entry, including blank
+    ``statusUpdate`` ones that ``normalize_task``'s ``_progress_log`` filters
+    out of the visible log. When that happens the raw counter silently
+    outpaces what's actually been printed (e.g. the bar reading "step 24/26"
+    while only 23 lines have scrolled by), which reads as the CLI's own log
+    being incomplete/out of sync. Falls back to ``completed_steps`` only when
+    no log was carried at all (e.g. a hand-built payload in a unit test), so
+    the displayed count always matches what the user can see and count.
+
+    ``completed`` can still exceed ``total_steps`` -- confirmed live: OneView
+    doesn't revise ``totalSteps`` upward from its original plan when retried
+    power-cycle attempts (or a final failure entry) push the real step count
+    past it. A plain "26/24" fraction reads as a bug, so once completed
+    overtakes the original plan this shows the plan separately instead of a
+    bogus >100% ratio.
     """
     total = payload.get("total_steps")
     if not isinstance(total, int) or total <= 0:
         return ""
-    completed = payload.get("completed_steps")
-    completed = completed if isinstance(completed, int) else 0
+    log = payload.get("progress_log")
+    if isinstance(log, list):
+        completed = len(log)
+    else:
+        completed = payload.get("completed_steps")
+        completed = completed if isinstance(completed, int) else 0
     if completed > total:
         return f"step {completed} (plan: {total})"
     return f"step {completed}/{total}"

@@ -280,6 +280,31 @@ def test_step_segment_shows_plan_separately_when_completed_exceeds_total():
     assert cli._step_segment({"completed_steps": 24, "total_steps": 24}) == "step 24/24"
 
 
+def test_step_segment_prefers_progress_log_length_over_raw_completed_steps():
+    # Live incident: a "bay7-6820-cna" firmware-offline apply showed
+    # "step 23/26" while OneView's raw `completedSteps` had already ticked to
+    # 24 -- one `progressUpdates` entry that tick had a blank `statusUpdate`,
+    # which `normalize_task`'s `_progress_log` filters out of the visible
+    # log, but OneView's own `completedSteps` counts it anyway. Trusting the
+    # raw field made the step count outpace the number of lines actually
+    # printed, reading as the CLI's log being out of sync/incomplete. The
+    # displayed count must match `len(progress_log)` -- what the user can
+    # actually see and count -- not OneView's blank-inclusive counter.
+    payload = {
+        "completed_steps": 24,
+        "total_steps": 26,
+        "progress_log": [f"line {i}" for i in range(23)],
+    }
+    assert cli._step_segment(payload) == "step 23/26"
+
+
+def test_step_segment_falls_back_to_completed_steps_when_no_log_carried():
+    # A hand-built payload with no `progress_log` key at all (e.g. the
+    # existing unit tests above, or a task shape that never carries one)
+    # still falls back to the raw field rather than silently reading as 0.
+    assert cli._step_segment({"completed_steps": 15, "total_steps": 24}) == "step 15/24"
+
+
 class _RecordingConsole:
     def __init__(self):
         self.lines: list[str] = []
@@ -357,7 +382,12 @@ def test_build_activity_tree_table_shows_full_progress_history():
                 "Stage component 1/6 - a.fwpkg",
                 "Stage component 2/6 - b.fwpkg",
             ],
-            "completed_steps": 26, "total_steps": 24,
+            # `completed_steps` is deliberately stale/unused here -- the step
+            # segment derives "completed" from `len(progress_log)` (2), not
+            # this raw field, so the plan-exceeded note fires off `total_steps`
+            # actually being smaller than the visible log (see
+            # test_step_segment_prefers_progress_log_length_over_raw_completed_steps).
+            "completed_steps": 26, "total_steps": 1,
             "created": "2026-07-11T06:00:00Z", "duration": "1h",
         },
         "children": [],
@@ -368,7 +398,7 @@ def test_build_activity_tree_table_shows_full_progress_history():
     assert "Stage component 2/6 - b.fwpkg" in name_cell
     # The step segment (with the completed>total plan note) is appended
     # after the full log, not instead of it.
-    assert "step 26 (plan: 24)" in name_cell
+    assert "step 2 (plan: 1)" in name_cell
 
 
 def test_render_batch_result_reports_every_failed_profile_not_just_last():

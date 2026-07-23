@@ -410,6 +410,7 @@ def build_plan(
             "server_hardware_uri": p["server_hardware_uri"],
             "manage_firmware": p["manage_firmware"],
             "current_baseline_uri": p["current_baseline_uri"],
+            "install_type": p.get("install_type", ""),
             "will_change": will_change,
             "detail": detail,
         })
@@ -650,6 +651,59 @@ async def _actual_profile_baseline_uri(
         return ""  # staged/pending -- not actually installed regardless of target uri
     settings = (fw.get("serverFirmwareSettings") or {}).get("firmwareSettings") or {}
     return settings.get("baselineUri", "") or ""
+
+
+async def _profile_unverified_reason_hint(
+    client: "OneViewClient", profile: dict, install_type: str,
+) -> str | None:
+    """A more specific ``unverified_reason`` for a server profile that never
+    converged within ``verify_timeout_s``, when the cause is knowable.
+
+    ``FirmwareAndOSDrivers`` needs the compute module's OS booted (with HPE
+    Smart Update Tools running in-guest) to actually finish an install --
+    verified live: a profile using it on a server left powered off stayed
+    ``installState: "Pending"`` for 12+ hours straight, never converging no
+    matter how long the caller polls. Generic wording ("OneView's internal
+    state takes a moment to catch up") is actively misleading there -- it
+    implies waiting longer would help, when only powering the server on (and
+    having SUT installed/running in the guest) will. Returns ``None`` (let
+    the caller fall back to the generic message) for every other install type,
+    or if the server/SUT state can't be determined.
+    """
+    if install_type != "FirmwareAndOSDrivers":
+        return None
+    hw_uri = profile.get("server_hardware_uri", "")
+    if not hw_uri:
+        return None
+    try:
+        hw = await client.get(hw_uri) or {}
+        fw = await client.get(f"{hw_uri}/firmware") or {}
+    except Exception:  # noqa: BLE001 - best-effort; caller falls back
+        return None
+    power_state = (hw.get("powerState") or "").strip().lower()
+    sut_state = (
+        (fw.get("serverSettings") or {}).get("hpSmartUpdateToolStatus") or {}
+    ).get("installState", "") or ""
+    sut_state = sut_state.strip().lower()
+    if power_state == "off":
+        return (
+            "This profile's install type is FirmwareAndOSDrivers, which needs the "
+            "server powered on -- with HPE Smart Update Tools (SUT) running in the "
+            "guest OS -- to actually finish installing. The server is currently "
+            "powered Off, so this can wait indefinitely without ever converging. "
+            "Power it on to let the install finish, or re-run with "
+            "--install-type firmware-offline to flash directly via iLO without "
+            "needing an OS boot."
+        )
+    if sut_state and sut_state != "installed":
+        return (
+            "This profile's install type is FirmwareAndOSDrivers, which needs HPE "
+            f"Smart Update Tools (SUT) running in the guest OS to finish installing "
+            f"-- SUT's reported state is \"{sut_state}\", not installed/running. "
+            "Install and start SUT in the guest, or re-run with "
+            "--install-type firmware-offline to flash directly via iLO instead."
+        )
+    return None
 
 
 _EMBEDDED_REF_RE = re.compile(r'\{[^{}]*"name"\s*:\s*"[^"]*"[^{}]*\}')
@@ -1287,6 +1341,7 @@ async def run_ssp_apply(
             kind: str, name: str, resource_uri: str, do_request: Callable[[bool], Any],
             actual_checker: Callable[[], Any] | None = None,
             emit: Callable[[str, dict], Any] = emit,
+            unverified_reason_hint: Callable[[], Any] | None = None,
         ) -> tuple[str | None, dict[str, Any]]:
             """Run *do_request(force_flag)*, polling to completion.
 
@@ -1320,6 +1375,15 @@ async def run_ssp_apply(
             didn't help. Returns ``(status, task)`` where *status* is
             ``None`` (success), ``"failed"``, ``"blocked"``, or
             ``"unverified"``.
+
+            *unverified_reason_hint*, when given, is called (once, only if
+            *verify_timeout_s* is exhausted) to produce a more specific
+            ``unverified_reason`` than the generic default -- e.g. a server
+            profile using the ``FirmwareAndOSDrivers`` install type can never
+            verify while its compute module is powered off (that install type
+            needs an OS boot with HPE Smart Update Tools running in-guest to
+            finish), so the generic "OneView's internal state takes a
+            moment..." message would be actively misleading there.
             """
             force_this = force
             # "Proceed through the non-disruptive validation warning" is a
@@ -1434,7 +1498,20 @@ async def run_ssp_apply(
                     actual = await actual_checker()
                     changed = same_baseline(actual, baseline_uri) if actual is not None else None
                     waited = 0.0
-                    while changed is False and waited < verify_timeout_s:
+                    # If we already know *why* this can never converge (e.g. a
+                    # server profile using FirmwareAndOSDrivers on a powered-off
+                    # compute module -- see _profile_unverified_reason_hint),
+                    # don't burn the full verify_timeout_s polling for nothing;
+                    # fail fast with that specific, actionable reason instead of
+                    # a generic "still activating…" that implies waiting longer
+                    # would help.
+                    known_unverifiable_reason = None
+                    if changed is False and unverified_reason_hint is not None:
+                        known_unverifiable_reason = await unverified_reason_hint()
+                    while (
+                        changed is False and known_unverifiable_reason is None
+                        and waited < verify_timeout_s
+                    ):
                         await sleeper(poll_interval_s)
                         waited += poll_interval_s
                         emit("task-progress", {
@@ -1445,7 +1522,7 @@ async def run_ssp_apply(
                         actual = await actual_checker()
                         changed = same_baseline(actual, baseline_uri) if actual is not None else None
                     if changed is False:
-                        task["unverified_reason"] = (
+                        task["unverified_reason"] = known_unverifiable_reason or (
                             "OneView reported this update as completed, but the actual "
                             "installed baseline did not reflect it when re-checked "
                             "immediately afterward."
@@ -1522,9 +1599,16 @@ async def run_ssp_apply(
             async def _profile_actual_checker(prof=prof) -> str | None:
                 return await _actual_profile_baseline_uri(client, prof)
 
+            async def _profile_unverified_hint(prof=prof) -> str | None:
+                effective_install_type = install_type or prof.get("install_type", "")
+                return await _profile_unverified_reason_hint(
+                    client, prof, effective_install_type,
+                )
+
             status, task = await _apply_with_retry(
                 "server-profile", prof["name"], prof["uri"], _profile_request,
                 actual_checker=_profile_actual_checker, emit=_tagged_emit,
+                unverified_reason_hint=_profile_unverified_hint,
             )
             # kind/name always identify the *requested target*; merge task
             # fields first so they can't be silently overwritten by whatever

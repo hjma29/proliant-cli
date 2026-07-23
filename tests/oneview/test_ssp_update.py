@@ -483,7 +483,7 @@ class FakeClient:
         le_get_response=None, children_tasks=None, blocked_until_forced=False,
         always_blocked=False,
         own_task_errors=None, raw_lis=None, li_firmware=None, task_children=None,
-        hw_firmware=None,
+        hw_firmware=None, hw_objects=None,
     ):
         self.task_state = task_state
         self._profile = profile or PROFILE_RAW
@@ -496,6 +496,9 @@ class FakeClient:
         # fake response for the profile-level actual-installed cross-check
         # (mirrors _li_firmware above, but keyed by server-hardware "/firmware").
         self._hw_firmware = hw_firmware or {}
+        # server-hardware uri (bare, not "/firmware") -> hw object dict, e.g.
+        # {"powerState": "Off"} -- for the unverified-reason-hint's power check.
+        self._hw_objects = hw_objects or {}
         # Optional parentTaskUri -> [child task dict] map, so a test can build a
         # multi-level task tree and prove _task_block_reason descends past the
         # direct children to a grandchild's taskErrors. When None, every
@@ -536,6 +539,8 @@ class FakeClient:
             return self._li_firmware[uri]
         if uri.endswith("/firmware") and uri in self._hw_firmware:
             return self._hw_firmware[uri]
+        if uri in self._hw_objects:
+            return self._hw_objects[uri]
         if uri == "/rest/tasks":
             if self._task_children is not None and params:
                 m = re.search(r"parentTaskUri='([^']*)'", params.get("filter", ""))
@@ -1184,6 +1189,57 @@ async def test_run_execute_profile_reports_unverified_when_completed_but_not_act
     # profile PUT retargets the baseline
     assert fake.put_bodies[0]["firmware"]["firmwareBaselineUri"].endswith("SSP_2026_01")
     assert "plan" in events
+
+
+@pytest.mark.asyncio
+async def test_run_execute_profile_unverified_fails_fast_for_firmware_and_os_drivers_when_powered_off():
+    """FirmwareAndOSDrivers needs an OS boot (with HPE Smart Update Tools
+    running in-guest) to ever finish installing -- if the compute module is
+    powered off, polling for the full verify_timeout_s is pointless, since it
+    can never converge. Verified live: bay7-6820-cna's install stayed
+    "Pending" for 12+ hours straight with the server off, and the CLI kept
+    showing "still activating…" the whole time it *was* actively polling.
+    Must fail fast with a specific, actionable reason instead of silently
+    burning the whole timeout looking "stuck"."""
+    newest = _newest()
+    profile_raw = dict(
+        PROFILE_RAW,
+        firmware=dict(PROFILE_RAW["firmware"], firmwareInstallType="FirmwareAndOSDrivers"),
+    )
+    fake = FakeClient(
+        task_state="Completed",
+        profile=profile_raw,
+        hw_firmware={
+            "/rest/server-hardware/uuid-1/firmware": {
+                "serverSettings": {
+                    "firmwareAndDriversInstallState": {"installState": "Pending"},
+                    "hpSmartUpdateToolStatus": {"installState": "NotInstalled"},
+                },
+                "serverFirmwareSettings": {
+                    "firmwareSettings": {"baselineUri": "/rest/firmware-drivers/SSP_2023_05"},
+                },
+            },
+        },
+        hw_objects={"/rest/server-hardware/uuid-1": {"powerState": "Off"}},
+    )
+    sleeps: list[float] = []
+
+    async def counting_sleep(s):
+        sleeps.append(s)
+
+    res = await run_ssp_apply(
+        lambda: fake, baseline=newest,
+        le_targets=[], profile_targets=[normalize_profile(profile_raw)],
+        execute=True, confirm=lambda plan: True,
+        sleeper=counting_sleep, verify_timeout_s=300,
+    )
+    assert res["status"] == "unverified"
+    reason = res["results"][0]["unverified_reason"]
+    assert "FirmwareAndOSDrivers" in reason
+    assert "powered Off" in reason
+    assert "--install-type firmware-offline" in reason
+    # Fails fast -- never actually polls/waits despite a 300s timeout budget.
+    assert sleeps == []
 
 
 # ── profile_concurrency (wave-based concurrent server-profile updates) ──────────

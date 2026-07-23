@@ -1242,6 +1242,101 @@ async def test_run_execute_profile_unverified_fails_fast_for_firmware_and_os_dri
     assert sleeps == []
 
 
+@pytest.mark.asyncio
+async def test_run_execute_profile_unverified_fails_fast_for_firmware_only_when_powered_off():
+    """FirmwareOnly is *also* an "online" install type -- OneView hands the
+    actual install off to HPE Smart Update Tools running in-guest just like
+    FirmwareAndOSDrivers, it just skips OS drivers. Verified live: re-running
+    bay7-6820-cna's apply with --install-type firmware-only (instead of the
+    default FirmwareAndOSDrivers) hit the exact same "Pending" forever with
+    the server still powered off -- only FirmwareOnlyOfflineMode is truly
+    offline. Must fail fast here too, not just for FirmwareAndOSDrivers."""
+    newest = _newest()
+    profile_raw = dict(
+        PROFILE_RAW,
+        firmware=dict(PROFILE_RAW["firmware"], firmwareInstallType="FirmwareOnly"),
+    )
+    fake = FakeClient(
+        task_state="Completed",
+        profile=profile_raw,
+        hw_firmware={
+            "/rest/server-hardware/uuid-1/firmware": {
+                "serverSettings": {
+                    "firmwareAndDriversInstallState": {"installState": "Pending"},
+                    "hpSmartUpdateToolStatus": {"installState": "NotInstalled"},
+                },
+                "serverFirmwareSettings": {
+                    "firmwareSettings": {"baselineUri": "/rest/firmware-drivers/SSP_2023_05"},
+                },
+            },
+        },
+        hw_objects={"/rest/server-hardware/uuid-1": {"powerState": "Off"}},
+    )
+    sleeps: list[float] = []
+
+    async def counting_sleep(s):
+        sleeps.append(s)
+
+    res = await run_ssp_apply(
+        lambda: fake, baseline=newest,
+        le_targets=[], profile_targets=[normalize_profile(profile_raw)],
+        execute=True, confirm=lambda plan: True,
+        sleeper=counting_sleep, verify_timeout_s=300,
+    )
+    assert res["status"] == "unverified"
+    reason = res["results"][0]["unverified_reason"]
+    assert "FirmwareOnly" in reason
+    assert "powered Off" in reason
+    assert "--install-type firmware-offline" in reason
+    assert sleeps == []
+
+
+@pytest.mark.asyncio
+async def test_run_execute_profile_unverified_still_polls_for_firmware_offline_when_powered_off():
+    """FirmwareOnlyOfflineMode flashes directly via iLO and needs no OS/SUT
+    involvement at all, so a powered-off server is not a known-unverifiable
+    reason for it -- an unverified result here should fall back to the
+    original generic message and the full poll loop, not the new fast-fail
+    (there's nothing install-type-specific to blame it on)."""
+    newest = _newest()
+    profile_raw = dict(
+        PROFILE_RAW,
+        firmware=dict(PROFILE_RAW["firmware"], firmwareInstallType="FirmwareOnlyOfflineMode"),
+    )
+    fake = FakeClient(
+        task_state="Completed",
+        profile=profile_raw,
+        hw_firmware={
+            "/rest/server-hardware/uuid-1/firmware": {
+                "serverSettings": {
+                    "firmwareAndDriversInstallState": {"installState": "Pending"},
+                    "hpSmartUpdateToolStatus": {"installState": "NotInstalled"},
+                },
+                "serverFirmwareSettings": {
+                    "firmwareSettings": {"baselineUri": "/rest/firmware-drivers/SSP_2023_05"},
+                },
+            },
+        },
+        hw_objects={"/rest/server-hardware/uuid-1": {"powerState": "Off"}},
+    )
+    sleeps: list[float] = []
+
+    async def counting_sleep(s):
+        sleeps.append(s)
+
+    res = await run_ssp_apply(
+        lambda: fake, baseline=newest,
+        le_targets=[], profile_targets=[normalize_profile(profile_raw)],
+        execute=True, confirm=lambda plan: True,
+        sleeper=counting_sleep, verify_timeout_s=40, poll_interval_s=20,
+    )
+    assert res["status"] == "unverified"
+    reason = res["results"][0]["unverified_reason"]
+    assert "FirmwareOnlyOfflineMode" not in reason
+    # Falls back to the generic message and polls the full timeout budget.
+    assert sleeps == [20, 20]
+
+
 # ── profile_concurrency (wave-based concurrent server-profile updates) ──────────
 
 @pytest.mark.asyncio

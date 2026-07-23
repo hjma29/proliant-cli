@@ -653,24 +653,34 @@ async def _actual_profile_baseline_uri(
     return settings.get("baselineUri", "") or ""
 
 
+# Both of these are "online" install types: OneView hands the actual install
+# off to HPE Smart Update Tools (SUT) running *inside* the guest OS, so they
+# can only ever finish with the compute module booted. Only
+# "FirmwareOnlyOfflineMode" (--install-type firmware-offline) flashes directly
+# via iLO and needs no OS/SUT involvement at all.
+_ONLINE_INSTALL_TYPES_NEEDING_OS = {"FirmwareAndOSDrivers", "FirmwareOnly"}
+
+
 async def _profile_unverified_reason_hint(
     client: "OneViewClient", profile: dict, install_type: str,
 ) -> str | None:
     """A more specific ``unverified_reason`` for a server profile that never
     converged within ``verify_timeout_s``, when the cause is knowable.
 
-    ``FirmwareAndOSDrivers`` needs the compute module's OS booted (with HPE
-    Smart Update Tools running in-guest) to actually finish an install --
-    verified live: a profile using it on a server left powered off stayed
-    ``installState: "Pending"`` for 12+ hours straight, never converging no
-    matter how long the caller polls. Generic wording ("OneView's internal
-    state takes a moment to catch up") is actively misleading there -- it
-    implies waiting longer would help, when only powering the server on (and
-    having SUT installed/running in the guest) will. Returns ``None`` (let
-    the caller fall back to the generic message) for every other install type,
-    or if the server/SUT state can't be determined.
+    ``FirmwareAndOSDrivers``/``FirmwareOnly`` (every install type except the
+    offline one) need the compute module's OS booted (with HPE Smart Update
+    Tools running in-guest) to actually finish an install -- verified live
+    with *both* types on the same profile: left powered off, it stayed
+    ``installState: "Pending"`` for 12+ hours under ``FirmwareAndOSDrivers``,
+    then again under ``FirmwareOnly`` right after, never converging no matter
+    how long the caller polls. Generic wording ("OneView's internal state
+    takes a moment to catch up") is actively misleading there -- it implies
+    waiting longer would help, when only powering the server on (and having
+    SUT installed/running in the guest) will. Returns ``None`` (let the
+    caller fall back to the generic message) for ``FirmwareOnlyOfflineMode``
+    (needs no OS at all) or if the server/SUT state can't be determined.
     """
-    if install_type != "FirmwareAndOSDrivers":
+    if install_type not in _ONLINE_INSTALL_TYPES_NEEDING_OS:
         return None
     hw_uri = profile.get("server_hardware_uri", "")
     if not hw_uri:
@@ -687,7 +697,7 @@ async def _profile_unverified_reason_hint(
     sut_state = sut_state.strip().lower()
     if power_state == "off":
         return (
-            "This profile's install type is FirmwareAndOSDrivers, which needs the "
+            f"This profile's install type is {install_type}, which needs the "
             "server powered on -- with HPE Smart Update Tools (SUT) running in the "
             "guest OS -- to actually finish installing. The server is currently "
             "powered Off, so this can wait indefinitely without ever converging. "
@@ -697,7 +707,7 @@ async def _profile_unverified_reason_hint(
         )
     if sut_state and sut_state != "installed":
         return (
-            "This profile's install type is FirmwareAndOSDrivers, which needs HPE "
+            f"This profile's install type is {install_type}, which needs HPE "
             f"Smart Update Tools (SUT) running in the guest OS to finish installing "
             f"-- SUT's reported state is \"{sut_state}\", not installed/running. "
             "Install and start SUT in the guest, or re-run with "

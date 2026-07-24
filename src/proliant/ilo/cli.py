@@ -573,7 +573,9 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     from proliant.common.display import set_output_mode, OutputMode
     parser = _build_parser()
-    argcomplete.autocomplete(parser)
+    # See oneview/cli.py's argcomplete.autocomplete call for why
+    # always_complete_options=False.
+    argcomplete.autocomplete(parser, always_complete_options=False)
     args = parser.parse_args(argv)
     if getattr(args, "json_output", False):
         set_output_mode(OutputMode.JSON)

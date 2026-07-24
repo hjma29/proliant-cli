@@ -936,7 +936,9 @@ def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
     try:
         import argcomplete
-        argcomplete.autocomplete(parser)
+        # See oneview/cli.py's argcomplete.autocomplete call for why
+        # always_complete_options=False.
+        argcomplete.autocomplete(parser, always_complete_options=False)
     except ImportError:
         pass
     args = parser.parse_args(argv)

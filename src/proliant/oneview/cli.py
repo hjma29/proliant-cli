@@ -5807,7 +5807,8 @@ def main(argv: list[str] | None = None) -> None:
     try:
         import argcomplete
         parser = _build_parser()
-        argcomplete.autocomplete(parser)
+        # See spp/cli.py for why always_complete_options=False.
+        argcomplete.autocomplete(parser, always_complete_options=False)
     except ImportError:
         parser = _build_parser()
 

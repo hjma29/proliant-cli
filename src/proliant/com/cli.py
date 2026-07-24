@@ -1017,7 +1017,9 @@ def main(argv: Optional[list[str]] = None) -> None:
     argv = list(argv if argv is not None else sys.argv[1:])
 
     parser = _build_parser()
-    argcomplete.autocomplete(parser)
+    # See oneview/cli.py's argcomplete.autocomplete call for why
+    # always_complete_options=False.
+    argcomplete.autocomplete(parser, always_complete_options=False)
     args = parser.parse_args(argv)
 
     if getattr(args, "json_output", False):

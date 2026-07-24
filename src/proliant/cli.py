@@ -1254,7 +1254,9 @@ def main(argv: list[str] | None = None) -> None:
         sub.add_parser("setting", help="View and manage proliant configuration")
         sub.add_parser("setup",   help="Guided menu to view/add/edit/delete inventory.ini entries")
         sub.add_parser("version", help="Show version and check for updates")
-        argcomplete.autocomplete(parser)
+        # See oneview/cli.py's argcomplete.autocomplete call for why
+        # always_complete_options=False.
+        argcomplete.autocomplete(parser, always_complete_options=False)
         return  # autocomplete() exits; reaching here means no completion needed
 
     # ── normal execution ────────────────────────────────────────────────────

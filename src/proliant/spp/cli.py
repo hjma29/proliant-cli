@@ -1090,7 +1090,11 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     parser = _build_parser()
-    argcomplete.autocomplete(parser)
+    # always_complete_options=False: don't suggest -h/--help (or any other
+    # still-available flag) until the user actually types a leading "-".
+    # argcomplete's default (True) mixes flags into every positional
+    # completion unprompted, which is confusing noise on an empty NAME field.
+    argcomplete.autocomplete(parser, always_complete_options=False)
     args = parser.parse_args(args_in)
 
     if not args.cmd:

@@ -263,7 +263,9 @@ examples:
 def main(argv: list[str] | None = None) -> None:
     p = _build_parser()
     import argcomplete
-    argcomplete.autocomplete(p)
+    # See oneview/cli.py's argcomplete.autocomplete call for why
+    # always_complete_options=False.
+    argcomplete.autocomplete(p, always_complete_options=False)
     args = p.parse_args(argv)
 
     if args.cmd == "cli-tree":

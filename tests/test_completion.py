@@ -188,6 +188,24 @@ def test_freeform_values_do_not_fall_back_to_workspace_files():
         assert _complete(line) == []
 
 
+def test_positional_completion_does_not_leak_help_flag():
+    # Regression test: argcomplete's own default (always_complete_options=True)
+    # mixes -h/--help into *every* completion list, even a bare TAB with
+    # nothing typed. Live incident: pressing TAB right after
+    # `servers describe ` returned `-h`, `--help`, and every bay name with
+    # zero shared prefix -- ambiguous enough that repeated Tab-cycling landed
+    # on `-h` and inserted it into the command by mistake. Flags should only
+    # be suggested once the user actually types a leading "-".
+    for line in ("proliant oneview servers describe ", "proliant ilo servers describe "):
+        completions = set(_complete(line))
+        assert "-h" not in completions
+        assert "--help" not in completions
+
+    # Flags must still be offered once a leading "-" is actually typed.
+    completions = set(_complete("proliant oneview servers describe -"))
+    assert {"-h", "--help"} <= completions
+
+
 def test_freeform_value_flags_still_appear_in_flag_name_completion():
     # Regression test: a completer that suppresses file-path fallback for a
     # flag's *value* must not also hide the flag's *name* from `--<TAB>`

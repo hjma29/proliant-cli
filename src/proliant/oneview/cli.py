@@ -724,6 +724,21 @@ def _render_server_describe(info: dict) -> None:
         dot = "[red]●[/red]"
     console.print(f"{dot} [bold]{info.get('name') or '—'}[/bold]")
 
+    # A Critical/Warning status dot alone is easy to miss -- every other
+    # panel below (Hardware/Device Inventory/Utilization) can look
+    # completely normal even while OneView's own health rollup is Critical.
+    # Spell out the status and, when available, *why* (the GUI's Alerts
+    # panel) right up front instead of only coloring a single character.
+    alerts = info.get("alerts") or []
+    if status in ("warning", "critical"):
+        console.print(f"Status: {_status_style(info.get('status'))}")
+    if alerts:
+        alert_style = "red" if status == "critical" else "yellow"
+        console.print(_section_banner("Alert", f"bold {alert_style}"), highlight=False)
+        for a in alerts:
+            console.print(_alert_message_text(a.get("severity"), a.get("description", "")), highlight=False)
+        console.print()
+
     # ── Hardware | Management Processor (side by side, like the GUI) ─────
     hw = Table.grid(padding=(0, 3))
     hw.add_column(style="dim", no_wrap=True)

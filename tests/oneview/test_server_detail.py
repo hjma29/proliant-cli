@@ -13,6 +13,7 @@ from proliant.oneview.server_detail import (
     fmt_state,
     fmt_temperature_f,
     normalize_device_inventory,
+    normalize_server_alerts,
     normalize_utilization,
 )
 
@@ -70,6 +71,31 @@ UTILIZATION = {
         {"metricName": "CpuUtilization", "metricSamples": [[1784682600000, 3]]},
     ],
 }
+
+# ── live-shaped alert fixtures (captured from a real Synergy 480 Gen10, bay 7) ─
+
+ALERTS = [
+    {
+        "severity": "Critical",
+        "description": "The firmware integrity scan detected an anomaly that requires the unknown firmware to be updated.",
+        "associatedResource": {"resourceName": "Enclosure-01, bay 7", "resourceUri": "/rest/server-hardware/server3"},
+    },
+    {
+        "severity": "Warning",
+        "description": "Overall security status of the system is at risk.",
+        "associatedResource": {"resourceName": "Enclosure-01, bay 7", "resourceUri": "/rest/server-hardware/server3"},
+    },
+    {
+        "severity": "Critical",
+        "description": "An unrelated alert on a different server.",
+        "associatedResource": {"resourceName": "Enclosure-01, bay 1", "resourceUri": "/rest/server-hardware/server1"},
+    },
+    {
+        "severity": "Info",
+        "description": "Informational alert that should never be surfaced.",
+        "associatedResource": {"resourceName": "Enclosure-01, bay 7", "resourceUri": "/rest/server-hardware/server3"},
+    },
+]
 
 
 # ── formatting helpers ────────────────────────────────────────────────────────
@@ -158,10 +184,31 @@ def test_normalize_utilization_missing_metrics():
     }
 
 
+def test_normalize_server_alerts_filters_by_resource_uri_and_severity():
+    alerts = normalize_server_alerts(ALERTS, "/rest/server-hardware/server3")
+    assert alerts == [
+        {"severity": "critical",
+         "description": "The firmware integrity scan detected an anomaly that requires the unknown firmware to be updated."},
+        {"severity": "warning",
+         "description": "Overall security status of the system is at risk."},
+    ]
+
+
+def test_normalize_server_alerts_critical_sorts_first():
+    reordered = [ALERTS[1], ALERTS[0]]  # warning listed before critical in the raw payload
+    alerts = normalize_server_alerts(reordered, "/rest/server-hardware/server3")
+    assert [a["severity"] for a in alerts] == ["critical", "warning"]
+
+
+def test_normalize_server_alerts_empty_or_no_match():
+    assert normalize_server_alerts(None, "/rest/server-hardware/server3") == []
+    assert normalize_server_alerts(ALERTS, "/rest/server-hardware/does-not-exist") == []
+
+
 # ── build_server_detail ───────────────────────────────────────────────────────
 
 def test_build_server_detail_assembles_model():
-    info = build_server_detail(RAW_SERVER, "aci-FM-host1", "SY 480 Gen10 1", FIRMWARE, UTILIZATION)
+    info = build_server_detail(RAW_SERVER, "aci-FM-host1", "SY 480 Gen10 1", FIRMWARE, UTILIZATION, ALERTS)
     assert info["name"] == "Enclosure-01, bay 3"
     assert info["state_display"] == "Profile Applied"
     assert info["profile"] == "aci-FM-host1"
@@ -172,6 +219,13 @@ def test_build_server_detail_assembles_model():
     assert len(info["device_inventory"]) == 3
     assert info["utilization"]["cpu_cores_total"] == 24
     assert info["utilization"]["temperature_f"] == 63
+    assert len(info["alerts"]) == 2
+    assert info["alerts"][0]["severity"] == "critical"
+
+
+def test_build_server_detail_defaults_to_no_alerts():
+    info = build_server_detail(RAW_SERVER, "aci-FM-host1", "SY 480 Gen10 1", FIRMWARE, UTILIZATION)
+    assert info["alerts"] == []
 
 
 def test_build_server_detail_handles_unmanaged_server_with_no_profile():
@@ -183,20 +237,26 @@ def test_build_server_detail_handles_unmanaged_server_with_no_profile():
     assert info["state_display"] == "No Profile Applied"
     assert info["device_inventory"] == []
     assert info["utilization"] == {"cpu_percent": None, "power_w": None, "temperature_f": None}
+    assert info["alerts"] == []
 
 
 # ── fetch (fake client) ───────────────────────────────────────────────────────
 
 class _FakeClient:
-    def __init__(self, *, firmware_raises=False, utilization_raises=False):
+    def __init__(self, *, firmware_raises=False, utilization_raises=False, alerts_raise=False):
         self.firmware_raises = firmware_raises
         self.utilization_raises = utilization_raises
+        self.alerts_raise = alerts_raise
         self.calls: list[str] = []
 
-    async def get_all(self, uri):
+    async def get_all(self, uri, **extra_params):
         self.calls.append(uri)
         if uri == "/rest/server-hardware":
             return [RAW_SERVER]
+        if uri == "/rest/alerts":
+            if self.alerts_raise:
+                raise RuntimeError("alerts endpoint unavailable")
+            return ALERTS
         return []
 
     async def get(self, uri, params=None):
@@ -223,6 +283,16 @@ async def test_fetch_server_detail_assembles_model():
     assert info["hardware_type"] == "SY 480 Gen10 1"
     assert len(info["device_inventory"]) == 3
     assert info["utilization"]["power_w"] == 67
+    assert len(info["alerts"]) == 2
+    assert info["alerts"][0]["severity"] == "critical"
+
+
+@pytest.mark.asyncio
+async def test_fetch_server_detail_tolerates_alerts_endpoint_failure():
+    info = await fetch_server_detail(_FakeClient(alerts_raise=True), "Enclosure-01, bay 3")
+    assert info["alerts"] == []
+    # core hardware info still present even without alert data
+    assert info["profile"] == "aci-FM-host1"
 
 
 @pytest.mark.asyncio

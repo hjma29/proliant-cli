@@ -11,6 +11,8 @@ Utilization.
   GET /rest/server-profiles/{id}            -> resolved "Server profile" name
   GET /rest/server-hardware/{id}/firmware   -> Device Inventory table
   GET /rest/server-hardware/{id}/utilization -> CPU / Power / Temperature gauges
+  GET /rest/alerts?filter=alertState='Active' -> active alerts for this resource,
+                                                  matched by associatedResource.resourceUri
 
 The formatting helpers are pure functions (no I/O) so they're unit-tested
 directly; ``fetch_server_detail`` is the only coroutine and is exercised with
@@ -21,6 +23,8 @@ from __future__ import annotations
 
 import re
 from typing import TYPE_CHECKING, Any
+
+from proliant.oneview.activity import clean_refs
 
 if TYPE_CHECKING:
     from proliant.oneview.client import OneViewClient
@@ -116,6 +120,33 @@ def normalize_device_inventory(firmware_payload: dict[str, Any] | None) -> list[
     return devices
 
 
+def normalize_server_alerts(alert_members: list[dict[str, Any]] | None, resource_uri: str) -> list[dict[str, str]]:
+    """Filter ``/rest/alerts`` members down to the ones for this one server
+    hardware resource, in the same {severity, description} shape the GUI's
+    Alerts panel and this CLI's other alert listings (upgrade readiness,
+    server-profile describe) use. Critical alerts sort first.
+
+    ``servers describe`` previously only colored its status dot from the raw
+    ``status`` field with no explanation of *why* -- a server can show
+    "Critical" with every other panel (Hardware/Device Inventory/Utilization)
+    looking completely normal, which reads as a false negative unless the
+    underlying alert text is surfaced too.
+    """
+    items: list[dict[str, str]] = []
+    for a in alert_members or []:
+        sev = str(a.get("severity", "")).lower()
+        if sev not in ("critical", "warning"):
+            continue
+        if (a.get("associatedResource") or {}).get("resourceUri") != resource_uri:
+            continue
+        items.append({
+            "severity": sev,
+            "description": clean_refs(a.get("description", "")),
+        })
+    items.sort(key=lambda it: it["severity"] != "critical")
+    return items
+
+
 def normalize_utilization(utilization_payload: dict[str, Any] | None) -> dict[str, Any]:
     """Extract the newest sample of each gauge the Overview page shows."""
     metrics = {m.get("metricName"): m for m in (utilization_payload or {}).get("metricList") or []}
@@ -137,6 +168,7 @@ def build_server_detail(
     hardware_type_name: str | None,
     firmware_payload: dict[str, Any] | None,
     utilization_payload: dict[str, Any] | None,
+    alert_members: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Assemble the normalized server-describe model from the raw payloads."""
     mp_host_info = raw.get("mpHostInfo") or {}
@@ -172,6 +204,7 @@ def build_server_detail(
         "mp_ip_addresses": fmt_ip_addresses(mp_host_info),
         "device_inventory": normalize_device_inventory(firmware_payload),
         "utilization": util,
+        "alerts": normalize_server_alerts(alert_members, raw.get("uri", "")),
     }
 
 
@@ -212,4 +245,11 @@ async def fetch_server_detail(client: "OneViewClient", name: str) -> dict[str, A
     except Exception:  # noqa: BLE001 — utilization is best-effort/optional
         utilization_payload = None
 
-    return build_server_detail(raw, profile_name, hardware_type_name, firmware_payload, utilization_payload)
+    try:
+        alert_members = await client.get_all("/rest/alerts", filter="alertState='Active'")
+    except Exception:  # noqa: BLE001 — alerts are advisory; never fail describe on this
+        alert_members = None
+
+    return build_server_detail(
+        raw, profile_name, hardware_type_name, firmware_payload, utilization_payload, alert_members,
+    )

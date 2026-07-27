@@ -27,3 +27,8 @@ def test_parse_server_uses_mp_host_info_ip_and_compacts_synergy_model():
 
     assert result["model"] == "480 Gen10"
     assert result["ilo_ip"] == "10.16.41.9"
+
+
+def test_parse_server_extracts_status():
+    result = parse_server({"name": "Enclosure-01, bay 1", "status": "Critical"})
+    assert result["status"] == "Critical"

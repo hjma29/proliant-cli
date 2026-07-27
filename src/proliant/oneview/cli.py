@@ -22,6 +22,7 @@ import os
 import re
 import sys
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Any
 
 
@@ -34,7 +35,7 @@ from proliant.common.completers import comma_sep_completer, suppress_file_comple
 from proliant.common.display import get_console, get_output_mode, make_table as _make_table, OutputMode, print_json, print_memory_report, set_output_mode
 from proliant.common.runner import run_sync
 
-_SERVER_FIELDS = ("name", "model", "serial", "ilo", "ilo_ip", "power", "state", "profile")
+_SERVER_FIELDS = ("name", "status", "model", "serial", "ilo", "ilo_ip", "power", "state", "profile")
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -44,11 +45,44 @@ def make_table(title: str, *columns: tuple[str, dict], box_style=box.SIMPLE_HEAD
     return _make_table(title, *columns, box_style=box_style, **kwargs)
 
 
+_ENC_BAY_RE = re.compile(r"^Enclosure[-_ ]?(\d+),\s*bay\s*(\d+)\s*$", re.IGNORECASE)
+
+
 def _short_server_name(name: str) -> str:
-    match = re.match(r"^Enclosure[-_ ]?(\d+),\s*bay\s*(\d+)\s*$", name or "", re.IGNORECASE)
+    match = _ENC_BAY_RE.match(name or "")
     if match:
         return f"Enc-{match.group(1)} bay {match.group(2)}"
     return (name or "").replace("Enclosure", "Enc")
+
+
+def _server_sort_key(name: str) -> tuple:
+    """Sort 'Enclosure-N, bay M' names by enclosure then bay number (not
+    alphabetically -- 'bay 10' would otherwise sort before 'bay 2').
+    Anything not matching that shape sorts after, alphabetically."""
+    match = _ENC_BAY_RE.match(name or "")
+    if match:
+        return (0, int(match.group(1)), int(match.group(2)), name or "")
+    return (1, 0, 0, name or "")
+
+
+_FW_VERSION_DATE_RE = re.compile(r"^(\S+)\s+([A-Za-z]{3})\s+(\d{1,2})\s+(\d{4})$")
+
+
+def _format_fw_version(version: str) -> str:
+    """Reformat a raw OneView firmware version string like '3.17 Dec 02
+    2025' into '3.17 (2025.12.02)'. OneView reports the release date as a
+    verbose English string; compact it to sortable YYYY.MM.DD instead."""
+    if not version:
+        return version
+    match = _FW_VERSION_DATE_RE.match(version.strip())
+    if not match:
+        return version
+    ver, mon, day, year = match.groups()
+    try:
+        dt = datetime.strptime(f"{mon} {day} {year}", "%b %d %Y")
+    except ValueError:
+        return version
+    return f"{ver} ({dt.strftime('%Y.%m.%d')})"
 
 
 def _load_client(name: str | None = None):
@@ -641,6 +675,11 @@ async def _async_servers_list(fields: list[str] | None) -> None:
         get_console().print("[yellow]No servers found in OneView.[/yellow]")
         return
 
+    # Sort by enclosure + bay number (not alphabetically -- "bay 10" would
+    # otherwise land before "bay 2") so the list reads top-to-bottom the way
+    # the physical enclosure is wired, matching the GUI's default order.
+    servers = sorted(servers, key=lambda s: _server_sort_key(s["name"]))
+
     # ── JSON early return ─────────────────────────────────────────────────────
     if get_output_mode() == OutputMode.JSON:
         print_json(servers)
@@ -651,6 +690,7 @@ async def _async_servers_list(fields: list[str] | None) -> None:
 
     col_map = {
         "name":    ("Name",        dict(min_width=12, no_wrap=True)),
+        "status":  ("Status",      dict(justify="center", no_wrap=True)),
         "model":   ("Model",       dict(min_width=10, no_wrap=True)),
         "serial":  ("Serial",      dict(no_wrap=True)),
         "ilo":     ("iLO",         dict(no_wrap=True)),
@@ -670,12 +710,15 @@ async def _async_servers_list(fields: list[str] | None) -> None:
         for f in show:
             if f == "name":
                 row.append(_short_server_name(s["name"]))
+            elif f == "status":
+                row.append(_status_style(s.get("status")) or "OK")
             elif f == "model":
                 row.append(s["model"])
             elif f == "serial":
                 row.append(s["serial"])
             elif f == "ilo":
-                row.append(f"{s['ilo_model']} v{s['ilo_version']}" if s["ilo_model"] else "")
+                ilo_version = _format_fw_version(s["ilo_version"])
+                row.append(f"{s['ilo_model']} v{ilo_version}" if s["ilo_model"] else "")
             elif f == "ilo_ip":
                 row.append(s["ilo_ip"])
             elif f == "power":
@@ -759,7 +802,7 @@ def _render_server_describe(info: dict) -> None:
     mp = Table.grid(padding=(0, 3))
     mp.add_column(style="dim", no_wrap=True)
     mp.add_column()
-    mp_version = info.get("mp_firmware_version") or "—"
+    mp_version = _format_fw_version(info.get("mp_firmware_version") or "") or "—"
     mp.add_row("iLO version", f"{mp_version} [dim]({info.get('mp_model')})[/dim]" if info.get("mp_model") else mp_version)
     mp.add_row("Host name", info.get("mp_host_name") or "—")
     ips = info.get("mp_ip_addresses") or []

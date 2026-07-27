@@ -53,6 +53,7 @@ def parse_server(raw: dict) -> dict:
         "ilo_ip":          _mp_ip(raw),
         "power":           raw.get("powerState", ""),
         "state":           raw.get("state", ""),
+        "status":          raw.get("status", ""),
         "profile_uri":     raw.get("serverProfileUri", ""),
         "profile":         "",  # resolved after profile name lookup
         "uri":             raw.get("uri", ""),

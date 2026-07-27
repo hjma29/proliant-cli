@@ -18,6 +18,8 @@ import asyncio
 import re
 from typing import TYPE_CHECKING
 
+from proliant.oneview.targets import normalize_name
+
 if TYPE_CHECKING:
     from proliant.oneview.client import OneViewClient
 
@@ -560,7 +562,7 @@ async def describe_interconnect(client: "OneViewClient", name: str) -> dict:
     GUI's interconnect detail page (General / Hardware / Interconnect Link
     Ports / Uplink Ports / Downlink Ports / Utilization / Remote Support)."""
     raw_ics = await client.get_all("/rest/interconnects")
-    matched = [ic for ic in raw_ics if ic.get("name", "").lower() == name.lower()]
+    matched = [ic for ic in raw_ics if normalize_name(ic.get("name", "")) == normalize_name(name)]
     if not matched:
         known = ", ".join(sorted(ic.get("name", "") for ic in raw_ics))
         raise ValueError(f"Interconnect '{name}' not found. Known: {known}")

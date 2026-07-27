@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from proliant.oneview.servers import parse_server
+from proliant.oneview.servers import get_server, parse_server
 
 
 def test_parse_server_uses_mp_host_info_ip_and_compacts_synergy_model():
@@ -32,3 +32,17 @@ def test_parse_server_uses_mp_host_info_ip_and_compacts_synergy_model():
 def test_parse_server_extracts_status():
     result = parse_server({"name": "Enclosure-01, bay 1", "status": "Critical"})
     assert result["status"] == "Critical"
+
+
+class _FakeClient:
+    def __init__(self, items: list[dict]):
+        self._items = items
+
+    async def get_all(self, _path):
+        return self._items
+
+
+async def test_get_server_tolerates_missing_space_after_comma():
+    client = _FakeClient([{"name": "Enclosure-01, bay 7", "uri": "/rest/server-hardware/7"}])
+    server = await get_server(client, "Enclosure-01,bay 7")
+    assert server["uri"] == "/rest/server-hardware/7"

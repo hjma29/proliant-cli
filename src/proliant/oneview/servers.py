@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from proliant.oneview.targets import normalize_name
+
 if TYPE_CHECKING:
     from proliant.oneview.client import OneViewClient
 
@@ -86,7 +88,7 @@ async def list_servers(client: "OneViewClient") -> list[dict]:
 async def get_server(client: "OneViewClient", name: str) -> dict:
     """Return a single server by name. Raises ValueError if not found."""
     servers = await list_servers(client)
-    matched = [s for s in servers if s["name"].lower() == name.lower()]
+    matched = [s for s in servers if normalize_name(s["name"]) == normalize_name(name)]
     if not matched:
         known = ", ".join(s["name"] for s in servers)
         raise ValueError(f"Server '{name}' not found. Known servers: {known}")

@@ -25,6 +25,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from proliant.oneview.activity import clean_refs
+from proliant.oneview.targets import normalize_name
 
 if TYPE_CHECKING:
     from proliant.oneview.client import OneViewClient
@@ -213,7 +214,7 @@ def build_server_detail(
 async def fetch_server_detail(client: "OneViewClient", name: str) -> dict[str, Any]:
     """Fetch + normalize the server-describe model over the OneView REST API."""
     servers = await client.get_all("/rest/server-hardware")
-    matched = [s for s in servers if (s.get("name") or "").lower() == name.lower()]
+    matched = [s for s in servers if normalize_name(s.get("name") or "") == normalize_name(name)]
     if not matched:
         known = ", ".join(s.get("name", "") for s in servers)
         raise ValueError(f"Server '{name}' not found. Known servers: {known}")

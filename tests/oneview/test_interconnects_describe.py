@@ -272,6 +272,14 @@ async def test_describe_interconnect_general_and_hardware():
 
 
 @pytest.mark.asyncio
+async def test_describe_interconnect_tolerates_missing_space_after_comma():
+    client = FakeClient(_base_collections(), _singles())
+    d = await ic.describe_interconnect(client, "Enclosure-01,interconnect 6")
+
+    assert d["name"] == "Enclosure-01, interconnect 6"
+
+
+@pytest.mark.asyncio
 async def test_describe_interconnect_hides_split_uplink_parent_shows_unpopulated():
     client = FakeClient(_base_collections(), _singles())
     d = await ic.describe_interconnect(client, "Enclosure-01, interconnect 6")

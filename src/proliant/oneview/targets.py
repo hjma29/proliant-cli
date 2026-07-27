@@ -9,6 +9,7 @@ and interconnects by name or by enclosure/bay location. Used by both
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -20,6 +21,24 @@ def as_int(value: object, default: int = 0) -> int:
         return int(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return default
+
+
+_WHITESPACE_RE = re.compile(r"\s+")
+_COMMA_SPACING_RE = re.compile(r",\s*")
+
+
+def normalize_name(name: str) -> str:
+    """Normalize a resource name for case/whitespace-insensitive matching.
+
+    OneView-generated names like "Enclosure-01, bay 7" or "Enclosure-01,
+    Interconnect 3" are easy to mistype without the space after the comma
+    (shell tab-completion also tends to nudge users that way). Collapse
+    whitespace runs and normalize comma spacing before lowercasing, so
+    "Enclosure-01,bay 7" still matches "Enclosure-01, bay 7".
+    """
+    s = _WHITESPACE_RE.sub(" ", (name or "").strip())
+    s = _COMMA_SPACING_RE.sub(", ", s)
+    return s.lower()
 
 
 def known_names(items: list[dict[str, Any]]) -> str:
@@ -64,7 +83,7 @@ def target_summary(raw: dict[str, Any], fallback: str = "") -> dict[str, Any]:
 
 async def get_enclosure(client: "OneViewClient", name: str) -> dict[str, Any]:
     enclosures = await client.get_all("/rest/enclosures")
-    matched = [e for e in enclosures if str(e.get("name", "")).lower() == name.lower()]
+    matched = [e for e in enclosures if normalize_name(str(e.get("name", ""))) == normalize_name(name)]
     if not matched:
         known = known_names(enclosures)
         raise ValueError(f"Enclosure '{name}' not found. Known enclosures: {known}")
@@ -73,7 +92,7 @@ async def get_enclosure(client: "OneViewClient", name: str) -> dict[str, Any]:
 
 async def get_server(client: "OneViewClient", name: str) -> dict[str, Any]:
     servers = await client.get_all("/rest/server-hardware")
-    matched = [s for s in servers if str(s.get("name", "")).lower() == name.lower()]
+    matched = [s for s in servers if normalize_name(str(s.get("name", ""))) == normalize_name(name)]
     if not matched:
         known = known_names(servers)
         raise ValueError(f"Server '{name}' not found. Known servers: {known}")
@@ -94,7 +113,7 @@ async def get_server_by_location(client: "OneViewClient", enclosure_name: str, b
 
 async def get_profile_server(client: "OneViewClient", name: str) -> tuple[dict[str, Any], dict[str, Any]]:
     profiles = await client.get_all("/rest/server-profiles")
-    matched = [p for p in profiles if str(p.get("name", "")).lower() == name.lower()]
+    matched = [p for p in profiles if normalize_name(str(p.get("name", ""))) == normalize_name(name)]
     if not matched:
         known = known_names(profiles)
         raise ValueError(f"Server profile '{name}' not found. Known profiles: {known}")
@@ -112,7 +131,7 @@ async def get_profile_server(client: "OneViewClient", name: str) -> tuple[dict[s
 
 async def get_interconnect(client: "OneViewClient", name: str) -> dict[str, Any]:
     interconnects = await client.get_all("/rest/interconnects")
-    matched = [ic for ic in interconnects if str(ic.get("name", "")).lower() == name.lower()]
+    matched = [ic for ic in interconnects if normalize_name(str(ic.get("name", ""))) == normalize_name(name)]
     if not matched:
         known = known_names(interconnects)
         raise ValueError(f"Interconnect '{name}' not found. Known interconnects: {known}")

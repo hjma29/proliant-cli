@@ -302,6 +302,12 @@ async def test_fetch_server_detail_is_case_insensitive():
 
 
 @pytest.mark.asyncio
+async def test_fetch_server_detail_tolerates_missing_space_after_comma():
+    info = await fetch_server_detail(_FakeClient(), "Enclosure-01,bay 3")
+    assert info["name"] == "Enclosure-01, bay 3"
+
+
+@pytest.mark.asyncio
 async def test_fetch_server_detail_not_found_raises():
     with pytest.raises(ValueError, match="not found"):
         await fetch_server_detail(_FakeClient(), "Enclosure-01, bay 99")

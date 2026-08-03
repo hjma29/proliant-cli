@@ -10,6 +10,7 @@ from proliant.common.display import (
     get_output_mode,
     make_table,
     print_json,
+    print_memory_report,
     set_output_mode,
 )
 from rich.console import Console
@@ -187,3 +188,43 @@ class TestPrintJson:
         captured = capsys.readouterr()
         assert captured.out.strip()
         assert not captured.err.strip()
+
+
+class TestPrintMemoryReport:
+    def _row(self, hpe_pn="P03051-091", vendor_pn="HMA82GR7CJR4N-WM", servers=None):
+        return {
+            "hpe_pn": hpe_pn,
+            "vendor_pn": vendor_pn,
+            "vendor": "SK Hynix",
+            "capacity_gb": 16,
+            "type": "RDIMM",
+            "speed_mts": 2933,
+            "count": 2,
+            "servers": servers or {"host1", "host2"},
+        }
+
+    def test_renders_vendor_part_number_column(self, monkeypatch, capsys):
+        import proliant.common.display as disp
+        wide_console = Console(width=200, force_terminal=False, no_color=True)
+        monkeypatch.setattr(disp, "get_console", lambda: wide_console)
+
+        print_memory_report([self._row()])
+        out = capsys.readouterr().out
+        assert "Vendor P/N" in out
+        assert "HMA82GR7CJR4N-WM" in out
+
+    def test_missing_vendor_pn_renders_as_dash(self, monkeypatch, capsys):
+        import proliant.common.display as disp
+        wide_console = Console(width=200, force_terminal=False, no_color=True)
+        monkeypatch.setattr(disp, "get_console", lambda: wide_console)
+
+        print_memory_report([self._row(vendor_pn="")])
+        out = capsys.readouterr().out
+        assert "—" in out
+
+    def test_json_mode_includes_vendor_pn_field(self, capsys):
+        set_output_mode(OutputMode.JSON)
+        print_memory_report([self._row()])
+        captured = capsys.readouterr()
+        parsed = json.loads(captured.out)
+        assert parsed[0]["vendor_pn"] == "HMA82GR7CJR4N-WM"

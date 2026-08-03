@@ -37,6 +37,7 @@ async def _get_memory_inventory(client: "COMClient", server: dict) -> list[dict]
             result.append({
                 "server":     name,
                 "hpe_pn":     oem.get("PartNumber", "Unknown"),
+                "vendor_pn":  (d.get("PartNumber") or "").strip(),
                 "vendor":     oem.get("VendorName", "") or d.get("Manufacturer", ""),
                 "capacity_gb": cap_mib // 1024,
                 "type":       d.get("BaseModuleType", ""),
@@ -137,16 +138,21 @@ def aggregate_gpus_by_model(gpus: list[dict]) -> list[dict]:
 
 def aggregate_by_part_number(dimms: list[dict]) -> list[dict]:
     """
-    Group DIMMs by HPE part number.
+    Group DIMMs by (HPE part number, vendor part number).
+    Grouping also considers the vendor part number so that DIMMs whose HPE
+    part number is missing/"Unknown" (e.g. a server with broken inventory
+    collection never got HPE-branded) don't get incorrectly merged together
+    if they're actually different physical modules.
     Returns rows sorted by total count desc.
-    Each row: hpe_pn, vendor, capacity_gb, type, speed_mts, count, servers (set)
+    Each row: hpe_pn, vendor_pn, vendor, capacity_gb, type, speed_mts, count, servers (set)
     """
-    groups: dict[str, dict] = {}
+    groups: dict[tuple, dict] = {}
     for d in dimms:
-        key = d["hpe_pn"]
+        key = (d["hpe_pn"], d.get("vendor_pn", ""))
         if key not in groups:
             groups[key] = {
                 "hpe_pn":      d["hpe_pn"],
+                "vendor_pn":   d.get("vendor_pn", ""),
                 "vendor":      d["vendor"],
                 "capacity_gb": d["capacity_gb"],
                 "type":        d["type"],

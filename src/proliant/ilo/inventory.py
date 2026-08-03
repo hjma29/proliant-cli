@@ -671,6 +671,7 @@ async def fetch_memory_report_data(client: ILOClient) -> list[dict]:
         hpe_pn = (oem.get("PartNumber") or dimm.get("PartNumber") or "Unknown").strip() or "Unknown"
         result.append({
             "hpe_pn":      hpe_pn,
+            "vendor_pn":   (dimm.get("PartNumber") or "").strip(),
             "vendor":      oem.get("VendorName") or dimm.get("Manufacturer", ""),
             "capacity_gb": cap_mib // 1024,
             "type":        dimm.get("BaseModuleType", ""),

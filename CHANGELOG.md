@@ -4,6 +4,16 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ---
 
+## v1.1.1 — 2026-08-03
+
+### New Features
+- `proliant ilo/com/oneview reports memory`: added a **Vendor P/N** column showing each DIMM's raw manufacturer part number (e.g. `HMA82GR7CJR4N-WM`), alongside the existing HPE-branded part number — useful when a DIMM's HPE part number shows as `Unknown` (e.g. on a server with broken inventory collection that was never HPE-branded), since the vendor's own part number is still available and lets you identify the actual module. Rows are now also grouped by the *combination* of HPE + vendor part number, so distinct physical modules that both happen to show `Unknown` for their HPE part number are no longer merged into a single misleading row.
+
+### Bug Fixes
+- `proliant oneview reports memory`: the "Servers" column now shows each server's assigned **server profile name** first, falling back to the OneView hardware bay label (e.g. `Enclosure-01, bay 6`) only when no profile is assigned — confirmed live: one server showed as a literal `localhost` (its OS was never given a real hostname beyond the install default) and another showed a raw bay label instead of its actual profile name `bay7-6820-cna`. The report previously used each server's own OS-reported `serverName`, which can be blank or a meaningless default and doesn't match how the OneView GUI or the rest of the CLI identify a server.
+
+---
+
 ## v1.1.0 — 2026-08-02
 
 ### New Features

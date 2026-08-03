@@ -99,13 +99,26 @@ _SKIP_STATUSES = {"NotPresent", "Unknown", ""}
 
 
 async def get_fleet_memory(client: "OneViewClient") -> list[dict]:
-    """Return all populated DIMMs across all OneView-managed servers."""
+    """Return all populated DIMMs across all OneView-managed servers.
+
+    Each DIMM's ``server`` label is the assigned server profile's name (what
+    an operator actually named the workload), falling back to the OneView
+    hardware bay name (e.g. "Enclosure-01, bay 6") when no profile is
+    assigned. The server's own OS-reported ``serverName`` is NOT used here --
+    it's frequently blank or a meaningless OS-install default (``localhost``)
+    for servers that were never given a real hostname, which is confusing
+    next to real profile names.
+    """
     import asyncio
 
-    servers = await client.get_all("/rest/server-hardware")
+    servers, profiles = await asyncio.gather(
+        client.get_all("/rest/server-hardware"),
+        client.get_all("/rest/server-profiles"),
+    )
+    profile_map = {p["uri"]: p.get("name", "") for p in profiles}
 
     async def _get_server_memory(s: dict) -> list[dict]:
-        name = s.get("serverName") or s.get("name", "")
+        name = profile_map.get(s.get("serverProfileUri", "")) or s.get("name", "")
         try:
             mem_data = await client.get(s["uri"] + "/memory")
         except Exception:
@@ -123,6 +136,7 @@ async def get_fleet_memory(client: "OneViewClient") -> list[dict]:
             result.append({
                 "server":      name,
                 "hpe_pn":      hpe_pn,
+                "vendor_pn":   (dimm.get("PartNumber") or "").strip(),
                 "vendor":      oem.get("VendorName") or dimm.get("Manufacturer", ""),
                 "capacity_gb": cap_mib // 1024,
                 "type":        dimm.get("BaseModuleType", ""),

@@ -142,6 +142,7 @@ def print_memory_report(rows: list[dict], source: str = "") -> None:
     table = make_table(
         title,
         ("HPE Part Number", {"min_width": 14, "no_wrap": True}),
+        ("Vendor P/N",      {"min_width": 14, "no_wrap": True, "style": "dim"}),
         ("Vendor",          {"min_width": 12, "no_wrap": True}),
         ("Capacity",        {"justify": "right", "no_wrap": True}),
         ("Type",            {"no_wrap": True}),
@@ -161,7 +162,7 @@ def print_memory_report(rows: list[dict], source: str = "") -> None:
             else str(len(r.get("servers", [])))
         )
         table.add_row(
-            r["hpe_pn"], r["vendor"], cap, r["type"], speed,
+            r["hpe_pn"], r.get("vendor_pn") or "—", r["vendor"], cap, r["type"], speed,
             str(r["count"]), total_cap, servers_str,
         )
 

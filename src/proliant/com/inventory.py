@@ -144,8 +144,13 @@ def aggregate_by_part_number(dimms: list[dict]) -> list[dict]:
     collection never got HPE-branded) don't get incorrectly merged together
     if they're actually different physical modules.
     Returns rows sorted by total count desc.
-    Each row: hpe_pn, vendor_pn, vendor, capacity_gb, type, speed_mts, count, servers (set)
+    Each row: hpe_pn, vendor_pn, vendor, capacity_gb, type, speed_mts, count,
+    servers (set), attention_statuses (set of raw DIMMStatus values flagged
+    as a problem, see common.memory_health), attention_servers (set of
+    servers holding at least one flagged DIMM in this group).
     """
+    from proliant.common.memory_health import is_attention_status
+
     groups: dict[tuple, dict] = {}
     for d in dimms:
         key = (d["hpe_pn"], d.get("vendor_pn", ""))
@@ -159,9 +164,15 @@ def aggregate_by_part_number(dimms: list[dict]) -> list[dict]:
                 "speed_mts":   d["speed_mts"],
                 "count":       0,
                 "servers":     set(),
+                "attention_statuses": set(),
+                "attention_servers":  set(),
             }
         groups[key]["count"] += 1
         groups[key]["servers"].add(d["server"])
+        status = d.get("status", "")
+        if is_attention_status(status):
+            groups[key]["attention_statuses"].add(status)
+            groups[key]["attention_servers"].add(d["server"])
 
     rows = list(groups.values())
     rows.sort(key=lambda r: r["count"], reverse=True)

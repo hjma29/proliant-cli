@@ -33,6 +33,10 @@ async def run_describe(host: dict) -> None:
                 cpus    = await inventory.fetch_cpu_report_data(c)
                 gpus    = await inventory.fetch_gpu_report_data(c)
                 dimms   = await inventory.fetch_memory_population(c)
+                try:
+                    mem_events = await inventory.fetch_memory_iml_events(c)
+                except Exception:  # intentional: IML is best-effort, never block describe
+                    mem_events = []
     except ServerDownOrUnreachableError as exc:
         console.print(f"[red]{host['name']} unreachable: {exc}[/red]")
         sys.exit(1)
@@ -184,9 +188,12 @@ async def run_describe(host: dict) -> None:
 
     # ── Memory population map ─────────────────────────────────────────────────
     if dimms:
+        from proliant.common.memory_health import dimm_status_label, is_attention_status
+
         populated  = [d for d in dimms if d["present"]]
         empty_cnt  = sum(1 for d in dimms if not d["present"])
         total_gb   = sum(d["cap_gb"] for d in populated)
+        attention_cnt = sum(1 for d in populated if is_attention_status(d.get("status", "")))
         console.print("[bold]Memory[/bold]")
         mem_t = Table(box=rich_box.SIMPLE, show_header=True, header_style="bold cyan", padding=(0, 2))
         mem_t.add_column("Slot",     no_wrap=True)
@@ -194,18 +201,44 @@ async def run_describe(host: dict) -> None:
         mem_t.add_column("Type",     no_wrap=True)
         mem_t.add_column("Speed",    justify="right")
         mem_t.add_column("Part Number", style="dim")
+        mem_t.add_column("Status")
         for d in dimms:
             if d["present"]:
                 speed_s = f"{d['speed']} MT/s" if d["speed"] else "—"
                 cap_s   = f"{d['cap_gb']} GB"
-                mem_t.add_row(d["slot"], cap_s, d["type"] or "—", speed_s, d["part"] or "—")
+                mem_t.add_row(
+                    d["slot"], cap_s, d["type"] or "—", speed_s, d["part"] or "—",
+                    dimm_status_label(d.get("status", "")),
+                )
             else:
-                mem_t.add_row(f"[dim]{d['slot']}[/dim]", "[dim]empty[/dim]", "", "", "")
+                mem_t.add_row(f"[dim]{d['slot']}[/dim]", "[dim]empty[/dim]", "", "", "", "")
         console.print(mem_t)
-        console.print(
+        summary = (
             f"  [dim]{len(populated)} DIMMs populated, {empty_cnt} empty"
             f" — {total_gb} GB total[/dim]"
         )
+        if attention_cnt:
+            summary += f"  [bold red]— {attention_cnt} DIMM(s) need attention[/bold red]"
+        console.print(summary)
+
+    # ── Memory error history (IML) ──────────────────────────────────────────
+    # HPE iLO exposes no live ECC error count (no MemoryMetrics resource);
+    # the IML is the real record of any past corrected/uncorrected memory
+    # errors, so surface it here instead.
+    if mem_events:
+        console.print(
+            f"  [bold red]{len(mem_events)} memory-related event(s) in the IML "
+            f"(Integrated Management Log):[/bold red]"
+        )
+        iml_t = Table(box=rich_box.SIMPLE, show_header=True, header_style="bold cyan", padding=(0, 2))
+        iml_t.add_column("Date", no_wrap=True, style="dim")
+        iml_t.add_column("Severity", no_wrap=True)
+        iml_t.add_column("Message")
+        for ev in mem_events:
+            sev = ev.get("severity", "")
+            sev_style = "bold red" if sev in ("Critical", "Warning") else "dim"
+            iml_t.add_row(ev.get("created", "—"), f"[{sev_style}]{sev or '—'}[/{sev_style}]", ev.get("message", ""))
+        console.print(iml_t)
 
     # ── Firmware ──────────────────────────────────────────────────────────────
     if fw_list:

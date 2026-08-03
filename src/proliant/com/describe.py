@@ -295,7 +295,7 @@ async def _render_memory(hw: dict, bmc: dict) -> None:
         try:
             from proliant.ilo.config import load_hosts
             from proliant.ilo.client import ILOClient
-            from proliant.ilo.inventory import fetch_memory_population
+            from proliant.ilo.inventory import fetch_memory_iml_events, fetch_memory_population
 
             ilo_creds = None
             try:
@@ -315,10 +315,17 @@ async def _render_memory(hw: dict, bmc: dict) -> None:
             if ilo_creds:
                 async with ILOClient(ilo_creds["url"], ilo_creds["username"], ilo_creds["password"]) as ilo:
                     dimms = await fetch_memory_population(ilo)
+                    try:
+                        mem_events = await fetch_memory_iml_events(ilo)
+                    except Exception:  # intentional: IML is best-effort, never block describe
+                        mem_events = []
                 if dimms:
+                    from proliant.common.memory_health import dimm_status_label, is_attention_status
+
                     populated  = [d for d in dimms if d["present"]]
                     empty_cnt  = sum(1 for d in dimms if not d["present"])
                     total_gb   = sum(d["cap_gb"] for d in populated)
+                    attention_cnt = sum(1 for d in populated if is_attention_status(d.get("status", "")))
                     get_console().print("[bold]Memory[/bold]")
                     mem_t = Table(box=rich_box.SIMPLE, show_header=True,
                                   header_style="bold cyan", padding=(0, 2))
@@ -327,18 +334,41 @@ async def _render_memory(hw: dict, bmc: dict) -> None:
                     mem_t.add_column("Type")
                     mem_t.add_column("Speed")
                     mem_t.add_column("Part Number", style="dim")
+                    mem_t.add_column("Status")
                     for d in dimms:
                         if d["present"]:
                             mem_t.add_row(d["slot"], f"{d['cap_gb']} GB", d["type"] or "—",
                                           f"{d['speed']} MT/s" if d["speed"] else "—",
-                                          d["part"] or "—")
+                                          d["part"] or "—",
+                                          dimm_status_label(d.get("status", "")))
                         else:
-                            mem_t.add_row(f"[dim]{d['slot']}[/dim]", "[dim]empty[/dim]", "", "", "")
+                            mem_t.add_row(f"[dim]{d['slot']}[/dim]", "[dim]empty[/dim]", "", "", "", "")
                     get_console().print(mem_t)
-                    get_console().print(
+                    summary = (
                         f"  [dim]{len(populated)} DIMMs populated, {empty_cnt} empty"
                         f" — {total_gb} GB total[/dim]"
                     )
+                    if attention_cnt:
+                        summary += f"  [bold red]— {attention_cnt} DIMM(s) need attention[/bold red]"
+                    get_console().print(summary)
+
+                    if mem_events:
+                        get_console().print(
+                            f"  [bold red]{len(mem_events)} memory-related event(s) in the IML "
+                            f"(Integrated Management Log):[/bold red]"
+                        )
+                        iml_t = Table(box=rich_box.SIMPLE, show_header=True,
+                                      header_style="bold cyan", padding=(0, 2))
+                        iml_t.add_column("Date", no_wrap=True, style="dim")
+                        iml_t.add_column("Severity", no_wrap=True)
+                        iml_t.add_column("Message")
+                        for ev in mem_events:
+                            sev = ev.get("severity", "")
+                            sev_style = "bold red" if sev in ("Critical", "Warning") else "dim"
+                            iml_t.add_row(ev.get("created", "—"),
+                                          f"[{sev_style}]{sev or '—'}[/{sev_style}]",
+                                          ev.get("message", ""))
+                        get_console().print(iml_t)
                     return
         except Exception:  # intentional: iLO unreachable or no creds — fall through to COM total
             pass

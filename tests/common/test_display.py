@@ -191,7 +191,8 @@ class TestPrintJson:
 
 
 class TestPrintMemoryReport:
-    def _row(self, hpe_pn="P03051-091", vendor_pn="HMA82GR7CJR4N-WM", servers=None):
+    def _row(self, hpe_pn="P03051-091", vendor_pn="HMA82GR7CJR4N-WM", servers=None,
+              attention_statuses=None, attention_servers=None):
         return {
             "hpe_pn": hpe_pn,
             "vendor_pn": vendor_pn,
@@ -201,6 +202,8 @@ class TestPrintMemoryReport:
             "speed_mts": 2933,
             "count": 2,
             "servers": servers or {"host1", "host2"},
+            "attention_statuses": attention_statuses or set(),
+            "attention_servers": attention_servers or set(),
         }
 
     def test_renders_vendor_part_number_column(self, monkeypatch, capsys):
@@ -228,3 +231,25 @@ class TestPrintMemoryReport:
         captured = capsys.readouterr()
         parsed = json.loads(captured.out)
         assert parsed[0]["vendor_pn"] == "HMA82GR7CJR4N-WM"
+
+    def test_healthy_row_renders_ok_status(self, monkeypatch, capsys):
+        import proliant.common.display as disp
+        wide_console = Console(width=200, force_terminal=False, no_color=True)
+        monkeypatch.setattr(disp, "get_console", lambda: wide_console)
+
+        print_memory_report([self._row()])
+        out = capsys.readouterr().out
+        assert "Status" in out
+        assert "OK" in out
+
+    def test_attention_row_renders_flagged_status_and_affected_server(self, monkeypatch, capsys):
+        import proliant.common.display as disp
+        wide_console = Console(width=200, force_terminal=False, no_color=True)
+        monkeypatch.setattr(disp, "get_console", lambda: wide_console)
+
+        print_memory_report([self._row(
+            attention_statuses={"Degraded"}, attention_servers={"host2"},
+        )])
+        out = capsys.readouterr().out
+        assert "Degraded" in out
+        assert "host2" in out

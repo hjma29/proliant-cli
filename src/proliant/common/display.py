@@ -149,6 +149,7 @@ def print_memory_report(rows: list[dict], source: str = "") -> None:
         ("Speed",           {"justify": "right", "no_wrap": True}),
         ("Count",           {"justify": "right", "no_wrap": True, "style": "bold"}),
         ("Total",           {"justify": "right", "no_wrap": True}),
+        ("Status",          {"no_wrap": False}),
         ("Servers",         {"min_width": 20, "no_wrap": False, "style": "dim"}),
     )
 
@@ -161,9 +162,17 @@ def print_memory_report(rows: list[dict], source: str = "") -> None:
             ", ".join(sorted(r["servers"])) if isinstance(r.get("servers"), (set, list))
             else str(len(r.get("servers", [])))
         )
+        attention = r.get("attention_statuses")
+        if attention:
+            status_str = (
+                f"[bold red]⚠ {', '.join(sorted(attention))}[/bold red]\n"
+                f"[dim]({', '.join(sorted(r.get('attention_servers', ())))})[/dim]"
+            )
+        else:
+            status_str = "[dim]OK[/dim]"
         table.add_row(
             r["hpe_pn"], r.get("vendor_pn") or "—", r["vendor"], cap, r["type"], speed,
-            str(r["count"]), total_cap, servers_str,
+            str(r["count"]), total_cap, status_str, servers_str,
         )
 
     c.print(table)

@@ -6,7 +6,8 @@ from __future__ import annotations
 from proliant.com.inventory import aggregate_by_part_number
 
 
-def _dimm(server, hpe_pn, vendor_pn, vendor="SK Hynix", capacity_gb=16, type_="RDIMM", speed_mts=2933):
+def _dimm(server, hpe_pn, vendor_pn, vendor="SK Hynix", capacity_gb=16, type_="RDIMM",
+          speed_mts=2933, status="GoodInUse"):
     return {
         "server": server,
         "hpe_pn": hpe_pn,
@@ -15,6 +16,7 @@ def _dimm(server, hpe_pn, vendor_pn, vendor="SK Hynix", capacity_gb=16, type_="R
         "capacity_gb": capacity_gb,
         "type": type_,
         "speed_mts": speed_mts,
+        "status": status,
     }
 
 
@@ -56,3 +58,38 @@ def test_aggregate_handles_missing_vendor_pn_gracefully():
     }]
     rows = aggregate_by_part_number(dimms)
     assert rows[0]["vendor_pn"] == ""
+
+
+def test_aggregate_all_good_status_has_no_attention_flags():
+    dimms = [
+        _dimm("host1", "P03051-091", "HMA82GR7CJR4N-WM", status="GoodInUse"),
+        _dimm("host2", "P03051-091", "HMA82GR7CJR4N-WM", status="GoodPartiallyInUse"),
+    ]
+    rows = aggregate_by_part_number(dimms)
+    assert rows[0]["attention_statuses"] == set()
+    assert rows[0]["attention_servers"] == set()
+
+
+def test_aggregate_flags_degraded_dimm_and_tracks_affected_server():
+    dimms = [
+        _dimm("host1", "P03051-091", "HMA82GR7CJR4N-WM", status="GoodInUse"),
+        _dimm("host2", "P03051-091", "HMA82GR7CJR4N-WM", status="Degraded"),
+    ]
+    rows = aggregate_by_part_number(dimms)
+    assert rows[0]["count"] == 2
+    assert rows[0]["attention_statuses"] == {"Degraded"}
+    assert rows[0]["attention_servers"] == {"host2"}
+
+
+def test_aggregate_missing_status_key_defaults_to_no_attention():
+    dimms = [{
+        "server": "host1",
+        "hpe_pn": "P03051-091",
+        "vendor_pn": "HMA82GR7CJR4N-WM",
+        "vendor": "SK Hynix",
+        "capacity_gb": 16,
+        "type": "RDIMM",
+        "speed_mts": 2933,
+    }]
+    rows = aggregate_by_part_number(dimms)
+    assert rows[0]["attention_statuses"] == set()

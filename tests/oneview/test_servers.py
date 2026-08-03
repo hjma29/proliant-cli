@@ -130,3 +130,19 @@ async def test_get_fleet_memory_falls_back_to_hardware_bay_name_when_no_profile(
     dimms = await get_fleet_memory(client)
     assert len(dimms) == 1
     assert dimms[0]["server"] == "Enclosure-01, bay 6"
+
+
+async def test_get_fleet_memory_includes_dimm_status():
+    client = _FakeMemoryClient(
+        servers=[{
+            "name": "Enclosure-01, bay 7",
+            "uri": "/rest/server-hardware/7",
+            "serverProfileUri": "",
+            "serverName": "",
+        }],
+        profiles=[],
+        memory_by_uri={"/rest/server-hardware/7": {"data": [_dimm(status="Degraded")]}},
+    )
+    dimms = await get_fleet_memory(client)
+    assert len(dimms) == 1
+    assert dimms[0]["status"] == "Degraded"

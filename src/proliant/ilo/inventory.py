@@ -676,6 +676,7 @@ async def fetch_memory_report_data(client: ILOClient) -> list[dict]:
             "capacity_gb": cap_mib // 1024,
             "type":        dimm.get("BaseModuleType", ""),
             "speed_mts":   oem.get("MaxOperatingSpeedMTs", 0) or 0,
+            "status":      status,
         })
     return result
 
@@ -702,6 +703,61 @@ async def fetch_memory_population(client: ILOClient) -> list[dict]:
             "status":  status,
         })
     return result
+
+
+_MEMORY_IML_KEYWORDS = ("memory", "dimm", "ecc")
+
+
+async def fetch_memory_iml_events(client: ILOClient, limit: int = 10) -> list[dict]:
+    """Return the most recent memory-related IML entries, newest first.
+
+    HPE's iLO Redfish implementation does not expose a ``MemoryMetrics``
+    resource (confirmed via a live 404 probe), so there is no live
+    correctable/uncorrectable ECC error *count* available. The Integrated
+    Management Log (IML) is the actual mechanism HPE uses to record discrete
+    memory-error events (e.g. "Corrected Memory Error (Processor 1, DIMM
+    3)"), so this surfaces that history instead. Only reachable for directly
+    managed iLOs -- OneView/Synergy compute-module iLOs only expose a
+    link-local management address and cannot be queried this way.
+    """
+    system = await client.get(await client.get_system_uri())
+    log_services_uri = (system.get("LogServices") or {}).get("@odata.id")
+    if not log_services_uri:
+        return []
+
+    log_services = await client.get(log_services_uri)
+    iml_uri = None
+    for member in log_services.get("Members", []):
+        uri = member.get("@odata.id", "")
+        if uri.rstrip("/").endswith("/IML"):
+            iml_uri = uri
+            break
+    if not iml_uri:
+        return []
+
+    iml = await client.get(iml_uri)
+    entries_uri = (iml.get("Entries") or {}).get("@odata.id")
+    if not entries_uri:
+        return []
+
+    # HPE's IML Entries collection embeds full LogEntry records directly in
+    # "Members" (unlike most Redfish collections) -- no per-entry N+1 GET.
+    entries_col = await client.get(entries_uri)
+
+    events = []
+    for entry in entries_col.get("Members", []):
+        oem = (entry.get("Oem") or {}).get("Hpe", {})
+        class_desc = (oem.get("ClassDescription") or "").lower()
+        message = entry.get("Message", "") or ""
+        if class_desc == "memory" or any(k in message.lower() for k in _MEMORY_IML_KEYWORDS):
+            events.append({
+                "created":  entry.get("Created") or entry.get("EventTimestamp", ""),
+                "message":  message,
+                "severity": entry.get("Severity") or oem.get("Severity", ""),
+                "count":    oem.get("Count", 1),
+            })
+    events.sort(key=lambda e: e["created"], reverse=True)
+    return events[:limit]
 
 
 async def fetch_serial_info(client: ILOClient) -> list[tuple[str, str]]:

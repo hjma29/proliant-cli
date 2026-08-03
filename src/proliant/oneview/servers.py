@@ -141,6 +141,7 @@ async def get_fleet_memory(client: "OneViewClient") -> list[dict]:
                 "capacity_gb": cap_mib // 1024,
                 "type":        dimm.get("BaseModuleType", ""),
                 "speed_mts":   oem.get("MaxOperatingSpeedMTs", 0) or 0,
+                "status":      status,
             })
         return result
 

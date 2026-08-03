@@ -60,8 +60,8 @@ run "ilo power (dry)"               proliant ilo power --help
 
 echo ""
 echo "▶ iLO — reports"
-run "ilo reports memory list"       proliant ilo reports memory list
-run "ilo reports cpu list"          proliant ilo reports cpu list
+run "ilo reports memory"           proliant ilo reports memory
+run "ilo reports cpu"              proliant ilo reports cpu
 
 echo ""
 echo "▶ COM"

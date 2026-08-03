@@ -555,11 +555,8 @@ def _build_parser() -> argparse.ArgumentParser:
     reports_sub.required = True
     for report_name in ("memory", "cpu", "gpu"):
         report_p = reports_sub.add_parser(report_name, help=f"{report_name.title()} fleet report")
-        report_action = report_p.add_subparsers(dest="report_action", metavar="ACTION")
-        report_action.required = True
-        report_list = report_action.add_parser("list", help=f"List the {report_name} fleet report")
-        report_list.set_defaults(command="report", what=report_name)
-        _add_host_target(report_list, required=False, allow_hosts_from=True)
+        report_p.set_defaults(command="report", what=report_name)
+        _add_host_target(report_p, required=False, allow_hosts_from=True)
 
     subparsers.add_parser(
         "init",

@@ -3,6 +3,7 @@
 <!--docs-sync:start-->
 [![GitHub Downloads](https://img.shields.io/github/downloads/hjma29/proliant-cli/total?label=downloads)](https://github.com/hjma29/proliant-cli/releases)
 [![GitHub Release](https://img.shields.io/github/v/tag/hjma29/proliant-cli?color=blue&label=release)](https://github.com/hjma29/proliant-cli/releases/latest)
+[![View full docs](https://img.shields.io/badge/View%20full%20docs-1f6feb?style=for-the-badge&logo=materialformkdocs&logoColor=white)](https://hjma29.github.io/proliant-cli/)
 
 **ProLiant CLI** is a terminal CLI tool for HPE ProLiant server environments. It lets you retrieve and inspect server inventory and details across **HPE ProLiant iLO**, **Compute Ops Management (COM)**, and **Synergy OneView** — and includes built-in tools to browse **HPE Service Pack for ProLiant (SPP)** release contents directly from the terminal.
 
@@ -180,9 +181,3 @@ proliant version                                 # Show installed version; offer
 
 
 <!--docs-sync:end-->
-
-
-
-## Full documentation
-
-[![View full docs](https://img.shields.io/badge/View%20full%20docs-hjma29.github.io%2Fproliant--cli-1f6feb?style=for-the-badge&logo=materialformkdocs&logoColor=white)](https://hjma29.github.io/proliant-cli/)

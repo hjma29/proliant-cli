@@ -77,6 +77,13 @@ def classify_storage_resource(
 
     Returns: {"controller": str, "firmware": str, "attach_mode": str, "drives": [...]}
     """
+    # Drop empty-bay stub entries -- confirmed live via HPE COM's cached
+    # Redfish mirror: an unpopulated physical bay still gets its own
+    # `Drive` resource (Name "Empty Bay", Status.State "Absent") with no
+    # capacity/media/protocol/model data at all. These aren't real disks
+    # and would otherwise show up as a "N x ?" group in list views.
+    drives = [d for d in drives if (d.get("Status") or {}).get("State") != "Absent"]
+
     if not drives:
         return None
 
@@ -148,14 +155,13 @@ def summarize_storage_report(report: list[dict]) -> str:
     return f"{ctrl_count} ctrl, {total_disks} disks: " + ", ".join(parts)
 
 
-def _summarize_drive_group(drives: list[dict]) -> str:
-    """Compact '(N x SIZE TYPE), ...' summary for a group of drives.
-
-    Groups by (capacity, type_label) — e.g. "(4 x 2981GB NVMe), (2 x 480GB SSD)".
+def _summarize_drive_group_lines(drives: list[dict]) -> list[str]:
+    """Group drives by (capacity, type) into 'N x SIZE TYPE' parts, one
+    per distinct group — e.g. ["4 x 2981GB NVMe", "2 x 480GB SSD"].
     Sizes are shown in decimal GB (drive-vendor convention), not GiB.
     """
     if not drives:
-        return "—"
+        return []
     groups: dict[tuple, int] = {}
     for d in drives:
         key = (d["capacity_gb"], d.get("type_label") or d["media_type"])
@@ -164,8 +170,17 @@ def _summarize_drive_group(drives: list[dict]) -> str:
     for (cap, type_label), count in sorted(groups.items(), key=lambda kv: -kv[1]):
         cap_str = f"{cap}GB" if cap else "?"
         type_str = f" {type_label}" if type_label and type_label != "N/A" else ""
-        parts.append(f"({count} x {cap_str}{type_str})")
-    return ", ".join(parts)
+        parts.append(f"{count} x {cap_str}{type_str}")
+    return parts
+
+
+def _summarize_drive_group(drives: list[dict]) -> str:
+    """Compact 'N x SIZE TYPE, ...' one-line summary for a group of
+    drives — used by callers (e.g. servers-list summaries) that want a
+    single joined string rather than one line per distinct group."""
+    parts = _summarize_drive_group_lines(drives)
+    return ", ".join(parts) if parts else "—"
+
 
 
 def clean_controller_model(name: str) -> str:
@@ -184,29 +199,61 @@ def summarize_storage_for_list(report: list[dict]) -> dict[str, str]:
     """Storage summary split by attachment, for the `storage list` table.
 
     Returns a dict with three columns:
-      controller — distinct storage controller part number(s) (RAID/HBA
-                   cards only; direct-attached drives have no real
-                   controller), with brand/"Boot Controller" wording
-                   trimmed off — e.g. "NS204i-u Gen11"
-      behind     — disks behind a storage controller, e.g. "(2 x 900GB SSD)"
+      controller — storage controller part number(s) (RAID/HBA cards
+                   only; direct-attached drives have no real controller),
+                   with brand/"Boot Controller" wording trimmed off —
+                   e.g. "NS204i-u Gen11"
+      behind     — disks behind a storage controller, e.g. "2 x 900GB SSD"
       direct     — disks directly attached to the CPU/PCH, no controller,
-                   e.g. "(4 x 2981GB NVMe)"
+                   e.g. "4 x 2981GB NVMe"
+
+    Each value may contain embedded '\\n' — one line per distinct
+    capacity/type group (e.g. a controller with 4x3201GB + 3x1920GB +
+    1x1600GB NVMe gets 3 lines instead of one long comma-joined line), so
+    wide fleets with many disk sizes behind one controller stay readable
+    in a narrow column instead of spreading out horizontally.
+
+    When a server has more than one RAID/HBA controller, "controller" and
+    "behind" line up row-for-row: each controller's model appears once,
+    followed by a blank continuation line for each extra disk-group line
+    that controller needed, so it's always clear which disks sit behind
+    which controller.
     """
-    controller_models: list[str] = []
-    behind_drives: list[dict] = []
+    # One (model, drives) entry per distinct controller model — multiple
+    # Storage resources for the *same* physical controller model (e.g. a
+    # controller split across firmware-reported sub-resources) are merged
+    # together rather than shown as duplicate lines.
+    controllers: list[list] = []          # [[model, drives], ...]
+    controller_index: dict[str, int] = {}
     direct_drives: list[dict] = []
 
     for ctrl in report:
         if ctrl["attach_mode"] == "RAID Controller":
             model = clean_controller_model(ctrl["controller"])
-            if model not in ("—", "N/A") and model not in controller_models:
-                controller_models.append(model)
-            behind_drives.extend(ctrl["drives"])
+            if model in ("—", "N/A"):
+                continue
+            if model in controller_index:
+                controllers[controller_index[model]][1].extend(ctrl["drives"])
+            else:
+                controller_index[model] = len(controllers)
+                controllers.append([model, list(ctrl["drives"])])
         else:
             direct_drives.extend(ctrl["drives"])
 
+    controller_lines: list[str] = []
+    behind_lines: list[str] = []
+    for model, drives in controllers:
+        group_lines = _summarize_drive_group_lines(drives) or ["—"]
+        controller_lines.append(model)
+        controller_lines.extend([""] * (len(group_lines) - 1))
+        behind_lines.extend(group_lines)
+
+    direct_lines = _summarize_drive_group_lines(direct_drives)
+
     return {
-        "controller": ", ".join(controller_models) if controller_models else "—",
-        "behind":     _summarize_drive_group(behind_drives),
-        "direct":     _summarize_drive_group(direct_drives),
+        "controller": "\n".join(controller_lines) if controller_lines else "—",
+        "behind":     "\n".join(behind_lines) if behind_lines else "—",
+        "direct":     "\n".join(direct_lines) if direct_lines else "—",
     }
+
+

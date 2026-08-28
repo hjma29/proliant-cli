@@ -202,8 +202,8 @@ async def test_summarize_storage_for_list_splits_by_attachment():
     # attached drives' own embedded-controller Model is never surfaced.
     # Controller name is trimmed to just the part number for the list view.
     assert summary["controller"] == "NS204i-u Gen11"
-    assert summary["behind"] == "(2 x 480GB NVMe)"
-    assert summary["direct"] == "(2 x 3201GB NVMe)"
+    assert summary["behind"] == "2 x 480GB NVMe"
+    assert summary["direct"] == "2 x 3201GB NVMe"
 
 
 def test_summarize_storage_for_list_empty():
@@ -216,5 +216,5 @@ async def test_fetch_storage_list_row():
     rows = await inventory.fetch_storage_list_row(_client())
     row_dict = dict(rows)
     assert row_dict["Storage Controller"] == "NS204i-u Gen11"
-    assert row_dict["Disks Behind Controller"] == "(2 x 480GB NVMe)"
-    assert row_dict["Disks Direct-Connected"] == "(2 x 3201GB NVMe)"
+    assert row_dict["RAID Attached"] == "2 x 480GB NVMe"
+    assert row_dict["Direct Attached"] == "2 x 3201GB NVMe"

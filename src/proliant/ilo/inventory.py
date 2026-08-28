@@ -317,14 +317,14 @@ async def fetch_storage_report_data(client: ILOClient) -> list[dict]:
 
 async def fetch_storage_list_row(client: ILOClient) -> list[tuple[str, str]]:
     """Per-server row for `proliant ilo storage list`:
-    Storage Controller | Disks Behind Controller | Disks Direct-Connected.
+    Storage Controller | RAID Attached | Direct Attached.
     """
     report = await fetch_storage_report_data(client)
     summary = summarize_storage_for_list(report)
     return [
         ("Storage Controller",          summary["controller"]),
-        ("Disks Behind Controller",     summary["behind"]),
-        ("Disks Direct-Connected",      summary["direct"]),
+        ("RAID Attached",     summary["behind"]),
+        ("Direct Attached",      summary["direct"]),
     ]
 
 

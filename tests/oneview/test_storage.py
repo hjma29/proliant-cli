@@ -111,5 +111,5 @@ async def test_fetch_storage_list_row():
     row_dict = dict(rows)
 
     assert row_dict["Storage Controller"] == "Smart Array E208i-c SR Gen10"
-    assert row_dict["Disks Behind Controller"] == "(2 x 960GB SSD)"
-    assert row_dict["Disks Direct-Connected"] == "(1 x 3201GB NVMe)"
+    assert row_dict["RAID Attached"] == "2 x 960GB SSD"
+    assert row_dict["Direct Attached"] == "1 x 3201GB NVMe"

@@ -4,6 +4,24 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ---
 
+## v1.1.5 — 2026-08-28
+
+### New Features
+- `proliant com storage list`/`storage describe <server name>`: new fleet-wide and per-server RAID controller / direct-attached disk inventory for COM-managed servers, matching `proliant ilo storage` and `proliant oneview storage`. Reads COM's own cached `/servers/{id}/inventory` mirror of each server's Redfish `Storage` data — no direct iLO network reachability or per-server iLO credentials required, only an authenticated `proliant com login` session.
+- `proliant com servers describe` / `proliant oneview servers describe`: both now embed the same per-controller / per-disk **Storage** section (RAID Controller vs. Direct/HBA classification) that `proliant ilo servers describe` already showed — no need to run a separate `storage describe` to see disk detail. Best-effort: silently omitted if storage inventory isn't available for that server.
+
+### Bug Fixes
+- `storage list` (all of `ilo`/`oneview`/`com`): fixed a `N x ?` phantom disk group showing up for empty/unpopulated drive bays — some Redfish `Storage` resources report a stub `Drive` entry (`Status.State: "Absent"`) for a bay with nothing installed; these are now filtered out before counting/classifying disks.
+- `storage describe` (all of `ilo`/`oneview`/`com`): the per-disk **Capacity** column now shows decimal GB (matching `storage list`) instead of GiB.
+
+### Enhancements
+- `storage list` columns renamed: **Disks Behind Controller** → **RAID Attached**, **Disks Direct-Connected** → **Direct Attached**, matching standard industry terminology (DAS = Direct-Attached Storage). Disk group formatting simplified from `(N x SIZE TYPE)` to plain `N x SIZE TYPE`.
+- `storage list` (all of `ilo`/`oneview`/`com`): when a server has more than one RAID/HBA controller, the **Storage Controller** and **RAID Attached** columns now line up one controller per row, so it's clear which disks sit behind which controller instead of merging them into one combined group.
+- `storage list`: when a controller (or the direct-attached group) has multiple distinct disk sizes/types (e.g. an MR408i-o with 4x3201GB + 3x1920GB + 1x1600GB NVMe), each size/type now gets its own line instead of one long comma-joined line, so wide fleets stay readable in a narrow column.
+- `storage list` output is now unified across `ilo`/`oneview`/`com`: all three now render the same plain fixed-width table (no title line, no box borders) that `ilo storage list` originally used — `oneview`/`com` previously used a bordered Rich table.
+
+---
+
 ## v1.1.4 — 2026-08-28
 
 ### New Features

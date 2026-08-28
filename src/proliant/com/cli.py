@@ -95,6 +95,7 @@ from proliant.common.prompts import (
 from proliant.com import firmware as _firmware
 from proliant.com.describe import run_describe as _run_describe
 from proliant.com.reports import run_report_gpu as _run_report_gpu, run_report_memory as _run_report_memory
+from proliant.com.storage import run_storage_list as _run_storage_list, run_storage_describe as _run_storage_describe
 from proliant.com.printers import (
     _DEVICE_DEFAULT_FIELDS,
     _SERVER_DEFAULT_FIELDS,
@@ -718,6 +719,32 @@ async def _cmd_describe_server(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+# ── proliant com storage list/describe ────────────────────────────────────────────
+
+async def _cmd_storage_list(args: argparse.Namespace) -> None:
+    session = await _ensure_session(args)
+    try:
+        await _run_storage_list(session)
+    except AuthError as e:
+        get_console().print(f"[red]Auth error:[/red] {e}")
+        sys.exit(1)
+    except Exception as e:
+        get_console().print(f"[red]Error:[/red] {_friendly_com_error(e)}")
+        sys.exit(1)
+
+
+async def _cmd_storage_describe(args: argparse.Namespace) -> None:
+    session = await _ensure_session(args)
+    try:
+        await _run_storage_describe(session, args.server)
+    except AuthError as e:
+        get_console().print(f"[red]Auth error:[/red] {e}")
+        sys.exit(1)
+    except Exception as e:
+        get_console().print(f"[red]Error:[/red] {_friendly_com_error(e)}")
+        sys.exit(1)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = _SuggestingArgumentParser(
         prog="proliant com",
@@ -738,6 +765,8 @@ examples:
           proliant com regions use eu-central
           proliant com reports memory
           proliant com reports gpu
+          proliant com storage list
+          proliant com storage describe TWA25380A01
         """,
     )
 
@@ -1005,6 +1034,32 @@ examples:
     reports_sub.add_parser("memory", help="Memory part-number breakdown across fleet")
     reports_sub.add_parser("gpu", help="Discrete GPU inventory across fleet")
 
+    # ── storage ───────────────────────────────────────────────────────────
+    storage_p = subparsers.add_parser("storage", help="RAID-controller vs. direct-attached storage inventory")
+    storage_sub = storage_p.add_subparsers(dest="what", metavar="ACTION",
+                                           parser_class=_SuggestingArgumentParser)
+    storage_sub.required = True
+
+    storage_sub.add_parser(
+        "list",
+        help="Fleet-wide storage controller + disk summary",
+        description=(
+            "List each server's storage controller (if any) and disks, split by "
+            "whether they sit behind a RAID/HBA controller or connect directly "
+            "(e.g. NVMe on the CPU/PCH). Uses COM's own cached inventory -- no "
+            "direct iLO reachability or per-server credentials required.\n\n"
+            "Examples:\n"
+            "  proliant com storage list\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    storage_desc_p = storage_sub.add_parser("describe", help="Show full storage/disk detail for one server")
+    storage_desc_server_arg = storage_desc_p.add_argument(
+        "server", metavar="SERIAL_OR_NAME",
+        help="Server serial number or name, e.g. TWA25380A01",
+    )
+    storage_desc_server_arg.completer = _server_targets_completer
+
     return parser
 
 
@@ -1125,3 +1180,8 @@ async def _async_main(args: argparse.Namespace) -> None:
             await _cmd_report_memory(args)
         elif args.what == "gpu":
             await _cmd_report_gpu(args)
+    elif args.command == "storage":
+        if args.what == "list":
+            await _cmd_storage_list(args)
+        elif args.what == "describe":
+            await _cmd_storage_describe(args)

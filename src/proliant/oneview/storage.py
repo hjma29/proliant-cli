@@ -77,12 +77,12 @@ async def fetch_storage_report_data(client: "OneViewClient", server_uri: str) ->
 
 async def fetch_storage_list_row(client: "OneViewClient", server: dict) -> list[tuple[str, str]]:
     """Per-server row for `proliant oneview storage list`:
-    Storage Controller | Disks Behind Controller | Disks Direct-Connected.
+    Storage Controller | RAID Attached | Direct Attached.
     """
     report = await fetch_storage_report_data(client, server["uri"])
     summary = summarize_storage_for_list(report)
     return [
         ("Storage Controller",      summary["controller"]),
-        ("Disks Behind Controller", summary["behind"]),
-        ("Disks Direct-Connected",  summary["direct"]),
+        ("RAID Attached", summary["behind"]),
+        ("Direct Attached",  summary["direct"]),
     ]

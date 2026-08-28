@@ -199,6 +199,8 @@ async def run_describe(session: COMSession, target: str) -> None:
 
     await _render_memory(hw, bmc)
 
+    await _render_storage(session, server.get("id", ""))
+
     if fw_items:
         get_console().print("[bold]Firmware[/bold]")
         fw_t = Table(box=rich_box.SIMPLE, show_header=True,
@@ -283,6 +285,26 @@ async def _render_server_profile(appliance_map: dict, appliance: dict, serial: s
             conn_t.add_row(str(c.get("id", "—")), c.get("name") or "—",
                            c.get("function_type") or "—", mac_wwpn)
         get_console().print(conn_t)
+
+
+async def _render_storage(session: COMSession, server_id: str) -> None:
+    """Render Storage section: RAID Attached vs. Direct-Attached disk
+    breakdown with full per-disk detail, mirroring `proliant com storage
+    describe` / `proliant ilo servers describe`. Best-effort -- silently
+    skipped if COM hasn't collected storage inventory for this server yet.
+    """
+    from proliant.common.display import print_storage_report
+    from proliant.com.storage import fetch_storage_report_data
+
+    if not server_id:
+        return
+    try:
+        async with COMClient(session) as c:
+            storage_report = await fetch_storage_report_data(c, server_id)
+    except Exception:  # intentional: storage is best-effort, never block describe
+        return
+    if storage_report:
+        print_storage_report(get_console(), storage_report)
 
 
 async def _render_memory(hw: dict, bmc: dict) -> None:

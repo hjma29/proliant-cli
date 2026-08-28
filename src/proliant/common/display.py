@@ -234,9 +234,61 @@ def print_storage_report(console: Console, storage_report: list[dict]) -> None:
         disk_t.add_column("Firmware", style="dim")
         disk_t.add_column("Health")
         for d in ctrl["drives"]:
-            cap_str = f"{d['capacity_gib']} GiB" if d["capacity_gib"] else "—"
+            cap_str = f"{d['capacity_gb']} GB" if d["capacity_gb"] else "—"
             disk_t.add_row(
                 str(d["id"]), d["bay"], cap_str, d["media_type"], d["protocol"],
                 d["model"], d["serial"], d["firmware"], health_style(d["health"]),
             )
         console.print(disk_t)
+
+
+def print_storage_list_table(results: list[tuple[str, str | None, list[tuple[str, str]]]]) -> None:
+    """Plain fixed-width `storage list` table shared by `ilo`, `oneview`,
+    and `com` -- Server | Storage Controller | RAID Attached |
+    Direct Attached. Deliberately plain text (no Rich box/title)
+    to match the original `proliant ilo storage list` style and keep the
+    three modules' output visually identical.
+
+    A cell value may contain embedded '\\n' when a server has more than
+    one storage controller (proliant.common.storage_report.summarize_
+    storage_for_list emits one line per controller) -- those are rendered
+    as aligned continuation lines under the same server row.
+    """
+    keys = ("Storage Controller", "RAID Attached", "Direct Attached")
+    server_data: dict[str, dict[str, str]] = {}
+    errors: dict[str, str] = {}
+    for host_name, error, rows in results:
+        if error:
+            server_data[host_name] = {k: "ERROR" for k in keys}
+            errors[host_name] = error
+        else:
+            server_data[host_name] = dict(rows)
+
+    if not server_data:
+        print("No servers found.")
+        return
+
+    srv_w = max(len("Server"), max(len(n) for n in server_data))
+    col_w: dict[str, int] = {k: len(k) for k in keys}
+    for vals in server_data.values():
+        for key in keys:
+            for line in vals.get(key, "N/A").split("\n"):
+                col_w[key] = max(col_w[key], len(line))
+
+    header = f"{'Server':<{srv_w}}" + "".join(f"   {key:<{col_w[key]}}" for key in keys)
+    print(header)
+    print("-" * len(header))
+    for host_name in sorted(server_data):
+        vals = server_data[host_name]
+        col_lines = {key: vals.get(key, "N/A").split("\n") for key in keys}
+        nlines = max(len(lines) for lines in col_lines.values())
+        for i in range(nlines):
+            name_field = host_name if i == 0 else ""
+            row = f"{name_field:<{srv_w}}" + "".join(
+                f"   {(col_lines[key][i] if i < len(col_lines[key]) else ''):<{col_w[key]}}"
+                for key in keys
+            )
+            print(row)
+        if host_name in errors:
+            print(f"  {'':>{srv_w}}   {errors[host_name]}")
+

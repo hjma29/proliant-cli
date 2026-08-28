@@ -72,6 +72,11 @@ UTILIZATION = {
     ],
 }
 
+STORAGE_REPORT = [
+    {"controller": "HPE Smart Array P204i-c SR Gen10", "firmware": "1.34",
+     "attach_mode": "RAID Controller", "drives": []},
+]
+
 # ── live-shaped alert fixtures (captured from a real Synergy 480 Gen10, bay 7) ─
 
 ALERTS = [
@@ -208,7 +213,7 @@ def test_normalize_server_alerts_empty_or_no_match():
 # ── build_server_detail ───────────────────────────────────────────────────────
 
 def test_build_server_detail_assembles_model():
-    info = build_server_detail(RAW_SERVER, "aci-FM-host1", "SY 480 Gen10 1", FIRMWARE, UTILIZATION, ALERTS)
+    info = build_server_detail(RAW_SERVER, "aci-FM-host1", "SY 480 Gen10 1", FIRMWARE, UTILIZATION, ALERTS, STORAGE_REPORT)
     assert info["name"] == "Enclosure-01, bay 3"
     assert info["state_display"] == "Profile Applied"
     assert info["profile"] == "aci-FM-host1"
@@ -221,11 +226,13 @@ def test_build_server_detail_assembles_model():
     assert info["utilization"]["temperature_f"] == 63
     assert len(info["alerts"]) == 2
     assert info["alerts"][0]["severity"] == "critical"
+    assert info["storage_report"] == STORAGE_REPORT
 
 
 def test_build_server_detail_defaults_to_no_alerts():
     info = build_server_detail(RAW_SERVER, "aci-FM-host1", "SY 480 Gen10 1", FIRMWARE, UTILIZATION)
     assert info["alerts"] == []
+    assert info["storage_report"] == []
 
 
 def test_build_server_detail_handles_unmanaged_server_with_no_profile():
@@ -238,15 +245,17 @@ def test_build_server_detail_handles_unmanaged_server_with_no_profile():
     assert info["device_inventory"] == []
     assert info["utilization"] == {"cpu_percent": None, "power_w": None, "temperature_f": None}
     assert info["alerts"] == []
+    assert info["storage_report"] == []
 
 
 # ── fetch (fake client) ───────────────────────────────────────────────────────
 
 class _FakeClient:
-    def __init__(self, *, firmware_raises=False, utilization_raises=False, alerts_raise=False):
+    def __init__(self, *, firmware_raises=False, utilization_raises=False, alerts_raise=False, storage_raises=False):
         self.firmware_raises = firmware_raises
         self.utilization_raises = utilization_raises
         self.alerts_raise = alerts_raise
+        self.storage_raises = storage_raises
         self.calls: list[str] = []
 
     async def get_all(self, uri, **extra_params):
@@ -273,6 +282,30 @@ class _FakeClient:
             if self.utilization_raises:
                 raise RuntimeError("utilization endpoint unavailable")
             return UTILIZATION
+        if uri == "/rest/server-hardware/server3/localStorageV2":
+            if self.storage_raises:
+                from proliant.oneview.client import OneViewError
+                raise OneViewError("localStorageV2 unavailable")
+            return {
+                "data": [{
+                    "Id": "DE07A000",
+                    "Name": "HPE Smart Array P204i-c SR Gen10",
+                    "Controllers": [{
+                        "Model": "HPE Smart Array P204i-c SR Gen10",
+                        "Name": "HPE Smart Array P204i-c SR Gen10",
+                        "FirmwareVersion": "1.34",
+                    }],
+                    "Drives": [{
+                        "Id": "0",
+                        "Name": "drive 0",
+                        "PhysicalLocation": {"PartLocation": {"ServiceLabel": "Bay=1"}},
+                        "CapacityBytes": 960197124096,
+                        "Protocol": "SATA",
+                        "MediaType": "SSD",
+                        "Status": {"Health": "OK"},
+                    }],
+                }],
+            }
         return {}
 
 
@@ -285,6 +318,16 @@ async def test_fetch_server_detail_assembles_model():
     assert info["utilization"]["power_w"] == 67
     assert len(info["alerts"]) == 2
     assert info["alerts"][0]["severity"] == "critical"
+    assert len(info["storage_report"]) == 1
+    assert info["storage_report"][0]["controller"] == "HPE Smart Array P204i-c SR Gen10"
+
+
+@pytest.mark.asyncio
+async def test_fetch_server_detail_tolerates_storage_endpoint_failure():
+    info = await fetch_server_detail(_FakeClient(storage_raises=True), "Enclosure-01, bay 3")
+    assert info["storage_report"] == []
+    # core hardware info still present even without storage data
+    assert info["profile"] == "aci-FM-host1"
 
 
 @pytest.mark.asyncio

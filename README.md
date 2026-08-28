@@ -86,6 +86,8 @@ proliant com login
 proliant com whoami                              
 proliant com servers list                        
 proliant com servers describe <server name>
+proliant com storage list                                # fleet-wide RAID controller + disks behind it / direct-connected (no iLO reachability/creds needed)
+proliant com storage describe <server name>              # full per-controller, per-disk detail for one server
 proliant com reports gpu                        
 proliant com reports memory
 [snip]

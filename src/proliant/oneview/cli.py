@@ -838,6 +838,12 @@ def _render_server_describe(info: dict) -> None:
     else:
         console.print("[dim]Device Inventory: no data (server may never have completed POST).[/dim]")
 
+    # ── Storage ──────────────────────────────────────────────────────────
+    storage_report = info.get("storage_report") or []
+    if storage_report:
+        from proliant.common.display import print_storage_report
+        print_storage_report(console, storage_report)
+
     # ── Utilization ────────────────────────────────────────────────────
     util = info.get("utilization") or {}
     if any(util.get(k) is not None for k in ("cpu_percent", "power_w", "temperature_f")):
@@ -861,7 +867,12 @@ def _render_server_describe(info: dict) -> None:
 async def _async_storage_list() -> None:
     """Fleet-wide RAID-controller vs. direct-attached storage summary,
     mirroring `proliant ilo storage list`. Uses the same Redfish `Storage`
-    schema, fetched here via OneView's localStorageV2 sub-resource."""
+    schema, fetched here via OneView's localStorageV2 sub-resource.
+
+    Renders via the shared plain-text print_storage_list_table (same as
+    `ilo`/`com` storage list) so all three modules look identical.
+    """
+    from proliant.common.display import print_storage_list_table
     from proliant.oneview.servers import list_servers
     from proliant.oneview.storage import fetch_storage_list_row
 
@@ -877,40 +888,26 @@ async def _async_storage_list() -> None:
 
     fallback_row = [
         ("Storage Controller", "—"),
-        ("Disks Behind Controller", "—"),
-        ("Disks Direct-Connected", "—"),
+        ("RAID Attached", "—"),
+        ("Direct Attached", "—"),
     ]
+    # Full name (not the shortened display form used by `servers list`)
+    # so it can be copy-pasted straight into `storage describe <name>`
+    # without a "not found" lookup error.
     results = [
-        (s, dict(fallback_row if isinstance(row, Exception) else row))
+        (s["name"], None, fallback_row if isinstance(row, Exception) else row)
         for s, row in zip(servers, rows)
     ]
 
     if get_output_mode() == OutputMode.JSON:
-        print_json([{"name": s["name"], **row} for s, row in results])
+        print_json([{"name": name, **dict(row)} for name, _err, row in results])
         return
 
     if not results:
         get_console().print("[yellow]No servers found in OneView.[/yellow]")
         return
 
-    table = make_table(
-        "OneView Storage",
-        ("Server",                    dict(min_width=14, no_wrap=True)),
-        ("Storage Controller",        dict(min_width=18)),
-        ("Disks Behind Controller",   {}),
-        ("Disks Direct-Connected",    {}),
-    )
-    for s, row in results:
-        table.add_row(
-            # Full name (not the shortened display form used by `servers
-            # list`) so it can be copy-pasted straight into
-            # `storage describe <name>` without a "not found" lookup error.
-            s["name"],
-            row["Storage Controller"],
-            row["Disks Behind Controller"],
-            row["Disks Direct-Connected"],
-        )
-    get_console().print(table)
+    print_storage_list_table(results)
 
 
 async def _cmd_storage_list(args: argparse.Namespace) -> None:

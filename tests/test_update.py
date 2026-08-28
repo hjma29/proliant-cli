@@ -219,3 +219,66 @@ def test_run_update_fires_update_ping_before_download(monkeypatch):
 
     assert pings == ["/update/unix"]
 
+
+def test_run_update_downloads_asset_and_builds_dl_headers(monkeypatch, tmp_path):
+    """Regression test: `_run_update()` used to raise NameError building
+    `dl_headers` (referenced an undefined `headers` local past the asset
+    lookup) -- this exercises the full download path to catch that again.
+    """
+    import json
+    import urllib.request
+
+    monkeypatch.setattr(cli.sys, "platform", "linux")
+    monkeypatch.setattr(cli, "_ssl_context", lambda: None)
+    monkeypatch.setattr(cli, "_get_current_version", lambda: "1.0.0")
+    monkeypatch.setattr(cli, "_confirm_windows_update", lambda ver, auto: True)
+    monkeypatch.setattr(cli, "_ping_telemetry", lambda path: None)
+    monkeypatch.setattr(cli, "_resolve_github_token", lambda: "fake-token")
+
+    # Target "installed binary" that os.replace() will overwrite.
+    target_exe = tmp_path / "proliant"
+    target_exe.write_bytes(b"old-binary")
+    monkeypatch.setattr(cli.sys, "argv", [str(target_exe)])
+    monkeypatch.setattr(cli, "is_frozen", lambda: False)
+
+    release_payload = json.dumps({
+        "tag_name": "v9.9.9",
+        "assets": [{
+            "name": "proliant-cli-linux-x86",
+            "size": 11,
+            "url": "https://api.github.com/asset/1",
+        }],
+    }).encode()
+
+    captured_requests = []
+
+    class _Resp:
+        def __init__(self, data):
+            self._d = data
+
+        def read(self, *a, **kw):
+            data, self._d = self._d, b""
+            return data
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def _fake_urlopen(req, timeout=None, context=None):
+        captured_requests.append(req)
+        if req.full_url == "https://api.github.com/asset/1":
+            return _Resp(b"new-binary!")
+        return _Resp(release_payload)
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+
+    cli._run_update(auto_confirm=True)
+
+    # The asset download request must carry the resolved token + octet-stream Accept.
+    asset_req = next(r for r in captured_requests if r.full_url == "https://api.github.com/asset/1")
+    assert asset_req.get_header("Authorization") == "token fake-token"
+    assert asset_req.get_header("Accept") == "application/octet-stream"
+    assert target_exe.read_bytes() == b"new-binary!"
+

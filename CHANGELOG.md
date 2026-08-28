@@ -4,6 +4,18 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ---
 
+## v1.1.2 — 2026-08-27
+
+### New Features
+- `proliant ilo storage describe <server name>`: new focused storage command showing full per-controller / per-disk detail for a single server — RAID Controller vs. Direct/HBA classification, capacity, media type, protocol, model, serial, firmware, and health per drive. Previously this detail was only visible buried inside the much larger `servers describe` output; it's now also available on its own, mirroring the existing `list`/`describe` pattern used by `servers` and `license`.
+- `proliant ilo servers list`: new **Storage** column showing a compact per-server summary (e.g. `2 ctrl, 8 disks: 6x1920GiB SSD(RAID), 2x480GiB SSD(Direct)`), so fleet-wide storage layout is visible at a glance without needing to describe each server individually. Degrades gracefully to `—` if storage data can't be fetched for a given server.
+- `proliant ilo servers describe`: now includes a **Storage** section per controller with the same full per-disk detail as `storage describe`.
+
+### Bug Fixes
+- `proliant version` self-update: fixed a `NameError: name 'headers' is not defined` crash during the download step of the auto-update flow, plus a latent `NameError: name 'urllib' is not defined` that would have crashed immediately afterward. Both were caused by variables/imports that only existed in a separate helper function and didn't carry over into `_run_update`.
+
+---
+
 ## v1.1.1 — 2026-08-03
 
 ### New Features

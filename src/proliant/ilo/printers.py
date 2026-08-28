@@ -364,6 +364,7 @@ def print_servers_table(
     table.add_column("Model",    style="grey70",  no_wrap=True, max_width=13)
     table.add_column("Power",    style="default", no_wrap=True, min_width=5)
     table.add_column("IP",       style="white",   no_wrap=True, min_width=15)
+    table.add_column("Storage",  style="grey70",  no_wrap=True, max_width=48, overflow="ellipsis")
 
     for host_name, error, rows in sorted(results, key=lambda r: r[0]):
         if error:
@@ -371,7 +372,7 @@ def print_servers_table(
             hint = _error_hint(error)
             ip_cell = f"{ip_addr}  [red]({hint})[/red]" if ip_addr != "—" else f"[red]({hint})[/red]"
             table.add_row(
-                f"[grey70]{host_name}[/grey70]", "—", "—", "—", "—", "—", ip_cell,
+                f"[grey70]{host_name}[/grey70]", "—", "—", "—", "—", "—", ip_cell, "—",
             )
             continue
         d = dict(rows)
@@ -381,11 +382,12 @@ def print_servers_table(
         model    = d.get("Model", "—")
         power    = d.get("Power", "—")
         ip_addr  = d.get("IP", "—")
+        storage  = d.get("Storage", "—")
 
         os_cell = f"[cyan]{os_name}[/cyan]" if os_name else "[cyan]—[/cyan]"
         table.add_row(
             f"[bold cyan]{host_name}[/bold cyan]", serial, os_cell, ilo_name, model,
-            _fmt_power(power), ip_addr,
+            _fmt_power(power), ip_addr, storage,
         )
 
     count = len(results)

@@ -63,7 +63,7 @@ from proliant.ilo.bios import (fetch_bios, format_bios, set_workload_profile,
                            set_serial_console, WORKLOAD_PROFILES,
                            SERIAL_CONSOLE_PORTS, EMS_CONSOLE_VALUES,
                            VIRTUAL_SERIAL_PORT_VALUES)
-from proliant.ilo.describe import run_describe, run_describe_ilo_nic, run_describe_fw_update
+from proliant.ilo.describe import run_describe, run_describe_ilo_nic, run_describe_fw_update, run_describe_storage
 from proliant.ilo.power import RESET_TYPES, force_off, graceful_shutdown, power_on, reset_server
 from proliant.ilo.printers import (
     _print_json_results,
@@ -344,7 +344,6 @@ def _build_parser() -> argparse.ArgumentParser:
         "nic-host": "Host NIC firmware versions",
         "nic-ilo": "iLO dedicated NIC: LLDP status, neighbor info, IP",
         "nic": "NIC link status + MAC address",
-        "storage": "Storage controller + drive firmware",
         "cpu": "CPU model + microcode version",
         "memory": "DIMM info + firmware revision",
         "com": "HPE Compute Ops Management registration status",
@@ -368,6 +367,23 @@ def _build_parser() -> argparse.ArgumentParser:
             )
         resource_p = subparsers.add_parser(resource, help=help_text)
         _add_list_action(resource_p, fetch_key=resource, help_text=f"List {resource}", description=desc)
+
+    storage_p = subparsers.add_parser(
+        "storage",
+        help="Storage controller + drive inventory (firmware, RAID vs. direct-attached, per-disk detail)",
+    )
+    storage_sub = storage_p.add_subparsers(dest="storage_action", metavar="ACTION")
+    storage_sub.required = True
+    storage_list = storage_sub.add_parser("list", help="List storage controller firmware across the fleet")
+    storage_list.set_defaults(command="list", what="storage")
+    _add_host_target(storage_list, required=False, allow_hosts_from=True)
+    storage_describe = storage_sub.add_parser(
+        "describe",
+        help="Show full per-controller / per-disk storage detail for a single server "
+             "(RAID vs. Direct/HBA, capacity, media, protocol, serial, firmware, health)",
+    )
+    storage_describe.set_defaults(command="describe_storage")
+    _add_host_target(storage_describe, required=True, metavar="NAME")
 
     license_p = subparsers.add_parser("license", help="iLO license info and key management")
     license_sub = license_p.add_subparsers(dest="license_action", metavar="ACTION")
@@ -595,6 +611,8 @@ async def _async_main(args: argparse.Namespace) -> None:
             await _run_report_gpu(args)
     elif args.command == "describe":
         await _cmd_describe(args)
+    elif args.command == "describe_storage":
+        await _cmd_describe_storage(args)
     elif args.command == "set":
         if args.set_action == "dhcp":
             await _run_set_dhcp(args)
@@ -1298,6 +1316,14 @@ async def _cmd_describe(args: argparse.Namespace) -> None:
         await run_describe_fw_update(hosts[0])
     else:
         await run_describe(hosts[0])
+
+
+async def _cmd_describe_storage(args: argparse.Namespace) -> None:
+    hosts = _load_hosts_or_exit(getattr(args, "host", None) or getattr(args, "name", None))
+    if not hosts:
+        get_console().print("[red]No host found.[/red]")
+        sys.exit(1)
+    await run_describe_storage(hosts[0])
 
 
 if __name__ == "__main__":

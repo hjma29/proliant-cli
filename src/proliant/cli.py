@@ -856,6 +856,7 @@ def _run_update(auto_confirm: bool = False, release: dict | None = None) -> None
     import zipfile
     import shutil
     import subprocess
+    import urllib.request
 
     ssl_ctx = _ssl_context()
 
@@ -916,6 +917,10 @@ def _run_update(auto_confirm: bool = False, release: dict | None = None) -> None
 
     # Use the API assets endpoint with Accept: application/octet-stream for private repos
     asset_api_url = asset["url"]
+    headers = {"User-Agent": "proliant-updater"}
+    token = _resolve_github_token()
+    if token:
+        headers["Authorization"] = f"token {token}"
     dl_headers = {**headers, "Accept": "application/octet-stream"}
 
     with tempfile.TemporaryDirectory() as tmpdir:

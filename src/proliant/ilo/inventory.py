@@ -267,6 +267,100 @@ async def fetch_disk_map(client: ILOClient) -> list[tuple[str, str]]:
     return found or _EMPTY
 
 
+def _drive_bay_label(drive: dict) -> str:
+    loc = (drive.get("PhysicalLocation") or {}).get("PartLocation", {})
+    ordinal = loc.get("LocationOrdinalValue")
+    return loc.get("ServiceLabel") or (f"Bay {ordinal}" if ordinal is not None else "N/A")
+
+
+async def fetch_storage_report_data(client: ILOClient) -> list[dict]:
+    """Return per-controller storage + physical-drive detail for reporting.
+
+    Used by both `servers list` (rolled up into a compact summary) and
+    `servers describe` (shown as a full per-drive table). Each entry
+    represents one Storage subsystem (typically one RAID/Smart-Array
+    controller, or one embedded/NVMe subsystem with no RAID controller)
+    and classifies its drives as RAID-controlled ("behind" a controller)
+    vs. direct-attached (JBOD/HBA passthrough, exposed straight to the OS).
+    """
+    result: list[dict] = []
+    for storage in await _storage_members(client):
+        drives = await _resource_list(client, storage.get("Drives", []) or [])
+        if not drives:
+            continue
+
+        ctrl_entries: list[dict] = []
+        ctrl_link = (storage.get("Controllers") or {}).get("@odata.id")
+        if ctrl_link:
+            ctrl_entries.extend(await _member_resources(client, ctrl_link))
+        ctrl_entries.extend(storage.get("StorageControllers", []) or [])
+
+        has_raid_controller = bool(ctrl_entries)
+        if ctrl_entries:
+            first = ctrl_entries[0]
+            ctrl_name = first.get("Model") or first.get("Name") or storage.get("Name", "N/A")
+            ctrl_fw = first.get("FirmwareVersion") or "N/A"
+        else:
+            ctrl_name = storage.get("Name", "N/A")
+            ctrl_fw = "N/A"
+        attach_mode = "RAID Controller" if has_raid_controller else "Direct/HBA"
+
+        drive_dicts = []
+        for drive in drives:
+            cap_bytes = drive.get("CapacityBytes") or 0
+            drive_dicts.append({
+                "id":           drive.get("Id") or _drive_bay_label(drive),
+                "name":         drive.get("Name", "N/A"),
+                "bay":          _drive_bay_label(drive),
+                "capacity_gib": round(cap_bytes / (1024 ** 3)) if cap_bytes else 0,
+                "media_type":   drive.get("MediaType") or "N/A",
+                "protocol":     drive.get("Protocol") or "N/A",
+                "model":        drive.get("Model") or "N/A",
+                "serial":       drive.get("SerialNumber") or "N/A",
+                "part_number":  drive.get("PartNumber") or "N/A",
+                "firmware":     drive.get("Revision") or "N/A",
+                "health":       (drive.get("Status") or {}).get("Health") or "N/A",
+                "attached_via": attach_mode,
+            })
+
+        result.append({
+            "controller":  ctrl_name,
+            "firmware":    ctrl_fw,
+            "attach_mode": attach_mode,
+            "drives":      drive_dicts,
+        })
+
+    return result
+
+
+def summarize_storage_report(report: list[dict]) -> str:
+    """Compact one-line storage summary for the `servers list` table.
+
+    e.g. "2 ctrl, 8 disks: 6x1920GiB SSD(RAID), 2x480GiB SSD(Direct)"
+    """
+    if not report:
+        return "—"
+    total_disks = sum(len(c["drives"]) for c in report)
+    if not total_disks:
+        return "—"
+    ctrl_count = len(report)
+
+    groups: dict[tuple, int] = {}
+    for c in report:
+        for d in c["drives"]:
+            key = (d["capacity_gib"], d["media_type"], c["attach_mode"])
+            groups[key] = groups.get(key, 0) + 1
+
+    parts = []
+    for (cap, media, mode), count in sorted(groups.items(), key=lambda kv: -kv[1]):
+        cap_str = f"{cap}GiB" if cap else "?"
+        media_str = f" {media}" if media and media != "N/A" else ""
+        mode_short = "RAID" if mode == "RAID Controller" else "Direct"
+        parts.append(f"{count}x{cap_str}{media_str}({mode_short})")
+
+    return f"{ctrl_count} ctrl, {total_disks} disks: " + ", ".join(parts)
+
+
 async def fetch_cpu_info(client: ILOClient) -> list[tuple[str, str]]:
     system = await client.get(await client.get_system_uri())
     proc_uri = system.get("Processors", {}).get("@odata.id")
@@ -819,6 +913,11 @@ async def fetch_server_list_info(client: ILOClient) -> list[tuple[str, str]]:
                     ip_addr = addr
                     break
 
+    try:
+        storage_summary = summarize_storage_report(await fetch_storage_report_data(client))
+    except Exception:  # noqa: BLE001 — storage is best-effort, never block servers list
+        storage_summary = "—"
+
     return [
         ("Serial",   serial),
         ("OS_Name",  os_name),
@@ -826,6 +925,7 @@ async def fetch_server_list_info(client: ILOClient) -> list[tuple[str, str]]:
         ("Model",    model),
         ("Power",    power),
         ("IP",       ip_addr),
+        ("Storage",  storage_summary),
     ]
 
 

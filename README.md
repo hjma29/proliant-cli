@@ -74,6 +74,8 @@ proliant setup
 ```bash
 proliant ilo servers list                        
 proliant ilo servers describe <server name>      
+proliant ilo storage list                        
+proliant ilo storage describe <server name>      
 [snip]
 ```
 

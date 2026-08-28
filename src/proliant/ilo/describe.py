@@ -9,6 +9,75 @@ from proliant.ilo import inventory
 from proliant.ilo.client import ilo_session, ServerDownOrUnreachableError
 
 
+def _health_style(v: str | None) -> str:
+    styles = {"OK": "green", "Warning": "yellow", "Critical": "red"}
+    s = styles.get(v or "", "")
+    return f"[{s}]{v}[/{s}]" if s else (v or "—")
+
+
+def print_storage_report(console, storage_report: list[dict]) -> None:
+    """Render the per-controller / per-disk storage report.
+
+    Shared by `servers describe` (as one section among many) and
+    `storage describe` (as the sole focused output).
+    """
+    from rich import box as rich_box
+    from rich.table import Table
+
+    if not storage_report:
+        console.print("[dim]No storage controllers/drives found.[/dim]")
+        return
+
+    total_disks = sum(len(ctrl["drives"]) for ctrl in storage_report)
+    console.print(
+        f"[bold]Storage[/bold]   "
+        f"[dim]{len(storage_report)} controller(s), {total_disks} disk(s)[/dim]"
+    )
+    for ctrl in storage_report:
+        mode_style = "green" if ctrl["attach_mode"] == "RAID Controller" else "yellow"
+        console.print(
+            f"  [bold]{ctrl['controller']}[/bold]  "
+            f"[dim]fw {ctrl['firmware']}[/dim]  "
+            f"[{mode_style}]{ctrl['attach_mode']}[/{mode_style}]  "
+            f"[dim]({len(ctrl['drives'])} disk(s))[/dim]"
+        )
+        disk_t = Table(box=rich_box.SIMPLE, show_header=True, header_style="bold cyan", padding=(0, 2))
+        disk_t.add_column("Disk ID", no_wrap=True)
+        disk_t.add_column("Bay", no_wrap=True)
+        disk_t.add_column("Capacity", justify="right")
+        disk_t.add_column("Media", no_wrap=True)
+        disk_t.add_column("Protocol", no_wrap=True)
+        disk_t.add_column("Model", style="dim")
+        disk_t.add_column("Serial", style="dim")
+        disk_t.add_column("Firmware", style="dim")
+        disk_t.add_column("Health")
+        for d in ctrl["drives"]:
+            cap_str = f"{d['capacity_gib']} GiB" if d["capacity_gib"] else "—"
+            disk_t.add_row(
+                str(d["id"]), d["bay"], cap_str, d["media_type"], d["protocol"],
+                d["model"], d["serial"], d["firmware"], _health_style(d["health"]),
+            )
+        console.print(disk_t)
+
+
+async def run_describe_storage(host: dict) -> None:
+    """Show only the storage section for a single server: per-controller,
+    per-disk detail with RAID vs. Direct/HBA classification."""
+    console = get_console()
+    try:
+        async with ilo_session(host, show_hint=True) as c:
+            with console.status("[dim]Fetching storage details…[/dim]"):
+                storage_report = await inventory.fetch_storage_report_data(c)
+    except ServerDownOrUnreachableError as exc:
+        console.print(f"[red]{host['name']} unreachable: {exc}[/red]")
+        sys.exit(1)
+    except Exception as exc:
+        console.print(f"[red]Error fetching storage details: {type(exc).__name__}: {exc}[/red]")
+        sys.exit(1)
+
+    console.print(f"[bold]{host['name']}[/bold]")
+    print_storage_report(console, storage_report)
+
 
 async def run_describe(host: dict) -> None:
     """Show full details for a single server: identity, iLO, CPU, GPU, memory, firmware."""
@@ -37,6 +106,10 @@ async def run_describe(host: dict) -> None:
                     mem_events = await inventory.fetch_memory_iml_events(c)
                 except Exception:  # intentional: IML is best-effort, never block describe
                     mem_events = []
+                try:
+                    storage_report = await inventory.fetch_storage_report_data(c)
+                except Exception:  # intentional: storage is best-effort, never block describe
+                    storage_report = []
     except ServerDownOrUnreachableError as exc:
         console.print(f"[red]{host['name']} unreachable: {exc}[/red]")
         sys.exit(1)
@@ -77,11 +150,7 @@ async def run_describe(host: dict) -> None:
 
     upd_state  = (upd_svc.get("Oem") or {}).get("Hpe", {}).get("State", "")
 
-    _HS = {"OK": "green", "Warning": "yellow", "Critical": "red"}
-
-    def _h(v: str | None) -> str:
-        s = _HS.get(v or "", "")
-        return f"[{s}]{v}[/{s}]" if s else (v or "—")
+    _h = _health_style
 
     # ── Firmware-update pending warning ───────────────────────────────────────
     if upd_state == "Complete":
@@ -239,6 +308,10 @@ async def run_describe(host: dict) -> None:
             sev_style = "bold red" if sev in ("Critical", "Warning") else "dim"
             iml_t.add_row(ev.get("created", "—"), f"[{sev_style}]{sev or '—'}[/{sev_style}]", ev.get("message", ""))
         console.print(iml_t)
+
+    # ── Storage ───────────────────────────────────────────────────────────────
+    if storage_report:
+        print_storage_report(console, storage_report)
 
     # ── Firmware ──────────────────────────────────────────────────────────────
     if fw_list:

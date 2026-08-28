@@ -63,13 +63,18 @@ from proliant.ilo.bios import (fetch_bios, format_bios, set_workload_profile,
                            set_serial_console, WORKLOAD_PROFILES,
                            SERIAL_CONSOLE_PORTS, EMS_CONSOLE_VALUES,
                            VIRTUAL_SERIAL_PORT_VALUES)
-from proliant.ilo.describe import run_describe, run_describe_ilo_nic, run_describe_fw_update, run_describe_storage
+from proliant.ilo.describe import (
+    run_describe,
+    run_describe_ilo_nic,
+    run_describe_fw_update,
+    run_describe_storage,
+    run_describe_network,
+)
 from proliant.ilo.power import RESET_TYPES, force_off, graceful_shutdown, power_on, reset_server
 from proliant.ilo.printers import (
     _print_json_results,
     _header_line,
     _print_component_table,
-    print_network_table,
     print_nic_ilo_table,
     print_disk_map_table,
     print_fleet_table,
@@ -77,6 +82,7 @@ from proliant.ilo.printers import (
     print_serial_table,
     print_servers_table,
     print_storage_table,
+    print_network_host_table,
     print_update_method_table,
     print_full_table,
     _print_fw_components,
@@ -95,10 +101,9 @@ def _ilo_fields_completer(choices: tuple):
 
 _FETCH_DISPATCH: dict[str, FetchFn] = {
     "servers": inventory.fetch_server_list_info,
-    "nic_host": inventory.fetch_network_versions,
     "nic_ilo":  inventory.fetch_ilo_nic_summary,
-    "nic": inventory.fetch_nic_status,
     "storage": inventory.fetch_storage_list_row,
+    "network": inventory.fetch_network_list_row,
     "cpu": inventory.fetch_cpu_info,
     "memory": inventory.fetch_memory_info,
     "com": inventory.fetch_com_status,
@@ -259,8 +264,6 @@ def _build_parser() -> argparse.ArgumentParser:
     servers_desc = servers_sub.add_parser("describe", help="Show full details for a single server")
     servers_desc.set_defaults(command="describe")
     _add_host_target(servers_desc, required=True, metavar="NAME")
-    servers_desc.add_argument("--ilo-nic", action="store_true", dest="ilo_nic",
-                              help="Show iLO dedicated NIC details (DHCP/static, IP, DNS, routes, LLDP, MAC)")
     servers_desc.add_argument("--firmware-update", action="store_true", dest="firmware_update",
                               help="Show firmware update status: UpdateService state, last bundle report, component repository")
 
@@ -342,9 +345,6 @@ def _build_parser() -> argparse.ArgumentParser:
     fw_clear.add_argument("--dry-run", action="store_true", dest="dry_run")
 
     list_resources = {
-        "nic-host": "Host NIC firmware versions",
-        "nic-ilo": "iLO dedicated NIC: LLDP status, neighbor info, IP",
-        "nic": "NIC link status + MAC address",
         "cpu": "CPU model + microcode version",
         "memory": "DIMM info + firmware revision",
         "com": "HPE Compute Ops Management registration status",
@@ -385,6 +385,23 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     storage_describe.set_defaults(command="describe_storage")
     _add_host_target(storage_describe, required=True, metavar="NAME")
+
+    network_p = subparsers.add_parser(
+        "network",
+        help="Host NIC inventory (adapter, port, MAC, link status)",
+    )
+    network_sub = network_p.add_subparsers(dest="network_action", metavar="ACTION")
+    network_sub.required = True
+    network_list = network_sub.add_parser("list", help="List host NIC ports across the fleet")
+    network_list.set_defaults(command="list", what="network")
+    _add_host_target(network_list, required=False, allow_hosts_from=True)
+    network_describe = network_sub.add_parser(
+        "describe",
+        help="Show full per-adapter / per-port host NIC detail for a single server "
+             "(model, part number, location, firmware, MAC, link status, speed, LLDP neighbor)",
+    )
+    network_describe.set_defaults(command="describe_network")
+    _add_host_target(network_describe, required=True, metavar="NAME")
 
     license_p = subparsers.add_parser("license", help="iLO license info and key management")
     license_sub = license_p.add_subparsers(dest="license_action", metavar="ACTION")
@@ -511,10 +528,22 @@ def _build_parser() -> argparse.ArgumentParser:
     bios_set_wl.add_argument("profile", choices=WORKLOAD_PROFILES, metavar="PROFILE",
                              help=f"One of: {', '.join(WORKLOAD_PROFILES)}")
 
-    network_p = subparsers.add_parser("network", help="Change iLO network configuration")
-    network_sub = network_p.add_subparsers(dest="network_action", metavar="ACTION")
-    network_sub.required = True
-    network_set = network_sub.add_parser("set", help="Change iLO dedicated NIC settings")
+    network_ilo_p = subparsers.add_parser(
+        "network-ilo",
+        help="iLO's own dedicated management NIC (LLDP neighbor, IP, DHCP/static config, routes)",
+    )
+    network_ilo_sub = network_ilo_p.add_subparsers(dest="network_ilo_action", metavar="ACTION")
+    network_ilo_sub.required = True
+    network_ilo_list = network_ilo_sub.add_parser("list", help="List iLO dedicated NIC status across the fleet (LLDP, IP, link)")
+    network_ilo_list.set_defaults(command="list", what="nic-ilo")
+    _add_host_target(network_ilo_list, required=False, allow_hosts_from=True)
+    network_ilo_describe = network_ilo_sub.add_parser(
+        "describe",
+        help="Show full iLO dedicated NIC detail for a single server (DHCP/static, IP, DNS, routes, LLDP, MAC)",
+    )
+    network_ilo_describe.set_defaults(command="describe_network_ilo")
+    _add_host_target(network_ilo_describe, required=True, metavar="NAME")
+    network_set = network_ilo_sub.add_parser("set", help="Change iLO dedicated NIC settings")
     network_set_sub = network_set.add_subparsers(dest="set_action", metavar="SETTING")
     network_set_sub.required = True
     set_dhcp = network_set_sub.add_parser(
@@ -614,6 +643,10 @@ async def _async_main(args: argparse.Namespace) -> None:
         await _cmd_describe(args)
     elif args.command == "describe_storage":
         await _cmd_describe_storage(args)
+    elif args.command == "describe_network":
+        await _cmd_describe_network(args)
+    elif args.command == "describe_network_ilo":
+        await _cmd_describe_network_ilo(args)
     elif args.command == "set":
         if args.set_action == "dhcp":
             await _run_set_dhcp(args)
@@ -985,10 +1018,9 @@ async def _run_get(args: argparse.Namespace) -> None:
 
     printers = {
         "firmwares":    lambda r: print_fleet_table(r, fields=getattr(args, "fields", None)),
-        "nic_host":     print_network_table,
         "nic_ilo":      print_nic_ilo_table,
-        "nic":          lambda r: _print_component_table(r, "NIC Link Status + MAC"),
         "storage":      print_storage_table,
+        "network":      print_network_host_table,
         "cpu":          lambda r: _print_component_table(r, "CPU Info"),
         "memory":       lambda r: _print_component_table(r, "Memory Info"),
         "com":          lambda r: _print_component_table(r, "HPE Compute Ops Management"),
@@ -1311,9 +1343,7 @@ async def _cmd_describe(args: argparse.Namespace) -> None:
     if not hosts:
         get_console().print("[red]No host found.[/red]")
         sys.exit(1)
-    if getattr(args, "ilo_nic", False):
-        await run_describe_ilo_nic(hosts[0])
-    elif getattr(args, "firmware_update", False):
+    if getattr(args, "firmware_update", False):
         await run_describe_fw_update(hosts[0])
     else:
         await run_describe(hosts[0])
@@ -1325,6 +1355,22 @@ async def _cmd_describe_storage(args: argparse.Namespace) -> None:
         get_console().print("[red]No host found.[/red]")
         sys.exit(1)
     await run_describe_storage(hosts[0])
+
+
+async def _cmd_describe_network(args: argparse.Namespace) -> None:
+    hosts = _load_hosts_or_exit(getattr(args, "host", None) or getattr(args, "name", None))
+    if not hosts:
+        get_console().print("[red]No host found.[/red]")
+        sys.exit(1)
+    await run_describe_network(hosts[0])
+
+
+async def _cmd_describe_network_ilo(args: argparse.Namespace) -> None:
+    hosts = _load_hosts_or_exit(getattr(args, "host", None) or getattr(args, "name", None))
+    if not hosts:
+        get_console().print("[red]No host found.[/red]")
+        sys.exit(1)
+    await run_describe_ilo_nic(hosts[0])
 
 
 if __name__ == "__main__":

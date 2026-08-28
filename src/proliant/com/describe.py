@@ -201,6 +201,8 @@ async def run_describe(session: COMSession, target: str) -> None:
 
     await _render_storage(session, server.get("id", ""))
 
+    await _render_network(session, server.get("id", ""))
+
     if fw_items:
         get_console().print("[bold]Firmware[/bold]")
         fw_t = Table(box=rich_box.SIMPLE, show_header=True,
@@ -305,6 +307,26 @@ async def _render_storage(session: COMSession, server_id: str) -> None:
         return
     if storage_report:
         print_storage_report(get_console(), storage_report)
+
+
+async def _render_network(session: COMSession, server_id: str) -> None:
+    """Render Network section: per-adapter/per-port NIC detail, mirroring
+    `proliant com network describe` / `proliant ilo servers describe`.
+    Best-effort -- silently skipped if COM hasn't collected network
+    inventory for this server yet.
+    """
+    from proliant.common.display import print_network_report
+    from proliant.com.network import fetch_network_report_data
+
+    if not server_id:
+        return
+    try:
+        async with COMClient(session) as c:
+            network_report = await fetch_network_report_data(c, server_id)
+    except Exception:  # intentional: network is best-effort, never block describe
+        return
+    if network_report:
+        print_network_report(get_console(), network_report)
 
 
 async def _render_memory(hw: dict, bmc: dict) -> None:

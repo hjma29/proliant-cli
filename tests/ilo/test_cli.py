@@ -44,7 +44,7 @@ def test_all_printers_exist():
     expected = [
         "print_full_table",
         "print_fleet_table",
-        "print_network_table",
+        "print_network_host_table",
         "print_nic_ilo_table",
         "print_disk_map_table",
         "_print_component_table",
@@ -63,7 +63,7 @@ def test_parser_list_resources():
     """All list-capable inventory resources must be recognised."""
     from proliant.ilo.cli import _build_parser
     parser = _build_parser()
-    for what in ["firmwares", "nic-host", "nic-ilo", "nic", "storage",
+    for what in ["firmwares", "storage", "network",
                  "cpu", "memory", "com", "full", "disk-map", "serial", "update-method", "license"]:
         resource = "firmware" if what == "firmwares" else what
         args = parser.parse_args([resource, "list"])
@@ -71,10 +71,19 @@ def test_parser_list_resources():
         assert args.what == what
 
 
+def test_parser_network_ilo_list():
+    """network-ilo list still recognises iLO's own dedicated NIC as 'nic-ilo'."""
+    from proliant.ilo.cli import _build_parser
+    parser = _build_parser()
+    args = parser.parse_args(["network-ilo", "list"])
+    assert args.command == "list"
+    assert args.what == "nic-ilo"
+
+
 def test_parser_show_host_filter():
     from proliant.ilo.cli import _build_parser
     parser = _build_parser()
-    args = parser.parse_args(["nic-host", "list", "dl325-gen12"])
+    args = parser.parse_args(["network", "list", "dl325-gen12"])
     assert args.host == "dl325-gen12"
 
 

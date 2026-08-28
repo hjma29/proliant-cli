@@ -76,6 +76,11 @@ proliant ilo servers list
 proliant ilo servers describe <server name>      
 proliant ilo storage list                        
 proliant ilo storage describe <server name>      
+proliant ilo network list                                # fleet-wide host NIC ports: location, port, MAC, link status
+proliant ilo network describe <server name>               # full per-adapter, per-port detail (MAC, link, speed, LLDP neighbor)
+proliant ilo network-ilo list                             # iLO's own dedicated management NIC across the fleet
+proliant ilo network-ilo describe <server name>            # DHCP/static, IP, DNS, routes, LLDP, MAC for one iLO
+proliant ilo network-ilo set static <server name> ...      # configure iLO's own NIC (was: `network set`)
 [snip]
 ```
 
@@ -88,6 +93,8 @@ proliant com servers list
 proliant com servers describe <server name>
 proliant com storage list                                # fleet-wide RAID controller + disks behind it / direct-connected (no iLO reachability/creds needed)
 proliant com storage describe <server name>              # full per-controller, per-disk detail for one server
+proliant com network list                                 # fleet-wide host NIC ports (no iLO reachability/creds needed)
+proliant com network describe <server name>                # full per-adapter, per-port detail for one server
 proliant com reports gpu                        
 proliant com reports memory
 [snip]
@@ -97,10 +104,12 @@ proliant com reports memory
 
 ```bash
 
-proliant oneview networks list
+proliant oneview networks list                            # logical fabric networks (ethernet networks)
 proliant oneview networks describe <name>
 proliant oneview storage list                            # fleet-wide RAID controller + disks behind it / direct-connected
 proliant oneview storage describe <server name>          # full per-controller, per-disk detail for one server
+proliant oneview network list                             # physical host NIC ports: location, port, MAC, link status
+proliant oneview network describe <server name>            # full per-adapter, per-port detail for one server
 proliant oneview uplinksets list
 proliant oneview uplinksets describe <name>
 proliant oneview server-profiles list

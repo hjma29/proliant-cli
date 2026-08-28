@@ -171,6 +171,7 @@ def build_server_detail(
     utilization_payload: dict[str, Any] | None,
     alert_members: list[dict[str, Any]] | None = None,
     storage_report: list[dict[str, Any]] | None = None,
+    network_report: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Assemble the normalized server-describe model from the raw payloads."""
     mp_host_info = raw.get("mpHostInfo") or {}
@@ -208,6 +209,7 @@ def build_server_detail(
         "utilization": util,
         "alerts": normalize_server_alerts(alert_members, raw.get("uri", "")),
         "storage_report": storage_report or [],
+        "network_report": network_report or [],
     }
 
 
@@ -259,7 +261,13 @@ async def fetch_server_detail(client: "OneViewClient", name: str) -> dict[str, A
     except Exception:  # noqa: BLE001 — storage is best-effort, never block describe
         storage_report = None
 
+    try:
+        from proliant.oneview.network_adapters import fetch_network_report_data
+        network_report = await fetch_network_report_data(client, raw["uri"])
+    except Exception:  # noqa: BLE001 — network is best-effort, never block describe
+        network_report = None
+
     return build_server_detail(
         raw, profile_name, hardware_type_name, firmware_payload, utilization_payload, alert_members,
-        storage_report,
+        storage_report, network_report,
     )

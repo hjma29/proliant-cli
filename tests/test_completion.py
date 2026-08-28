@@ -182,7 +182,7 @@ def test_freeform_values_do_not_fall_back_to_workspace_files():
     freeform_lines = [
         "proliant oneview mac list --address ",
         "proliant com login --email ",
-        "proliant ilo network set static srv1 --ip ",
+        "proliant ilo network-ilo set static srv1 --ip ",
     ]
     for line in freeform_lines:
         assert _complete(line) == []
@@ -219,7 +219,7 @@ def test_freeform_value_flags_still_appear_in_flag_name_completion():
     completions = set(_complete("proliant oneview mac list --"))
     assert "--address" in completions
 
-    completions = set(_complete("proliant ilo network set static srv1 --"))
+    completions = set(_complete("proliant ilo network-ilo set static srv1 --"))
     assert "--ip" in completions
 
 

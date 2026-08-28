@@ -96,6 +96,7 @@ from proliant.com import firmware as _firmware
 from proliant.com.describe import run_describe as _run_describe
 from proliant.com.reports import run_report_gpu as _run_report_gpu, run_report_memory as _run_report_memory
 from proliant.com.storage import run_storage_list as _run_storage_list, run_storage_describe as _run_storage_describe
+from proliant.com.network import run_network_list as _run_network_list, run_network_describe as _run_network_describe
 from proliant.com.printers import (
     _DEVICE_DEFAULT_FIELDS,
     _SERVER_DEFAULT_FIELDS,
@@ -745,6 +746,32 @@ async def _cmd_storage_describe(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+# ── proliant com network list/describe (host NICs) ─────────────────────────────────
+
+async def _cmd_network_list(args: argparse.Namespace) -> None:
+    session = await _ensure_session(args)
+    try:
+        await _run_network_list(session)
+    except AuthError as e:
+        get_console().print(f"[red]Auth error:[/red] {e}")
+        sys.exit(1)
+    except Exception as e:
+        get_console().print(f"[red]Error:[/red] {_friendly_com_error(e)}")
+        sys.exit(1)
+
+
+async def _cmd_network_describe(args: argparse.Namespace) -> None:
+    session = await _ensure_session(args)
+    try:
+        await _run_network_describe(session, args.server)
+    except AuthError as e:
+        get_console().print(f"[red]Auth error:[/red] {e}")
+        sys.exit(1)
+    except Exception as e:
+        get_console().print(f"[red]Error:[/red] {_friendly_com_error(e)}")
+        sys.exit(1)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = _SuggestingArgumentParser(
         prog="proliant com",
@@ -1060,6 +1087,31 @@ examples:
     )
     storage_desc_server_arg.completer = _server_targets_completer
 
+    # ── network ───────────────────────────────────────────────────────────
+    network_p = subparsers.add_parser("network", help="Host NIC inventory (adapter, port, MAC, link status)")
+    network_sub = network_p.add_subparsers(dest="what", metavar="ACTION",
+                                           parser_class=_SuggestingArgumentParser)
+    network_sub.required = True
+
+    network_sub.add_parser(
+        "list",
+        help="Fleet-wide host NIC summary (location, port, MAC, link status)",
+        description=(
+            "List each server's host NIC ports (location, port, MAC, link "
+            "status). Uses COM's own cached inventory -- no direct iLO "
+            "reachability or per-server credentials required.\n\n"
+            "Examples:\n"
+            "  proliant com network list\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    network_desc_p = network_sub.add_parser("describe", help="Show full per-adapter, per-port NIC detail for one server")
+    network_desc_server_arg = network_desc_p.add_argument(
+        "server", metavar="SERIAL_OR_NAME",
+        help="Server serial number or name, e.g. TWA25380A01",
+    )
+    network_desc_server_arg.completer = _server_targets_completer
+
     return parser
 
 
@@ -1185,3 +1237,8 @@ async def _async_main(args: argparse.Namespace) -> None:
             await _cmd_storage_list(args)
         elif args.what == "describe":
             await _cmd_storage_describe(args)
+    elif args.command == "network":
+        if args.what == "list":
+            await _cmd_network_list(args)
+        elif args.what == "describe":
+            await _cmd_network_describe(args)

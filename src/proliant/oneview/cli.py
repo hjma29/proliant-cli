@@ -844,6 +844,12 @@ def _render_server_describe(info: dict) -> None:
         from proliant.common.display import print_storage_report
         print_storage_report(console, storage_report)
 
+    # ── Network ────────────────────────────────────────────────────────
+    network_report = info.get("network_report") or []
+    if network_report:
+        from proliant.common.display import print_network_report
+        print_network_report(console, network_report)
+
     # ── Utilization ────────────────────────────────────────────────────
     util = info.get("utilization") or {}
     if any(util.get(k) is not None for k in ("cpu_percent", "power_w", "temperature_f")):
@@ -941,6 +947,85 @@ async def _cmd_storage_describe(args: argparse.Namespace) -> None:
 
     console.print(f"[bold]{server['name']}[/bold]")
     print_storage_report(console, report)
+
+
+# ── proliant oneview network list/describe (host NICs) ─────────────────────
+
+async def _async_host_network_list() -> None:
+    """Fleet-wide host NIC summary: Location | Port | MAC | Link Status,
+    mirroring `proliant ilo network list`. Uses the same Redfish
+    `NetworkAdapter` schema, fetched here via OneView's networkAdapters
+    sub-resource.
+
+    Renders via the shared plain-text print_network_list_table (same as
+    `ilo`/`com` network list) so all three modules look identical.
+    """
+    from proliant.common.display import print_network_list_table
+    from proliant.oneview.network_adapters import fetch_network_list_row
+    from proliant.oneview.servers import list_servers
+
+    async with _load_client() as client:
+        with get_console().status(f"[dim]Fetching server inventory from OneView (API v{client.api_version})…[/dim]"):
+            servers = await list_servers(client)
+        servers = sorted(servers, key=lambda s: _server_sort_key(s["name"]))
+        with get_console().status("[dim]Fetching network details…[/dim]"):
+            rows = await asyncio.gather(
+                *[fetch_network_list_row(client, s) for s in servers],
+                return_exceptions=True,
+            )
+
+    fallback_row = [
+        ("Location", "—"),
+        ("Port", "—"),
+        ("MAC", "—"),
+        ("Link Status", "—"),
+    ]
+    results = [
+        (s["name"], None, fallback_row if isinstance(row, Exception) else row)
+        for s, row in zip(servers, rows)
+    ]
+
+    if get_output_mode() == OutputMode.JSON:
+        print_json([{"name": name, **dict(row)} for name, _err, row in results])
+        return
+
+    if not results:
+        get_console().print("[yellow]No servers found in OneView.[/yellow]")
+        return
+
+    print_network_list_table(results)
+
+
+async def _cmd_host_network_list(args: argparse.Namespace) -> None:
+    await _async_host_network_list()
+
+
+async def _cmd_host_network_describe(args: argparse.Namespace) -> None:
+    """Show full per-adapter, per-port host NIC detail for one server:
+    model, part number, location, firmware, MAC, link status, speed,
+    LLDP neighbor -- mirroring `proliant ilo network describe`."""
+    from proliant.common.display import print_network_report
+    from proliant.oneview.network_adapters import fetch_network_report_data
+    from proliant.oneview.servers import get_server
+
+    name = args.name
+    console = get_console()
+    async with _load_client() as client:
+        try:
+            with console.status(f"[dim]Fetching server '{name}'…[/dim]"):
+                server = await get_server(client, name)
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
+            sys.exit(1)
+        with console.status("[dim]Fetching network details…[/dim]"):
+            report = await fetch_network_report_data(client, server["uri"])
+
+    if getattr(args, "json_output", False) or get_output_mode() == OutputMode.JSON:
+        print_json(report)
+        return
+
+    console.print(f"[bold]{server['name']}[/bold]")
+    print_network_report(console, report)
 
 
 # ── proliant oneview server-hardware-types list/describe ──────────────────────────
@@ -5468,6 +5553,18 @@ examples:
         help='Server name (e.g. "Enclosure-01, bay 3")')
     p_storage_desc_name.completer = _oneview_server_name_completer
     p_storage_desc.set_defaults(func=_cmd_storage_describe)
+
+    p_network = sub.add_parser("network", help="Host NIC inventory (adapter, port, MAC, link status)")
+    s_network = p_network.add_subparsers(dest="what", metavar="ACTION")
+    s_network.required = True
+    p_network_list = s_network.add_parser("list", help="Fleet-wide host NIC summary (location, port, MAC, link status)")
+    p_network_list.set_defaults(func=_cmd_host_network_list)
+    p_network_desc = s_network.add_parser("describe",
+        help="Full per-adapter, per-port host NIC detail for one server")
+    p_network_desc_name = p_network_desc.add_argument("name", metavar="NAME",
+        help='Server name (e.g. "Enclosure-01, bay 3")')
+    p_network_desc_name.completer = _oneview_server_name_completer
+    p_network_desc.set_defaults(func=_cmd_host_network_describe)
 
     p_hwtypes = sub.add_parser("server-hardware-types", help="List or describe server hardware types")
     s_hwtypes = p_hwtypes.add_subparsers(dest="what", metavar="ACTION")

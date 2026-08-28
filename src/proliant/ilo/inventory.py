@@ -13,9 +13,9 @@ from typing import Any
 from proliant.common.storage_report import classify_storage_resource
 from proliant.common.storage_report import summarize_storage_report as summarize_storage_report
 from proliant.common.storage_report import summarize_storage_for_list as summarize_storage_for_list
+from proliant.common.network_report import build_port_dict, classify_network_adapter, summarize_network_for_list
 from proliant.ilo.client import ILOClient
 
-_PORT_RE = re.compile(r"\s*\b(?:\d+-port|dual[ -]port|quad[ -]port)\b", re.IGNORECASE)
 _MODEL_STRIP_RE = re.compile(r"^\s*(?:HPE\s+)?(?:ProLiant\s+)?(?:Compute\s+)?", re.IGNORECASE)
 _EMPTY: list[tuple[str, str]] = [("N/A", "N/A")]
 FLEET_KEYS = ("Model", "iLO", "BIOS", "NIC-FW", "Storage-FW")
@@ -122,52 +122,86 @@ async def fetch_ilo_version(client: ILOClient) -> list[tuple[str, str]]:
     return _EMPTY
 
 
-async def fetch_network_versions(client: ILOClient) -> list[dict[str, str]]:
+async def _resolved_network_ports(client: ILOClient, adapter: dict[str, Any]) -> list[dict]:
+    """Resolve one NIC adapter's Ports into proliant.common.network_report.
+    build_port_dict() entries, following iLO's @odata.id links.
+
+    Newer iLO 6/7 hosts inline MAC/LLDP directly on the port (unified
+    `Port` schema). Older iLO 5 / Synergy Gen10 hosts use the separate
+    `NetworkPort` schema, where MAC instead lives on a linked
+    `NetworkDeviceFunction` sibling resource (matched to ports by index --
+    best-effort, since there's no explicit port<->function link) and there
+    is no inlined LLDP data.
+    """
+    ports_uri = adapter.get("Ports", {}).get("@odata.id")
+    if not ports_uri:
+        return []
+    raw_ports = await _member_resources(client, ports_uri)
+    if not raw_ports:
+        return []
+
+    if any((p.get("Ethernet") or {}).get("AssociatedMACAddresses") for p in raw_ports):
+        return [build_port_dict(p) for p in raw_ports]
+
+    ndf_uri = adapter.get("NetworkDeviceFunctions", {}).get("@odata.id")
+    ndfs = await _member_resources(client, ndf_uri) if ndf_uri else []
+    resolved = []
+    for idx, port in enumerate(raw_ports):
+        mac = None
+        if idx < len(ndfs):
+            eth = ndfs[idx].get("Ethernet") or {}
+            mac = (eth.get("PermanentMACAddress") or eth.get("MACAddress") or "").lower().strip() or None
+        resolved.append(build_port_dict(port, mac=mac))
+    return resolved
+
+
+async def fetch_network_report_data(client: ILOClient) -> list[dict]:
+    """Return per-adapter, per-port host NIC inventory: [{"adapter": ...,
+    "model": ..., "part_number": ..., "location": ..., "firmware": ...,
+    "ports": [...]}], via proliant.common.network_report's shared
+    classifier -- storage's sibling for host NICs.
+
+    Used by both `network list` (rolled up into a compact per-port
+    summary) and `network describe` / `servers describe` (shown as a full
+    per-port table).
+    """
     chassis = await client.get(await client.get_chassis_uri())
     na_uri = chassis.get("NetworkAdapters", {}).get("@odata.id")
     if not na_uri:
-        return [{
-            "Name": "N/A",
-            "PartNumber": "N/A",
-            "Location": "N/A",
-            "Port": "N/A",
-            "MACAddress": "N/A",
-            "LinkStatus": "N/A",
-            "Version": "N/A",
-        }]
+        return []
 
-    found = []
     oem_info_map = await _build_oem_device_info_map(client)
+    result: list[dict] = []
     for adapter in await _member_resources(client, na_uri):
-        label = (adapter.get("Model") or adapter.get("Name") or "N/A").strip() or "N/A"
-        controllers = adapter.get("Controllers", [])
-        version = controllers[0].get("FirmwarePackageVersion", "N/A") if controllers else "N/A"
-        base_row = {
-            "Name": label,
-            "PartNumber": _adapter_part_number(adapter, oem_info_map) or "N/A",
-            "Version": version or "N/A",
-            "Location": _adapter_location(adapter, oem_info_map) or "N/A",
-        }
-        port_rows = await _network_adapter_ports(client, adapter)
-        if not port_rows:
-            found.append({
-                **base_row,
-                "Port": "N/A",
-                "MACAddress": "N/A",
-                "LinkStatus": "N/A",
-            })
-            continue
-        for port_row in port_rows:
-            found.append({**base_row, **port_row})
-    return found or [{
-        "Name": "N/A",
-        "PartNumber": "N/A",
-        "Location": "N/A",
-        "Port": "N/A",
-        "MACAddress": "N/A",
-        "LinkStatus": "N/A",
-        "Version": "N/A",
-    }]
+        ports = await _resolved_network_ports(client, adapter)
+        controllers = adapter.get("Controllers") or []
+        firmware = controllers[0].get("FirmwarePackageVersion") if controllers else None
+        entry = classify_network_adapter(
+            adapter_id=adapter.get("Id") or "",
+            name=adapter.get("Name") or "",
+            model=adapter.get("Model") or "",
+            part_number=_adapter_part_number(adapter, oem_info_map),
+            location=_adapter_location(adapter, oem_info_map),
+            firmware=firmware or "N/A",
+            ports=ports,
+        )
+        if entry:
+            result.append(entry)
+    return result
+
+
+async def fetch_network_list_row(client: ILOClient) -> list[tuple[str, str]]:
+    """Per-server row for `proliant ilo network list`:
+    Location | Port | MAC | Link Status.
+    """
+    report = await fetch_network_report_data(client)
+    summary = summarize_network_for_list(report)
+    return [
+        ("Location",     summary["location"]),
+        ("Port",         summary["port"]),
+        ("MAC",          summary["mac"]),
+        ("Link Status",  summary["link_status"]),
+    ]
 
 
 async def _storage_members(client: ILOClient) -> list[dict[str, Any]]:
@@ -398,46 +432,6 @@ async def fetch_memory_info(client: ILOClient) -> list[tuple[str, str]]:
     return found or _EMPTY
 
 
-async def _build_nic_label_map(client: ILOClient) -> dict[str, str]:
-    chassis = await client.get(await client.get_chassis_uri())
-    na_uri = chassis.get("NetworkAdapters", {}).get("@odata.id")
-    if not na_uri:
-        return {}
-
-    label_map: dict[str, str] = {}
-    for adapter in await _member_resources(client, na_uri):
-        model = (adapter.get("Model") or adapter.get("Name") or "NIC").strip()
-        model = _PORT_RE.sub("", model).strip()
-        slot_label = _adapter_location(adapter)
-        short_model = re.sub(r"\W+$", "", model[:35])
-        abbrev_slot = re.sub(r"\bSlot (\S+)", r"S_\1", slot_label) if slot_label else ""
-        label_prefix = f"{abbrev_slot}({short_model})" if slot_label else short_model
-
-        hpe_ports = adapter.get("Oem", {}).get("Hpe", {}).get("PhysicalPorts", [])
-        if hpe_ports:
-            for port in hpe_ports:
-                mac = (port.get("MacAddress") or "").lower().strip()
-                port_num = port.get("PortNumber", "?")
-                if mac:
-                    label_map[mac] = f"{label_prefix}p{port_num}"
-            continue
-
-        ndf_col = adapter.get("NetworkDeviceFunctions", {}).get("@odata.id")
-        if not ndf_col:
-            continue
-        for port_idx, ndf in enumerate(await _member_resources(client, ndf_col), start=1):
-            label = f"{label_prefix}p{port_idx}"
-            mac = ((ndf.get("Ethernet") or {}).get("PermanentMACAddress") or "").lower().strip()
-            if mac:
-                label_map[mac] = label
-                continue
-            for eth_link in ndf.get("Links", {}).get("EthernetInterfaces", []):
-                uri = eth_link.get("@odata.id", "")
-                if uri:
-                    label_map[uri] = label
-    return label_map
-
-
 async def _build_oem_device_info_map(client: ILOClient) -> dict[str, dict[str, str]]:
     chassis = await client.get(await client.get_chassis_uri())
     devices_uri = ((chassis.get("Oem") or {}).get("Hpe") or {}).get("Links", {}).get("Devices", {}).get("@odata.id")
@@ -458,48 +452,6 @@ async def _build_oem_device_info_map(client: ILOClient) -> dict[str, dict[str, s
             ).strip(),
         }
     return info_map
-
-
-async def _network_adapter_ports(client: ILOClient, adapter: dict[str, Any]) -> list[dict[str, str]]:
-    port_rows: list[dict[str, str]] = []
-    ports_uri = adapter.get("Ports", {}).get("@odata.id")
-    if ports_uri:
-        for port in await _member_resources(client, ports_uri):
-            macs = ((port.get("Ethernet") or {}).get("AssociatedMACAddresses") or [])
-            port_rows.append({
-                "Port": f"p{port.get('PortId') or port.get('Id') or '?'}",
-                "MACAddress": str(macs[0]).lower() if macs else "N/A",
-                "LinkStatus": _display_link_status(
-                    port.get("LinkStatus")
-                    or port.get("LinkState")
-                    or port.get("Status", {}).get("State")
-                    or "N/A"
-                ),
-            })
-        if port_rows:
-            return port_rows
-
-    ndf_uri = adapter.get("NetworkDeviceFunctions", {}).get("@odata.id")
-    if not ndf_uri:
-        return []
-    for idx, ndf in enumerate(await _member_resources(client, ndf_uri), start=1):
-        eth = ndf.get("Ethernet") or {}
-        mac = (eth.get("PermanentMACAddress") or eth.get("MACAddress") or "").lower().strip() or "N/A"
-        port_rows.append({
-            "Port": f"p{ndf.get('Id') or idx}",
-            "MACAddress": mac,
-            "LinkStatus": "N/A",
-        })
-    return port_rows
-
-
-def _display_link_status(status: str) -> str:
-    normalized = status.replace("_", "").replace("-", "").strip().lower()
-    if normalized == "linkup":
-        return "Link Up"
-    if normalized == "nolink":
-        return "No Link"
-    return status
 
 
 def _adapter_part_number(adapter: dict[str, Any], oem_info_map: dict[str, dict[str, str]] | None = None) -> str:
@@ -528,30 +480,6 @@ def _adapter_location(adapter: dict[str, Any], oem_info_map: dict[str, dict[str,
     if oem_info_map and serial:
         return oem_info_map.get(serial, {}).get("Location", "")
     return ""
-
-
-async def fetch_nic_status(client: ILOClient) -> list[tuple[str, str]]:
-    system = await client.get(await client.get_system_uri())
-    eth_uri = system.get("EthernetInterfaces", {}).get("@odata.id")
-    if not eth_uri:
-        return _EMPTY
-
-    label_map = await _build_nic_label_map(client)
-    found = []
-    for item, iface in zip(await _collection_members(client, eth_uri), await _member_resources(client, eth_uri)):
-        raw_name = iface.get("Name") or ""
-        iface_id = iface.get("Id") or ""
-        if raw_name and raw_name != iface_id:
-            name = raw_name
-        else:
-            mac_key = (iface.get("MACAddress") or "").lower().strip()
-            name = label_map.get(mac_key) or label_map.get(item.get("@odata.id", "")) or iface_id or "N/A"
-        link = iface.get("LinkStatus") or iface.get("Status", {}).get("State") or "N/A"
-        mac = iface.get("MACAddress") or "N/A"
-        speed = iface.get("SpeedMbps")
-        speed_str = f"  {speed} Mbps" if speed else ""
-        found.append((name, f"{link:<10} {mac}{speed_str}"))
-    return found or _EMPTY
 
 
 async def fetch_license_info(client: ILOClient) -> list[tuple[str, str]]:

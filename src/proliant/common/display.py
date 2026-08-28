@@ -254,7 +254,28 @@ def print_storage_list_table(results: list[tuple[str, str | None, list[tuple[str
     storage_for_list emits one line per controller) -- those are rendered
     as aligned continuation lines under the same server row.
     """
-    keys = ("Storage Controller", "RAID Attached", "Direct Attached")
+    _print_multiline_list_table(results, ("Storage Controller", "RAID Attached", "Direct Attached"))
+
+
+def print_network_list_table(results: list[tuple[str, str | None, list[tuple[str, str]]]]) -> None:
+    """Plain fixed-width `network list` table shared by `ilo`, `oneview`,
+    and `com` -- Server | Location | Port | MAC | Link Status. Same
+    rendering style as `print_storage_list_table` (one line per physical
+    NIC port, aligned under the server row) so all three modules' `list`
+    commands look identical.
+    """
+    _print_multiline_list_table(results, ("Location", "Port", "MAC", "Link Status"))
+
+
+def _print_multiline_list_table(
+    results: list[tuple[str, str | None, list[tuple[str, str]]]],
+    keys: tuple[str, ...],
+) -> None:
+    """Shared renderer behind print_storage_list_table/print_network_list_table:
+    a plain fixed-width table (no Rich box/title) where any cell value may
+    contain embedded '\\n' -- rendered as aligned continuation lines under
+    the same server row.
+    """
     server_data: dict[str, dict[str, str]] = {}
     errors: dict[str, str] = {}
     for host_name, error, rows in results:
@@ -291,4 +312,50 @@ def print_storage_list_table(results: list[tuple[str, str | None, list[tuple[str
             print(row)
         if host_name in errors:
             print(f"  {'':>{srv_w}}   {errors[host_name]}")
+
+
+def print_network_report(console: Console, network_report: list[dict]) -> None:
+    """Render the per-adapter / per-port host NIC report for `network
+    describe` -- mirrors print_storage_report's shape/style, fed the report
+    produced by proliant.common.network_report.classify_network_adapter:
+      [{"adapter": ..., "model": ..., "part_number": ..., "location": ...,
+        "firmware": ..., "ports": [...]}]
+    """
+    if not network_report:
+        console.print("[dim]No network adapters found.[/dim]")
+        return
+
+    total_ports = sum(len(a["ports"]) for a in network_report)
+    console.print(
+        f"[bold]Network[/bold]   "
+        f"[dim]{len(network_report)} adapter(s), {total_ports} port(s)[/dim]"
+    )
+    for adapter in network_report:
+        console.print(
+            f"  [bold]{adapter['adapter']}[/bold]  "
+            f"[dim]{adapter['location']}  fw {adapter['firmware']}[/dim]  "
+            f"[dim]({len(adapter['ports'])} port(s))[/dim]"
+        )
+        port_t = Table(box=box.SIMPLE, show_header=True, header_style="bold cyan", padding=(0, 2))
+        port_t.add_column("Port", no_wrap=True)
+        port_t.add_column("MAC", no_wrap=True)
+        port_t.add_column("Link Status", no_wrap=True)
+        port_t.add_column("Speed", justify="right")
+        port_t.add_column("LLDP Neighbor")
+        port_t.add_column("Health")
+        for p in adapter["ports"]:
+            speed_str = f"{p['speed_gbps']:g} Gbps" if p.get("speed_gbps") else "—"
+            neighbor = p.get("lldp_neighbor")
+            if neighbor:
+                neighbor_str = f"{neighbor['chassis']}  ({neighbor['port']})"
+            else:
+                neighbor_str = "—"
+            link = p["link_status"]
+            link_str = f"[green]{link}[/green]" if link == "Link Up" else (
+                f"[dim]{link}[/dim]" if link in ("No Link", "Disabled") else link
+            )
+            port_t.add_row(
+                p["port"], p["mac"], link_str, speed_str, neighbor_str, health_style(p["health"]),
+            )
+        console.print(port_t)
 

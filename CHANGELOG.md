@@ -4,6 +4,18 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ---
 
+## v1.1.6 — 2026-08-28
+
+### New Features
+- `proliant ilo network list`/`network describe <server name>`, `proliant oneview network list`/`network describe <server name>`, `proliant com network list`/`network describe <server name>`: new fleet-wide and per-server host NIC inventory — location, port, MAC, link status, speed, and LLDP neighbor (where exposed) — matching the existing `storage` command pattern across all three modules.
+- `servers describe` (`ilo`/`oneview`/`com`): now embeds a **Network** section (per-adapter, per-port host NIC detail) alongside the existing Storage section, best-effort — silently omitted if network inventory isn't available for that server.
+- `proliant ilo servers describe`: also embeds a compact **iLO NIC** section (iLO's own dedicated management port: MAC, link, IPv4, DNS, LLDP) so the standalone `--ilo-nic` flag is no longer needed for a quick look.
+
+### Enhancements
+- Consolidated iLO's previously inconsistent NIC entry points (`nic-host`, `nic`, `nic-ilo`, `servers describe --ilo-nic`, `network set`) into a single, storage-aligned pair: `network` (host NICs, `list`/`describe`) and `network-ilo` (iLO's own dedicated NIC, `list`/`describe`/`set`). **Breaking change**: `nic-host`, `nic`, `nic-ilo`, `network set ...`, and `servers describe --ilo-nic` have all been removed — use `network list`/`network describe`, `network-ilo list`/`network-ilo describe`/`network-ilo set ...`, and `servers describe` (Network/iLO NIC sections are now always shown) instead.
+
+---
+
 ## v1.1.5 — 2026-08-28
 
 ### New Features

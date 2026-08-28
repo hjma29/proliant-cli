@@ -7,6 +7,7 @@ import sys
 from proliant.common.display import get_console
 from proliant.common.display import health_style as _health_style
 from proliant.common.display import print_storage_report
+from proliant.common.display import print_network_report
 from proliant.ilo import inventory
 from proliant.ilo.client import ilo_session, ServerDownOrUnreachableError
 
@@ -28,6 +29,28 @@ async def run_describe_storage(host: dict) -> None:
 
     console.print(f"[bold]{host['name']}[/bold]")
     print_storage_report(console, storage_report)
+
+
+async def run_describe_network(host: dict) -> None:
+    """Show only the (host) network section for a single server:
+    per-adapter, per-port detail -- model, part number, location,
+    firmware, MAC, link status, speed, LLDP neighbor. Storage's sibling
+    for NICs; iLO's own dedicated management NIC is a separate command
+    (`network-ilo describe`)."""
+    console = get_console()
+    try:
+        async with ilo_session(host, show_hint=True) as c:
+            with console.status("[dim]Fetching network details…[/dim]"):
+                network_report = await inventory.fetch_network_report_data(c)
+    except ServerDownOrUnreachableError as exc:
+        console.print(f"[red]{host['name']} unreachable: {exc}[/red]")
+        sys.exit(1)
+    except Exception as exc:
+        console.print(f"[red]Error fetching network details: {type(exc).__name__}: {exc}[/red]")
+        sys.exit(1)
+
+    console.print(f"[bold]{host['name']}[/bold]")
+    print_network_report(console, network_report)
 
 
 async def run_describe(host: dict) -> None:
@@ -61,6 +84,14 @@ async def run_describe(host: dict) -> None:
                     storage_report = await inventory.fetch_storage_report_data(c)
                 except Exception:  # intentional: storage is best-effort, never block describe
                     storage_report = []
+                try:
+                    network_report = await inventory.fetch_network_report_data(c)
+                except Exception:  # intentional: network is best-effort, never block describe
+                    network_report = []
+                try:
+                    ilo_nic = await inventory.fetch_ilo_nic_details(c)
+                except Exception:  # intentional: iLO NIC is best-effort, never block describe
+                    ilo_nic = {}
     except ServerDownOrUnreachableError as exc:
         console.print(f"[red]{host['name']} unreachable: {exc}[/red]")
         sys.exit(1)
@@ -264,6 +295,15 @@ async def run_describe(host: dict) -> None:
     if storage_report:
         print_storage_report(console, storage_report)
 
+    # ── Network ───────────────────────────────────────────────────────────────
+    if network_report:
+        print_network_report(console, network_report)
+
+    # ── iLO NIC ───────────────────────────────────────────────────────────────
+    if ilo_nic:
+        console.print("[bold]iLO NIC[/bold]")
+        print_ilo_nic_report(console, ilo_nic)
+
     # ── Firmware ──────────────────────────────────────────────────────────────
     if fw_list:
         if upd_state == "Complete":
@@ -412,9 +452,7 @@ async def run_describe_fw_update(host: dict) -> None:
 
 async def run_describe_ilo_nic(host: dict) -> None:
     """Show iLO dedicated NIC details: DHCP/static, IP, DNS, routes, LLDP, MAC."""
-    from rich import box as rich_box
     from rich.panel import Panel
-    from rich.table import Table
 
     console = get_console()
 
@@ -440,6 +478,15 @@ async def run_describe_ilo_nic(host: dict) -> None:
         f"[bold]{host['name']}[/bold]   [dim]iLO Dedicated Network Port[/dim]",
         expand=False,
     ))
+    print_ilo_nic_report(console, nic)
+
+
+def print_ilo_nic_report(console, nic: dict) -> None:
+    """Render iLO's own dedicated NIC: MAC/link/speed, IPv4, DNS, static
+    routes, LLDP -- shared by `network-ilo describe` and the embedded
+    "iLO NIC" section in `servers describe`."""
+    from rich import box as rich_box
+    from rich.table import Table
 
     def _kv_table() -> Table:
         t = Table(box=rich_box.SIMPLE, show_header=False, padding=(0, 2))

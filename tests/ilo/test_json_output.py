@@ -27,13 +27,13 @@ class TestIloParserJson:
     def test_parser_json_flag_on_list(self):
         from proliant.ilo.cli import _build_parser
         parser = _build_parser()
-        args = parser.parse_args(["--json", "nic-host", "list"])
+        args = parser.parse_args(["--json", "network", "list"])
         assert args.json_output is True
 
     def test_parser_json_default_false(self):
         from proliant.ilo.cli import _build_parser
         parser = _build_parser()
-        args = parser.parse_args(["nic-host", "list"])
+        args = parser.parse_args(["network", "list"])
         assert args.json_output is False
 
     def test_parser_json_flag_list_firmwares(self):
@@ -52,7 +52,7 @@ class TestIloJsonOutput:
 
         with patch("proliant.ilo.cli._load_hosts_or_exit", return_value=[FAKE_HOST]), \
              patch("proliant.ilo.cli._run_parallel_async", new_callable=AsyncMock, return_value=fake_results):
-            cli.main(["--json", "nic-host", "list", "dl325-gen12"])
+            cli.main(["--json", "network", "list", "dl325-gen12"])
 
         captured = capsys.readouterr()
         result = json.loads(captured.out)
@@ -93,7 +93,7 @@ class TestIloJsonOutput:
 
         with patch("proliant.ilo.cli._load_hosts_or_exit", return_value=[FAKE_HOST]), \
              patch("proliant.ilo.cli._run_parallel_async", new_callable=AsyncMock, return_value=fake_results):
-            cli.main(["--json", "nic-host", "list", "dl325-gen12"])
+            cli.main(["--json", "network", "list", "dl325-gen12"])
 
         captured = capsys.readouterr()
         result = json.loads(captured.out)
@@ -118,7 +118,7 @@ class TestIloJsonOutput:
 
         with patch("proliant.ilo.cli._load_hosts_or_exit", return_value=[FAKE_HOST]), \
              patch("proliant.ilo.cli._run_parallel_async", new_callable=AsyncMock, return_value=fake_results):
-            cli.main(["--json", "nic-host", "list", "dl325-gen12"])
+            cli.main(["--json", "network", "list", "dl325-gen12"])
 
         captured = capsys.readouterr()
         result = json.loads(captured.out)
@@ -132,7 +132,7 @@ class TestIloJsonOutput:
 
         with patch("proliant.ilo.cli._load_hosts_or_exit", return_value=[FAKE_HOST]), \
              patch("proliant.ilo.cli._run_parallel_async", new_callable=AsyncMock, return_value=fake_results):
-            cli.main(["--json", "nic-host", "list", "dl325-gen12"])
+            cli.main(["--json", "network", "list", "dl325-gen12"])
 
         captured = capsys.readouterr()
         assert "[bold" not in captured.out

@@ -4,6 +4,16 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ---
 
+## v1.1.3 — 2026-08-28
+
+### Bug Fixes
+- `proliant ilo storage`/`servers` (list, describe): fixed a misclassification where direct-attached NVMe drives were incorrectly reported as sitting behind a "RAID Controller" — HPE's Redfish `Storage` resources always expose a `StorageControllers` entry, even for direct-attached drives, describing the drive's own embedded NVMe controller chip rather than a real RAID/HBA product. Classification now uses the Redfish resource's `Id` prefix (`DE*` = genuine RDE-capable controller, `DA*` = Direct Attached) as the primary signal, with the old heuristic kept only as a fallback for older iLO firmware. Controller/firmware fields are no longer populated with a drive's own misleading part number for direct-attached disks, and controller counts shown in `servers list` ("N ctrl") and `storage describe` ("N controller(s)") now only count real RAID controllers.
+
+### Enhancements
+- `proliant ilo storage list`: reworked into a fleet-wide table with **Storage Controller**, **Disks Behind Controller**, and **Disks Direct-Connected** columns per server, making it easy to see at a glance which servers have a real RAID/boot controller (with model) versus pure direct-attached NVMe/SSD storage.
+
+---
+
 ## v1.1.2 — 2026-08-27
 
 ### New Features

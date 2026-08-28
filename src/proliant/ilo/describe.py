@@ -29,18 +29,29 @@ def print_storage_report(console, storage_report: list[dict]) -> None:
         return
 
     total_disks = sum(len(ctrl["drives"]) for ctrl in storage_report)
+    ctrl_count = sum(1 for c in storage_report if c["attach_mode"] == "RAID Controller")
     console.print(
         f"[bold]Storage[/bold]   "
-        f"[dim]{len(storage_report)} controller(s), {total_disks} disk(s)[/dim]"
+        f"[dim]{ctrl_count} controller(s), {total_disks} disk(s)[/dim]"
     )
     for ctrl in storage_report:
-        mode_style = "green" if ctrl["attach_mode"] == "RAID Controller" else "yellow"
-        console.print(
-            f"  [bold]{ctrl['controller']}[/bold]  "
-            f"[dim]fw {ctrl['firmware']}[/dim]  "
-            f"[{mode_style}]{ctrl['attach_mode']}[/{mode_style}]  "
-            f"[dim]({len(ctrl['drives'])} disk(s))[/dim]"
-        )
+        is_raid = ctrl["attach_mode"] == "RAID Controller"
+        if is_raid:
+            console.print(
+                f"  [bold]{ctrl['controller']}[/bold]  "
+                f"[dim]fw {ctrl['firmware']}[/dim]  "
+                f"[green]{ctrl['attach_mode']}[/green]  "
+                f"[dim]({len(ctrl['drives'])} disk(s))[/dim]"
+            )
+        else:
+            # Direct-attached: there is no real controller to name — the
+            # embedded Storage resource's Controllers entry (if any)
+            # describes the drive's own controller chip, not a RAID/HBA
+            # product, so it's intentionally omitted here.
+            console.print(
+                f"  [yellow]{ctrl['attach_mode']}[/yellow]  "
+                f"[dim]({len(ctrl['drives'])} disk(s))[/dim]"
+            )
         disk_t = Table(box=rich_box.SIMPLE, show_header=True, header_style="bold cyan", padding=(0, 2))
         disk_t.add_column("Disk ID", no_wrap=True)
         disk_t.add_column("Bay", no_wrap=True)

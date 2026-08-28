@@ -10,6 +10,9 @@ import asyncio
 import re
 from typing import Any
 
+from proliant.common.storage_report import classify_storage_resource
+from proliant.common.storage_report import summarize_storage_report as summarize_storage_report
+from proliant.common.storage_report import summarize_storage_for_list as summarize_storage_for_list
 from proliant.ilo.client import ILOClient
 
 _PORT_RE = re.compile(r"\s*\b(?:\d+-port|dual[ -]port|quad[ -]port)\b", re.IGNORECASE)
@@ -267,12 +270,6 @@ async def fetch_disk_map(client: ILOClient) -> list[tuple[str, str]]:
     return found or _EMPTY
 
 
-def _drive_bay_label(drive: dict) -> str:
-    loc = (drive.get("PhysicalLocation") or {}).get("PartLocation", {})
-    ordinal = loc.get("LocationOrdinalValue")
-    return loc.get("ServiceLabel") or (f"Bay {ordinal}" if ordinal is not None else "N/A")
-
-
 async def fetch_storage_report_data(client: ILOClient) -> list[dict]:
     """Return per-controller storage + physical-drive detail for reporting.
 
@@ -282,20 +279,12 @@ async def fetch_storage_report_data(client: ILOClient) -> list[dict]:
     drives as RAID-controlled ("behind" a controller) vs. direct-attached
     (exposed straight to the OS, no RAID/HBA card).
 
-    Classification is based on the Storage resource's own Id prefix, which
-    HPE's Redfish implementation uses consistently across Gen10/Gen11:
-      DE* = RDE-capable device — a genuine hardware controller (Smart
-            Array / MegaRAID RAID card, or e.g. the NS204i-u Boot
-            Controller). Drives sit "behind" it.
-      DA* = Direct Attached — drives connect straight to CPU/PCH PCIe
-            lanes, no RAID/HBA card in between.
-    Confirmed live: direct-attached (DA*) NVMe drives *also* expose a
-    StorageControllers/Controllers entry, but it describes the drive's own
-    embedded NVMe controller chip (Model/Name == the SSD's own part
-    number, e.g. "MO003200KXAVU"/"PE8030") — not a purchasable RAID/HBA
-    product — so presence of a Controllers entry alone is not a reliable
-    RAID-vs-direct signal and is only used as a fallback for storage
-    resources whose Id doesn't start with DA/DE (e.g. older iLO 5 schema).
+    Classification itself lives in proliant.common.storage_report (shared
+    with `proliant oneview storage`, which surfaces the same Redfish
+    Storage schema via OneView's localStorageV2 sub-resource) — this
+    function's job is just resolving iLO's Redfish `@odata.id` links
+    (Drives, and Controllers when it's a link rather than an inline array)
+    into plain dicts before handing off to the shared classifier.
     """
     result: list[dict] = []
     for storage in await _storage_members(client):
@@ -304,152 +293,26 @@ async def fetch_storage_report_data(client: ILOClient) -> list[dict]:
             continue
 
         storage_id = (storage.get("Id") or "").upper()
-        if storage_id.startswith("DE"):
-            is_raid = True
-        elif storage_id.startswith("DA"):
-            is_raid = False
-        else:
-            # Unrecognized Id scheme (e.g. legacy iLO 5) — fall back to the
-            # old heuristic: presence of a controller entry implies RAID.
-            ctrl_link = (storage.get("Controllers") or {}).get("@odata.id")
-            has_ctrl_link = bool(ctrl_link and await _member_resources(client, ctrl_link))
-            is_raid = has_ctrl_link or bool(storage.get("StorageControllers"))
-
-        attach_mode = "RAID Controller" if is_raid else "Direct/HBA"
-
-        if is_raid:
-            ctrl_entries: list[dict] = list(storage.get("StorageControllers", []) or [])
+        ctrl_entries: list[dict] = list(storage.get("StorageControllers", []) or [])
+        # Direct Attached (DA*) storage's own Controllers entry only ever
+        # describes the drive's embedded chip, never a real RAID/HBA
+        # product — skip resolving it, since attach mode is already
+        # determined by the Id prefix and the entry would be discarded.
+        if not storage_id.startswith("DA"):
             ctrl_link = (storage.get("Controllers") or {}).get("@odata.id")
             if not ctrl_entries and ctrl_link:
                 ctrl_entries = await _member_resources(client, ctrl_link)
-            if ctrl_entries:
-                first = ctrl_entries[0]
-                ctrl_name = first.get("Model") or first.get("Name") or storage.get("Name", "N/A")
-                ctrl_fw = first.get("FirmwareVersion") or "N/A"
-            else:
-                ctrl_name = storage.get("Name", "N/A")
-                ctrl_fw = "N/A"
-        else:
-            # Direct-attached: any Controllers/StorageControllers entry
-            # describes the drive's own embedded controller, not a real
-            # RAID/HBA product — don't surface it as a "controller".
-            ctrl_name = "—"
-            ctrl_fw = "—"
 
-        drive_dicts = []
-        for drive in drives:
-            cap_bytes = drive.get("CapacityBytes") or 0
-            protocol = drive.get("Protocol") or "N/A"
-            media_type = drive.get("MediaType") or "N/A"
-            drive_dicts.append({
-                "id":           drive.get("Id") or _drive_bay_label(drive),
-                "name":         drive.get("Name", "N/A"),
-                "bay":          _drive_bay_label(drive),
-                "capacity_gib": round(cap_bytes / (1024 ** 3)) if cap_bytes else 0,
-                "media_type":   media_type,
-                "protocol":     protocol,
-                # Simplified type for compact list views: "NVMe" takes
-                # priority over media type (e.g. an NVMe SSD shows as
-                # "NVMe", not "SSD") since that's the more useful signal
-                # for at-a-glance fleet storage views.
-                "type_label":   "NVMe" if protocol.upper() == "NVME" else media_type,
-                "model":        drive.get("Model") or "N/A",
-                "serial":       drive.get("SerialNumber") or "N/A",
-                "part_number":  drive.get("PartNumber") or "N/A",
-                "firmware":     drive.get("Revision") or "N/A",
-                "health":       (drive.get("Status") or {}).get("Health") or "N/A",
-                "attached_via": attach_mode,
-            })
-
-        result.append({
-            "controller":  ctrl_name,
-            "firmware":    ctrl_fw,
-            "attach_mode": attach_mode,
-            "drives":      drive_dicts,
-        })
+        entry = classify_storage_resource(
+            storage_id=storage.get("Id") or "",
+            storage_name=storage.get("Name", "N/A"),
+            ctrl_entries=ctrl_entries,
+            drives=drives,
+        )
+        if entry:
+            result.append(entry)
 
     return result
-
-
-def summarize_storage_report(report: list[dict]) -> str:
-    """Compact one-line storage summary for the `servers list` table.
-
-    e.g. "1 ctrl, 8 disks: 6x1920GiB SSD(RAID), 2x480GiB SSD(Direct)"
-
-    "ctrl" only counts real hardware storage controllers (RAID/boot
-    controllers) — direct-attached (DA*) Storage subsystems each carry
-    their own Storage-resource entry per drive but are not controllers,
-    so they're excluded from this count (see fetch_storage_report_data).
-    """
-    if not report:
-        return "—"
-    total_disks = sum(len(c["drives"]) for c in report)
-    if not total_disks:
-        return "—"
-    ctrl_count = sum(1 for c in report if c["attach_mode"] == "RAID Controller")
-
-    groups: dict[tuple, int] = {}
-    for c in report:
-        for d in c["drives"]:
-            key = (d["capacity_gib"], d["media_type"], c["attach_mode"])
-            groups[key] = groups.get(key, 0) + 1
-
-    parts = []
-    for (cap, media, mode), count in sorted(groups.items(), key=lambda kv: -kv[1]):
-        cap_str = f"{cap}GiB" if cap else "?"
-        media_str = f" {media}" if media and media != "N/A" else ""
-        mode_short = "RAID" if mode == "RAID Controller" else "Direct"
-        parts.append(f"{count}x{cap_str}{media_str}({mode_short})")
-
-    return f"{ctrl_count} ctrl, {total_disks} disks: " + ", ".join(parts)
-
-
-def _summarize_drive_group(drives: list[dict]) -> str:
-    """Compact 'NxSIZE_TYPE, ...' summary for a group of drives.
-
-    Groups by (capacity, type_label) — e.g. "4x2981GiB NVMe, 2x480GiB SSD".
-    """
-    if not drives:
-        return "—"
-    groups: dict[tuple, int] = {}
-    for d in drives:
-        key = (d["capacity_gib"], d.get("type_label") or d["media_type"])
-        groups[key] = groups.get(key, 0) + 1
-    parts = []
-    for (cap, type_label), count in sorted(groups.items(), key=lambda kv: -kv[1]):
-        cap_str = f"{cap}GiB" if cap else "?"
-        type_str = f" {type_label}" if type_label and type_label != "N/A" else ""
-        parts.append(f"{count}x{cap_str}{type_str}")
-    return ", ".join(parts)
-
-
-def summarize_storage_for_list(report: list[dict]) -> dict[str, str]:
-    """Storage summary split by attachment, for the `storage list` table.
-
-    Returns a dict with three columns:
-      controller — distinct storage controller model(s) (RAID/HBA cards
-                   only; direct-attached drives have no real controller)
-      behind     — disks behind a storage controller, e.g. "2x900GiB SSD"
-      direct     — disks directly attached to the CPU/PCH, no controller,
-                   e.g. "4x2981GiB NVMe"
-    """
-    controller_models: list[str] = []
-    behind_drives: list[dict] = []
-    direct_drives: list[dict] = []
-
-    for ctrl in report:
-        if ctrl["attach_mode"] == "RAID Controller":
-            if ctrl["controller"] not in ("—", "N/A") and ctrl["controller"] not in controller_models:
-                controller_models.append(ctrl["controller"])
-            behind_drives.extend(ctrl["drives"])
-        else:
-            direct_drives.extend(ctrl["drives"])
-
-    return {
-        "controller": ", ".join(controller_models) if controller_models else "—",
-        "behind":     _summarize_drive_group(behind_drives),
-        "direct":     _summarize_drive_group(direct_drives),
-    }
 
 
 async def fetch_storage_list_row(client: ILOClient) -> list[tuple[str, str]]:

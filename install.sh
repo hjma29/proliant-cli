@@ -244,6 +244,16 @@ _proliant_completion() {
     fi
     COMPREPLY=()
     local word trimmed suffix
+    # Detect whether the user already opened a quote before invoking
+    # completion (e.g. typed `describe "Enc<TAB>`). Counting unescaped
+    # quote chars before the cursor tells us which quote char (if any) is
+    # still open, so we know the shell will do its own closing/escaping.
+    local head="${COMP_LINE:0:$COMP_POINT}"
+    local dq="${head//[^\"]/}"
+    local sq="${head//[^\']/}"
+    local prequote=""
+    if (( ${#dq} % 2 == 1 )); then prequote='"'; fi
+    if (( ${#sq} % 2 == 1 )); then prequote="'"; fi
     if [[ ${#raw[@]} -eq 1 ]]; then
         word="${raw[0]}"
         trimmed="$word"
@@ -252,7 +262,12 @@ _proliant_completion() {
             trimmed="${word% }"
             suffix=" "
         fi
-        if [[ $SUPPRESS_SPACE == 1 ]] && [[ "$trimmed" =~ [=/:]$ ]]; then
+        if [[ -n "$prequote" ]]; then
+            # Already inside a quote the user opened: insert raw and let
+            # bash's own quote-aware completion close it (no escaping
+            # needed or wanted here).
+            COMPREPLY+=("${trimmed}${suffix}")
+        elif [[ $SUPPRESS_SPACE == 1 ]] && [[ "$trimmed" =~ [=/:]$ ]]; then
             # Continuable value (directory path, --flag=): keep native
             # backslash-escaping so the shell can keep extending the token
             # without having to track an unmatched open quote, and let bash
@@ -268,10 +283,24 @@ _proliant_completion() {
             COMPREPLY+=("'${trimmed//\'/\'\\\'\'}'${suffix}")
         fi
     else
-        # Ambiguous common-prefix candidates: fall back to native
-        # backslash-escaping so the shared prefix bash computes across
-        # entries stays a single valid token (no unmatched open-quote state
-        # to manage while the user keeps typing).
+        # Ambiguous common-prefix candidates. If any candidate needs
+        # quoting (contains a space or other unsafe char), prepend an
+        # opening single quote to *every* candidate instead of
+        # backslash-escaping each one. Bash then recognizes the shared
+        # prefix as an open quoted token: it extends/narrows it with the
+        # literal (unescaped) text and auto-closes the quote once a single
+        # match remains -- no visible backslashes at any point. Already
+        # being inside a user-opened quote gets the same raw treatment.
+        local needs_quote=0
+        if [[ -z "$prequote" ]]; then
+            for word in "${raw[@]}"; do
+                trimmed="${word% }"
+                if [[ ! "$trimmed" =~ ^[A-Za-z0-9._/:@%+=,-]*$ ]]; then
+                    needs_quote=1
+                    break
+                fi
+            done
+        fi
         for word in "${raw[@]}"; do
             trimmed="$word"
             suffix=""
@@ -279,7 +308,13 @@ _proliant_completion() {
                 trimmed="${word% }"
                 suffix=" "
             fi
-            COMPREPLY+=("$(printf '%q' "$trimmed")${suffix}")
+            if [[ -n "$prequote" ]]; then
+                COMPREPLY+=("${trimmed}${suffix}")
+            elif [[ $needs_quote == 1 ]]; then
+                COMPREPLY+=("'${trimmed}${suffix}")
+            else
+                COMPREPLY+=("${trimmed}${suffix}")
+            fi
         done
     fi
 }

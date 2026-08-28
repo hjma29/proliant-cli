@@ -4,6 +4,20 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ---
 
+## v1.1.4 — 2026-08-28
+
+### New Features
+- `proliant oneview storage list`/`storage describe <server name>`: new fleet-wide and per-server RAID controller / direct-attached disk inventory for OneView-managed servers, matching `proliant ilo storage`. Reads OneView's `localStorageV2` sub-resource, which proxies the same Redfish `Storage` schema as iLO, so classification and formatting are identical across both modules.
+
+### Bug Fixes
+- `proliant oneview storage list`: the **Server** column now shows the full server name (e.g. `Enclosure-01, bay 1`) instead of the shortened display form, so it can be copy-pasted directly into `storage describe <name>` without a "not found" error.
+- Bash/zsh tab completion (Linux, macOS, WSL): completing a server/resource name with spaces or commas when multiple candidates still share a common prefix no longer inserts ugly `\ ` / `\,` backslash-escapes — the shell now completes it as a single quoted token instead. Windows PowerShell completion was unaffected (already quoted correctly).
+
+### Enhancements
+- `proliant ilo storage list` / `proliant oneview storage list`: disk sizes now shown in decimal GB (e.g. `2981GiB` → `3201GB`) instead of GiB, matching drive-vendor labeling, with `(N x SIZE TYPE)` spacing for readability. Storage controller names are trimmed to just the part number (e.g. `HPE NS204i-u Gen11 Boot Controller` → `NS204i-u Gen11`).
+
+---
+
 ## v1.1.3 — 2026-08-28
 
 ### Bug Fixes

@@ -176,3 +176,67 @@ def print_memory_report(rows: list[dict], source: str = "") -> None:
         )
 
     c.print(table)
+
+
+def health_style(v: str | None) -> str:
+    """Rich-styled health status string (green OK / yellow Warning / red
+    Critical), used across ilo/oneview describe output."""
+    styles = {"OK": "green", "Warning": "yellow", "Critical": "red"}
+    s = styles.get(v or "", "")
+    return f"[{s}]{v}[/{s}]" if s else (v or "—")
+
+
+def print_storage_report(console: Console, storage_report: list[dict]) -> None:
+    """Render the per-controller / per-disk storage report.
+
+    Shared by `proliant ilo storage describe`/`servers describe` and
+    `proliant oneview storage describe`/`servers describe` — both feed it
+    the same report shape produced by
+    proliant.common.storage_report.classify_storage_resource:
+      [{"controller": ..., "firmware": ..., "attach_mode": ..., "drives": [...]}]
+    """
+    if not storage_report:
+        console.print("[dim]No storage controllers/drives found.[/dim]")
+        return
+
+    total_disks = sum(len(ctrl["drives"]) for ctrl in storage_report)
+    ctrl_count = sum(1 for c in storage_report if c["attach_mode"] == "RAID Controller")
+    console.print(
+        f"[bold]Storage[/bold]   "
+        f"[dim]{ctrl_count} controller(s), {total_disks} disk(s)[/dim]"
+    )
+    for ctrl in storage_report:
+        is_raid = ctrl["attach_mode"] == "RAID Controller"
+        if is_raid:
+            console.print(
+                f"  [bold]{ctrl['controller']}[/bold]  "
+                f"[dim]fw {ctrl['firmware']}[/dim]  "
+                f"[green]{ctrl['attach_mode']}[/green]  "
+                f"[dim]({len(ctrl['drives'])} disk(s))[/dim]"
+            )
+        else:
+            # Direct-attached: there is no real controller to name — the
+            # embedded Storage resource's Controllers entry (if any)
+            # describes the drive's own controller chip, not a RAID/HBA
+            # product, so it's intentionally omitted here.
+            console.print(
+                f"  [yellow]{ctrl['attach_mode']}[/yellow]  "
+                f"[dim]({len(ctrl['drives'])} disk(s))[/dim]"
+            )
+        disk_t = Table(box=box.SIMPLE, show_header=True, header_style="bold cyan", padding=(0, 2))
+        disk_t.add_column("Disk ID", no_wrap=True)
+        disk_t.add_column("Bay", no_wrap=True)
+        disk_t.add_column("Capacity", justify="right")
+        disk_t.add_column("Media", no_wrap=True)
+        disk_t.add_column("Protocol", no_wrap=True)
+        disk_t.add_column("Model", style="dim")
+        disk_t.add_column("Serial", style="dim")
+        disk_t.add_column("Firmware", style="dim")
+        disk_t.add_column("Health")
+        for d in ctrl["drives"]:
+            cap_str = f"{d['capacity_gib']} GiB" if d["capacity_gib"] else "—"
+            disk_t.add_row(
+                str(d["id"]), d["bay"], cap_str, d["media_type"], d["protocol"],
+                d["model"], d["serial"], d["firmware"], health_style(d["health"]),
+            )
+        console.print(disk_t)

@@ -200,9 +200,10 @@ async def test_summarize_storage_for_list_splits_by_attachment():
 
     # Only the real hardware controller model shows up — the direct-
     # attached drives' own embedded-controller Model is never surfaced.
-    assert summary["controller"] == "HPE NS204i-u Gen11 Boot Controller"
-    assert summary["behind"] == "2x447GiB NVMe"
-    assert summary["direct"] == "2x2981GiB NVMe"
+    # Controller name is trimmed to just the part number for the list view.
+    assert summary["controller"] == "NS204i-u Gen11"
+    assert summary["behind"] == "(2 x 480GB NVMe)"
+    assert summary["direct"] == "(2 x 3201GB NVMe)"
 
 
 def test_summarize_storage_for_list_empty():
@@ -214,6 +215,6 @@ def test_summarize_storage_for_list_empty():
 async def test_fetch_storage_list_row():
     rows = await inventory.fetch_storage_list_row(_client())
     row_dict = dict(rows)
-    assert row_dict["Storage Controller"] == "HPE NS204i-u Gen11 Boot Controller"
-    assert row_dict["Disks Behind Controller"] == "2x447GiB NVMe"
-    assert row_dict["Disks Direct-Connected"] == "2x2981GiB NVMe"
+    assert row_dict["Storage Controller"] == "NS204i-u Gen11"
+    assert row_dict["Disks Behind Controller"] == "(2 x 480GB NVMe)"
+    assert row_dict["Disks Direct-Connected"] == "(2 x 3201GB NVMe)"

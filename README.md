@@ -97,6 +97,8 @@ proliant com reports memory
 
 proliant oneview networks list
 proliant oneview networks describe <name>
+proliant oneview storage list                            # fleet-wide RAID controller + disks behind it / direct-connected
+proliant oneview storage describe <server name>          # full per-controller, per-disk detail for one server
 proliant oneview uplinksets list
 proliant oneview uplinksets describe <name>
 proliant oneview server-profiles list

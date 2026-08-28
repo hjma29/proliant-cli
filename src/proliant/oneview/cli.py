@@ -856,6 +856,96 @@ def _render_server_describe(info: dict) -> None:
         console.print(Panel(util_grid, title="Utilization", title_align="left", border_style="cyan"))
 
 
+# ── proliant oneview storage list/describe ─────────────────────────────────────────
+
+async def _async_storage_list() -> None:
+    """Fleet-wide RAID-controller vs. direct-attached storage summary,
+    mirroring `proliant ilo storage list`. Uses the same Redfish `Storage`
+    schema, fetched here via OneView's localStorageV2 sub-resource."""
+    from proliant.oneview.servers import list_servers
+    from proliant.oneview.storage import fetch_storage_list_row
+
+    async with _load_client() as client:
+        with get_console().status(f"[dim]Fetching server inventory from OneView (API v{client.api_version})…[/dim]"):
+            servers = await list_servers(client)
+        servers = sorted(servers, key=lambda s: _server_sort_key(s["name"]))
+        with get_console().status("[dim]Fetching storage details…[/dim]"):
+            rows = await asyncio.gather(
+                *[fetch_storage_list_row(client, s) for s in servers],
+                return_exceptions=True,
+            )
+
+    fallback_row = [
+        ("Storage Controller", "—"),
+        ("Disks Behind Controller", "—"),
+        ("Disks Direct-Connected", "—"),
+    ]
+    results = [
+        (s, dict(fallback_row if isinstance(row, Exception) else row))
+        for s, row in zip(servers, rows)
+    ]
+
+    if get_output_mode() == OutputMode.JSON:
+        print_json([{"name": s["name"], **row} for s, row in results])
+        return
+
+    if not results:
+        get_console().print("[yellow]No servers found in OneView.[/yellow]")
+        return
+
+    table = make_table(
+        "OneView Storage",
+        ("Server",                    dict(min_width=14, no_wrap=True)),
+        ("Storage Controller",        dict(min_width=18)),
+        ("Disks Behind Controller",   {}),
+        ("Disks Direct-Connected",    {}),
+    )
+    for s, row in results:
+        table.add_row(
+            # Full name (not the shortened display form used by `servers
+            # list`) so it can be copy-pasted straight into
+            # `storage describe <name>` without a "not found" lookup error.
+            s["name"],
+            row["Storage Controller"],
+            row["Disks Behind Controller"],
+            row["Disks Direct-Connected"],
+        )
+    get_console().print(table)
+
+
+async def _cmd_storage_list(args: argparse.Namespace) -> None:
+    await _async_storage_list()
+
+
+async def _cmd_storage_describe(args: argparse.Namespace) -> None:
+    """Show full per-controller, per-disk storage detail for one server:
+    RAID Controller vs. Direct/HBA classification, capacity, media,
+    protocol, model, serial, firmware, health -- mirroring
+    `proliant ilo storage describe`."""
+    from proliant.common.display import print_storage_report
+    from proliant.oneview.servers import get_server
+    from proliant.oneview.storage import fetch_storage_report_data
+
+    name = args.name
+    console = get_console()
+    async with _load_client() as client:
+        try:
+            with console.status(f"[dim]Fetching server '{name}'…[/dim]"):
+                server = await get_server(client, name)
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
+            sys.exit(1)
+        with console.status("[dim]Fetching storage details…[/dim]"):
+            report = await fetch_storage_report_data(client, server["uri"])
+
+    if getattr(args, "json_output", False) or get_output_mode() == OutputMode.JSON:
+        print_json(report)
+        return
+
+    console.print(f"[bold]{server['name']}[/bold]")
+    print_storage_report(console, report)
+
+
 # ── proliant oneview server-hardware-types list/describe ──────────────────────────
 
 async def _cmd_hardware_types_list(args: argparse.Namespace) -> None:
@@ -5368,6 +5458,19 @@ examples:
         help='Server name (e.g. "Enc1, bay 1"). Omit for all servers.')
     server_arg.completer = _oneview_server_name_completer
     p_srv_fw_list.set_defaults(func=_cmd_firmware_list)
+
+    p_storage = sub.add_parser("storage", help="RAID controller / direct-attached disk inventory")
+    s_storage = p_storage.add_subparsers(dest="what", metavar="ACTION")
+    s_storage.required = True
+    p_storage_list = s_storage.add_parser("list",
+        help="Fleet-wide storage summary (controller + disks behind it / direct-connected)")
+    p_storage_list.set_defaults(func=_cmd_storage_list)
+    p_storage_desc = s_storage.add_parser("describe",
+        help="Full per-controller, per-disk storage detail for one server")
+    p_storage_desc_name = p_storage_desc.add_argument("name", metavar="NAME",
+        help='Server name (e.g. "Enclosure-01, bay 3")')
+    p_storage_desc_name.completer = _oneview_server_name_completer
+    p_storage_desc.set_defaults(func=_cmd_storage_describe)
 
     p_hwtypes = sub.add_parser("server-hardware-types", help="List or describe server hardware types")
     s_hwtypes = p_hwtypes.add_subparsers(dest="what", metavar="ACTION")

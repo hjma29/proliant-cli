@@ -36,7 +36,46 @@ async def _collection_members(client: ILOClient, collection_uri: str) -> list[di
 
 
 async def _member_resources(client: ILOClient, collection_uri: str) -> list[dict[str, Any]]:
-    members = await _collection_members(client, collection_uri)
+    """Return every member resource of a Redfish collection, fully expanded.
+
+    Prefers a single ``?$expand=.`` request, which returns all members inline
+    and collapses the classic Redfish N+1 walk (1 collection GET + one GET per
+    member) into one round trip. iLO only speaks HTTP/1.1, so issuing the
+    member GETs concurrently does NOT help -- measured against iLO 6/7 it is
+    the same speed or slower than sequential, and can drop the connection --
+    hence expand-or-sequential rather than expand-or-parallel.
+
+    Falls back to the sequential walk when the appliance does not advertise
+    $expand support, or if the expanded request fails or comes back without
+    usable inline members (some sub-resources, e.g. PLDM/RDE-backed ones, do
+    not honour $expand even when the service advertises it).
+
+    ``supports_expand`` is treated as an optional capability hint: any
+    client-like object that does not implement it simply takes the sequential
+    path, so this stays a pure optimisation and never a new interface
+    requirement on callers.
+    """
+    members: list[dict[str, Any]] | None = None
+
+    probe = getattr(client, "supports_expand", None)
+    if probe is not None and await probe():
+        sep = "&" if "?" in collection_uri else "?"
+        try:
+            expanded = (await client.get(f"{collection_uri}{sep}$expand=.")).get("Members", [])
+        except Exception:  # noqa: BLE001 - any failure just means "walk it the old way"
+            expanded = []
+        # An expanded member carries real properties; an unexpanded one is
+        # just {"@odata.id": ...}, which means $expand was silently ignored.
+        if expanded:
+            if all(len(m) > 1 for m in expanded):
+                return expanded
+            # $expand was ignored, but the response is still a valid member
+            # list -- reuse it for the walk below instead of re-fetching the
+            # collection, so a non-expandable resource costs no extra request.
+            members = expanded
+
+    if members is None:
+        members = await _collection_members(client, collection_uri)
     results = []
     for item in members:
         if "@odata.id" in item:

@@ -4,6 +4,13 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ---
 
+## v1.1.7 — 2026-09-13
+
+### Enhancements
+- `proliant ilo` inventory commands (`firmware`, `memory`, `network`, `storage`, `servers`) now fetch each group of components in a single request instead of one request per component — for example firmware inventory drops from 30 requests to 2 per server. Output is unchanged; the benefit is far less load on the iLO and a much lower chance of a command stalling on an iLO that intermittently pauses for several seconds. Automatically falls back to the previous behaviour on iLOs that don't support expanded queries.
+
+---
+
 ## v1.1.6 — 2026-08-28
 
 ### New Features

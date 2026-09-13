@@ -155,6 +155,22 @@ class ILOClient(BaseAsyncClient):
             self._root = await self.get("/redfish/v1/")
         return self._root
 
+    async def supports_expand(self) -> bool:
+        """True if this iLO advertises Redfish ``$expand=.`` support.
+
+        Read from the ServiceRoot's ProtocolFeaturesSupported.ExpandQuery,
+        which is already cached by _root_document() -- so this costs no extra
+        round trip. Only the ``NoLinks`` form (``$expand=.``) is checked:
+        iLO advertises ExpandAll=False and MaxLevels=1, so ``$expand=*`` and
+        ``$levels>1`` return HTTP 400 and must never be used.
+        """
+        try:
+            root = await self._root_document()
+        except Exception:  # noqa: BLE001 - capability probe must never be fatal
+            return False
+        expand = (root.get("ProtocolFeaturesSupported") or {}).get("ExpandQuery") or {}
+        return bool(expand.get("NoLinks"))
+
     async def _first_member_uri(self, collection_key: str, label: str) -> str:
         if collection_key in self._uri_cache:
             return self._uri_cache[collection_key]

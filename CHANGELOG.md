@@ -4,6 +4,19 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ---
 
+## v1.1.8 — 2026-11-06
+
+### New Features
+- `proliant ilo inventory [SERVER] [--resources LIST]`: structured inventory for scripts and AI agents. Always prints JSON with a stable, versioned schema (`schema_version`, `collected_at`, `resources`, `servers`). Resources: `summary`, `power`, `firmware`, `cpu`, `gpu`, `memory`, `storage`, `network`, `network_ilo`, `boot`, `bios`, `license`, or `all`. An unreachable server or failing resource is reported as an `{"error": ...}` entry instead of aborting the whole run.
+- `proliant.ilo.api`: the same data as an in-process Python API (`api.query(["summary", "gpu"], server="...")`, `await api.collect(hosts, resources)`), returning plain JSON-serializable dicts.
+- `proliant ilo power describe <server name>`: power and POST state plus what the server does after an AC power loss (auto power-on policy and power-on delay).
+
+### Enhancements
+- `--json` now works on `servers describe` (every resource, same schema as `inventory`), `storage describe`, `network describe`, `network-ilo describe`, `reports cpu|gpu|memory` and `bios describe`. Table output is unchanged.
+- `proliant ilo uid on|off`: new `--dry-run` previews the Redfish request without sending it; `--json` reports the URL, payload and status.
+
+---
+
 ## v1.1.7 — 2026-09-13
 
 ### Enhancements

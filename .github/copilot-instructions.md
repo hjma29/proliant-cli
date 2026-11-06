@@ -29,6 +29,9 @@ src/proliant/
     cli.py              All proliant ilo commands: servers/firmware/nic/storage/... subparsers
     client.py           Async Redfish client (httpx, HTTP/2, session management)
     inventory.py        All read-only Redfish fetches; classify_update_method() BMC/UEFI/OS
+    api.py              Stable agent/script API: RESOURCES name→fetcher returning plain dicts, collect()
+                        isolates per-server/per-resource errors; backs `ilo inventory` and --json describe/reports.
+                        Removing/renaming output keys requires bumping SCHEMA_VERSION.
     firmware.py         Stage, queue, wait helpers for iLO firmware operations
     sdr.py              HPE SDR fetch, fwpkg parsing, find_upgrades() version matching
     config.py           inventory.ini loader: PCLI_CONFIG env → ./inventory.ini → ~/.config/proliant-cli/inventory.ini

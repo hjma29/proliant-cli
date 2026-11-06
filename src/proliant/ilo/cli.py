@@ -133,6 +133,9 @@ async def _run_parallel_async(hosts: list[dict], fetch_fn: FetchFn) -> list[tupl
 
 async def _run_report_memory(args: argparse.Namespace) -> None:
     hosts = _load_hosts_or_exit(getattr(args, "host", None), getattr(args, "hosts_from", None))
+    if get_output_mode() == OutputMode.JSON:
+        await _print_api_json(hosts, ["memory"])
+        return
     await run_report_memory(hosts)
 
 
@@ -434,6 +437,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     power_sub = power_p.add_subparsers(dest="power_action", metavar="ACTION")
     power_sub.required = True
+    power_describe = power_sub.add_parser(
+        "describe", help="Show power state and auto power-on behaviour after an AC power loss")
+    power_describe.set_defaults(command="power", power_action="describe")
+    _add_host_target(power_describe, required=True)
     power_reset = power_sub.add_parser("reset", help="Reset a server")
     power_reset.set_defaults(command="power", power_action="reset")
     _add_host_target(power_reset, required=True)
@@ -461,6 +468,8 @@ def _build_parser() -> argparse.ArgumentParser:
         uid_ap = uid_sub.add_parser(uid_action, help=uid_help)
         uid_ap.set_defaults(command="uid", uid_action=uid_action)
         _add_host_target(uid_ap, required=True)
+        uid_ap.add_argument("--dry-run", action="store_true", dest="dry_run",
+                            help="Show the Redfish request without sending it")
 
     boot_p = subparsers.add_parser(
         "boot",
@@ -604,6 +613,30 @@ def _build_parser() -> argparse.ArgumentParser:
         report_p.set_defaults(command="report", what=report_name)
         _add_host_target(report_p, required=False, allow_hosts_from=True)
 
+    from proliant.ilo.api import RESOURCE_DESCRIPTIONS
+    inventory_p = subparsers.add_parser(
+        "inventory",
+        help="Structured JSON inventory for scripts and AI agents",
+        description=(
+            "Collect inventory as JSON with a stable, versioned schema (schema_version 1):\n"
+            '{"schema_version", "collected_at", "resources", "servers": {SERVER: {RESOURCE: data | {"error": ...}}}}.\n'
+            "Output is always JSON. An unreachable server or failing resource is reported as an\n"
+            "error entry without affecting the others.\n\n"
+            "Resources (--resources, comma-separated, or 'all'; default: summary):\n"
+            + "".join(f"  {name:<12} {text}\n" for name, text in RESOURCE_DESCRIPTIONS.items())
+            + "\nExamples:\n"
+            "  proliant ilo inventory\n"
+            "  proliant ilo inventory dl325-gen12 --resources summary,gpu,power\n"
+            "  proliant ilo inventory --resources all\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    inventory_p.set_defaults(command="inventory")
+    _add_host_target(inventory_p, required=False, allow_hosts_from=True)
+    resources_arg = inventory_p.add_argument("--resources", "-r", default="summary", metavar="LIST",
+                                             help="Comma-separated resources, or 'all' (default: summary)")
+    resources_arg.completer = comma_sep_completer(("all", *RESOURCE_DESCRIPTIONS))  # type: ignore[attr-defined]
+
     subparsers.add_parser(
         "init",
         help="Guided setup of inventory.ini (alias for 'proliant setup')",
@@ -666,6 +699,24 @@ async def _async_main(args: argparse.Namespace) -> None:
         await _run_bios(args)
     elif args.command == "license":
         await _run_license(args)
+    elif args.command == "inventory":
+        await _run_inventory(args)
+
+
+async def _run_inventory(args: argparse.Namespace) -> None:
+    from proliant.ilo import api
+    try:
+        resources = api.parse_resources(args.resources)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(2)
+    hosts = _load_hosts_or_exit(getattr(args, "host", None), getattr(args, "hosts_from", None))
+    print_json(await api.collect(hosts, resources))
+
+
+async def _print_api_json(hosts: list[dict], resources: list[str]) -> None:
+    from proliant.ilo import api
+    print_json(await api.collect(hosts, resources))
 
 
 def _load_hosts_or_exit(name: str | None, hosts_from: str | None = None) -> list[dict]:
@@ -995,11 +1046,17 @@ async def _run_set_route(args: argparse.Namespace) -> None:
 
 async def _run_report_cpu(args: argparse.Namespace) -> None:
     hosts = _load_hosts_or_exit(getattr(args, "host", None))
+    if get_output_mode() == OutputMode.JSON:
+        await _print_api_json(hosts, ["cpu"])
+        return
     await run_report_cpu(hosts)
 
 
 async def _run_report_gpu(args: argparse.Namespace) -> None:
     hosts = _load_hosts_or_exit(getattr(args, "host", None))
+    if get_output_mode() == OutputMode.JSON:
+        await _print_api_json(hosts, ["gpu"])
+        return
     await run_report_gpu(hosts)
 
 
@@ -1085,6 +1142,7 @@ async def _run_set_ipmi(args: argparse.Namespace) -> None:
 async def _run_uid(args: argparse.Namespace) -> None:
     host = _load_hosts_or_exit(args.host)[0]
     turn_on = args.uid_action == "on"
+    dry_run = getattr(args, "dry_run", False)
     try:
         async with ilo_session(host, show_hint=True) as client:
             sys_uri = await client.get_system_uri()
@@ -1094,10 +1152,11 @@ async def _run_uid(args: argparse.Namespace) -> None:
                 payload = {"LocationIndicatorActive": turn_on}
             else:
                 payload = {"IndicatorLED": "Lit" if turn_on else "Off"}
-            resp = await client.patch(sys_uri, payload)
-            msg_id = resp.get("error", {}).get("@Message.ExtendedInfo", [{}])[0].get("MessageId", "")
-            if msg_id and "Success" not in msg_id:
-                raise RuntimeError(f"Unexpected iLO response: {msg_id}")
+            if not dry_run:
+                resp = await client.patch(sys_uri, payload)
+                msg_id = resp.get("error", {}).get("@Message.ExtendedInfo", [{}])[0].get("MessageId", "")
+                if msg_id and "Success" not in msg_id:
+                    raise RuntimeError(f"Unexpected iLO response: {msg_id}")
     except ServerDownOrUnreachableError as exc:
         print(f"ERROR: {host['name']} unreachable: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -1105,13 +1164,47 @@ async def _run_uid(args: argparse.Namespace) -> None:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(1)
     state_str = "on" if turn_on else "off"
-    print(f"✓ UID light turned {state_str} on {host['name']}")
+    if get_output_mode() == OutputMode.JSON:
+        print_json({"host": host["name"], "action": f"uid_{state_str}",
+                    "status": "dry-run" if dry_run else "accepted", "url": sys_uri, "payload": payload})
+    elif dry_run:
+        print(f"[dry-run] Would PATCH {sys_uri} {json.dumps(payload)} on {host['name']}")
+    else:
+        print(f"✓ UID light turned {state_str} on {host['name']}")
+
+
+async def _run_power_describe(host: dict) -> None:
+    from proliant.ilo.api import fetch_power
+    try:
+        async with ilo_session(host, show_hint=True) as client:
+            power = await fetch_power(client)
+    except ServerDownOrUnreachableError as exc:
+        print(f"ERROR: {host['name']} unreachable: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except (RuntimeError, TimeoutError, ValueError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
+    if get_output_mode() == OutputMode.JSON:
+        print_json({"host": host["name"], **power})
+        return
+    table = make_table("", box_style=None, show_header=False, padding=(0, 2))
+    table.add_column(style="dim", no_wrap=True)
+    table.add_column()
+    table.add_row("Power", str(power["power_state"] or "—"))
+    table.add_row("POST State", str(power["post_state"] or "—"))
+    table.add_row("After AC power loss", str(power["auto_power_on"] or power["power_restore_policy"] or "—"))
+    table.add_row("Power-on delay", str(power["power_on_delay"] or "—"))
+    get_console().print(f"[bold]{host['name']}[/bold]")
+    get_console().print(table)
 
 
 async def _run_power(args: argparse.Namespace) -> None:
     action = args.power_action
     dry_run = getattr(args, "dry_run", False)
     host = _load_hosts_or_exit(args.host)[0]
+    if action == "describe":
+        await _run_power_describe(host)
+        return
 
     try:
         async with ilo_session(host, show_hint=True) as client:
@@ -1291,6 +1384,9 @@ async def _run_bios(args: argparse.Namespace) -> None:
             if action == "show":
                 pending = getattr(args, "pending", False)
                 attrs = await fetch_bios(client, pending=pending)
+                if get_output_mode() == OutputMode.JSON:
+                    print_json({"host": host["name"], "pending": pending, "attributes": attrs})
+                    return
                 for line in format_bios(attrs, host["name"], pending=pending):
                     print(line)
             elif action == "set":
@@ -1345,6 +1441,9 @@ async def _cmd_describe(args: argparse.Namespace) -> None:
         sys.exit(1)
     if getattr(args, "firmware_update", False):
         await run_describe_fw_update(hosts[0])
+    elif get_output_mode() == OutputMode.JSON:
+        from proliant.ilo.api import RESOURCES
+        await _print_api_json(hosts[:1], list(RESOURCES))
     else:
         await run_describe(hosts[0])
 
@@ -1354,6 +1453,9 @@ async def _cmd_describe_storage(args: argparse.Namespace) -> None:
     if not hosts:
         get_console().print("[red]No host found.[/red]")
         sys.exit(1)
+    if get_output_mode() == OutputMode.JSON:
+        await _print_api_json(hosts[:1], ["storage"])
+        return
     await run_describe_storage(hosts[0])
 
 
@@ -1362,6 +1464,9 @@ async def _cmd_describe_network(args: argparse.Namespace) -> None:
     if not hosts:
         get_console().print("[red]No host found.[/red]")
         sys.exit(1)
+    if get_output_mode() == OutputMode.JSON:
+        await _print_api_json(hosts[:1], ["network"])
+        return
     await run_describe_network(hosts[0])
 
 
@@ -1370,6 +1475,9 @@ async def _cmd_describe_network_ilo(args: argparse.Namespace) -> None:
     if not hosts:
         get_console().print("[red]No host found.[/red]")
         sys.exit(1)
+    if get_output_mode() == OutputMode.JSON:
+        await _print_api_json(hosts[:1], ["network_ilo"])
+        return
     await run_describe_ilo_nic(hosts[0])
 
 

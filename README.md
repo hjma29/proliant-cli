@@ -81,7 +81,32 @@ proliant ilo network describe <server name>               # full per-adapter, pe
 proliant ilo network-ilo list                             # iLO's own dedicated management NIC across the fleet
 proliant ilo network-ilo describe <server name>            # DHCP/static, IP, DNS, routes, LLDP, MAC for one iLO
 proliant ilo network-ilo set static <server name> ...      # configure iLO's own NIC (was: `network set`)
+proliant ilo power describe <server name>                  # power/POST state + auto power-on after an AC power loss
+proliant ilo uid on <server name> --dry-run                # preview the Redfish request without sending it
 [snip]
+```
+
+#### Automation and AI agents
+
+`proliant ilo inventory` always prints JSON with a stable, versioned schema
+(`schema_version`), for scripts and AI agents. A failing server or resource is
+reported as `{"error": ...}` without affecting the rest.
+
+```bash
+proliant ilo inventory                                     # summary for every server
+proliant ilo inventory dl325-gen12 --resources summary,gpu,power
+proliant ilo inventory --resources all                     # summary, power, firmware, cpu, gpu, memory, storage,
+                                                           # network, network_ilo, boot, bios, license
+proliant ilo --json servers describe <server name>         # every resource for one server, same schema
+proliant ilo --json reports gpu                            # reports, storage/network/network-ilo describe and
+proliant ilo --json bios describe <server name>            # bios describe also support --json
+```
+
+Python callers can use the same data in-process:
+
+```python
+from proliant.ilo import api
+api.query(["summary", "gpu"], server="dl325-gen12")   # {"schema_version": 1, "servers": {...}}
 ```
 
 ### COM

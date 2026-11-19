@@ -18,6 +18,8 @@ Whether you manage a handful of bare-metal servers or a large fleet across multi
 
 > **Note:** An independent project (not an official HPE tool), built with GitHub Copilot. Read-only commands are safe to explore — use caution with real hardware state change.
 
+> **Prefer asking an AI assistant?** [proliant-mcp](https://github.com/hjma29/proliant-mcp) is the companion MCP server: it gives GitHub Copilot, Claude and other AI assistants read-only access to the same HPE iLO, Compute Ops Management and OneView data. See the [ProLiant MCP project page](https://hjma29.github.io/proliant-mcp/).
+
 ## Installation
 
 

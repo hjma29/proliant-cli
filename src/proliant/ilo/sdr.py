@@ -36,6 +36,7 @@ class FwComponent:
     version: tuple     # comparable: (1, 40), (1, 20, 0), (1, 74)
     chip_model: str = ""          # NIC chip model e.g. "BCM957414A4142HC" (empty for non-NIC)
     software_ids: list = field(default_factory=list)  # PLDM Target GUIDs from SDR JSON sidecar
+    min_active_version: tuple = ()  # iLO only: oldest installed iLO that may flash this package directly
 
 
 @dataclass
@@ -153,8 +154,20 @@ def _parse_fwpkg(filename: str, url: str) -> "FwComponent | None":
     prefix = parts[0]
     ver_str = parts[1]
     ver_tuple = _parse_version(ver_str, prefix)
+    min_active = _fetch_min_active_version(url) if prefix.lower().startswith("ilo") else ()
     return FwComponent(filename=filename, url=url, prefix=prefix,
-                       version_str=ver_str, version=ver_tuple)
+                       version_str=ver_str, version=ver_tuple,
+                       min_active_version=min_active)
+
+
+def _fetch_min_active_version(fwpkg_url: str) -> tuple:
+    """Read MinimumActiveVersion from the .json sidecar; () if absent or unreadable."""
+    json_url = fwpkg_url.rsplit(".", 1)[0] + ".json"
+    try:
+        value = json.loads(_get(json_url)).get("MinimumActiveVersion")
+    except Exception:
+        return ()
+    return _parse_version(str(value)) if value else ()
 
 
 def _fetch_software_ids(fwpkg_url: str) -> list[str]:
@@ -266,6 +279,7 @@ def find_upgrades(
     sdr_by_prefix: dict[str, FwComponent] = {}
     sdr_by_software_id: dict[str, FwComponent] = {}
     sdr_nic: list[FwComponent] = []
+    sdr_ilo: dict[str, list[FwComponent]] = {}  # a pack can hold several iLO versions
     for comp in pack_components:
         if comp.chip_model:
             sdr_nic.append(comp)
@@ -273,8 +287,11 @@ def find_upgrades(
                 sdr_by_software_id[sw_id.lower()] = comp
         else:
             key = comp.prefix.lower()
-            if key not in sdr_by_prefix:
+            best = sdr_by_prefix.get(key)
+            if best is None or comp.version > best.version:
                 sdr_by_prefix[key] = comp
+            if key.startswith("ilo"):
+                sdr_ilo.setdefault(key, []).append(comp)
 
     candidates: list[UpgradeCandidate] = []
     seen_names: set[str] = set()  # deduplicate by (name_lower, version)
@@ -321,7 +338,11 @@ def find_upgrades(
         elif sdr_comp is None and nl.startswith("ilo"):
             m = re.match(r'ilo\s*(\d+)', nl)
             if m:
-                sdr_comp = sdr_by_prefix.get(f"ilo{m.group(1)}")
+                # Newest package the installed iLO may flash directly; one that needs a
+                # newer minimum active version is reached on the next upgrade run.
+                installed = parse_inventory_version(version)
+                eligible = [c for c in sdr_ilo.get(f"ilo{m.group(1)}", []) if c.min_active_version <= installed]
+                sdr_comp = max(eligible, key=lambda c: c.version, default=None)
 
         # ── Storage controller packages: matched by model token (MR416i-p, NS204i, UBM6, ...)
         elif sdr_comp is None:

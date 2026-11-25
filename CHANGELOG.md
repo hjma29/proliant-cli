@@ -4,6 +4,11 @@ All notable changes are documented here. Binaries for Windows, Linux (x86), Linu
 
 ---
 
+## Unreleased
+
+### Bug Fixes
+- `proliant ilo firmware upgrade`: when an SDR pack holds several iLO versions (e.g. `ilo7_1.24.00` and `ilo7_1.25.02`), it now picks the newest one the installed iLO may flash directly, honoring the package's `MinimumActiveVersion`, instead of always the first listed. An iLO older than that minimum is upgraded in steps (run the command again after each step).
+
 ## v1.1.8 — 2026-11-06
 
 ### New Features
